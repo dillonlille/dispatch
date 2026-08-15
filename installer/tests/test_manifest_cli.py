@@ -19,9 +19,16 @@ def test_incomplete_repository_manifest_is_valid_and_fail_closed() -> None:
     manifest = load_manifest(MANIFEST, expected_sha256=digest)
 
     assert manifest.ready is False
+    assert manifest.product_version == "0.0.1"
+    assert manifest.installer_version == "0.1.0"
+    assert manifest.installer_artifact.complete is False
     assert manifest.core_version == "1.0.0"
     assert manifest.core_artifact_url is None
+    assert [(plugin.id, plugin.package, plugin.version) for plugin in manifest.builtin_plugins] == [
+        ("handbook", "dispatch-local-handbook", "0.1.0")
+    ]
     assert manifest.browser_ready is False
+    assert manifest.browser_install_phase == "setup"
     assert manifest.setup_implemented is False
     assert manifest.setup_command == "dispatch setup"
     assert manifest.uninstall_user_scope_implemented is True
@@ -85,7 +92,7 @@ def test_manifest_rejects_duplicate_json_keys(tmp_path: Path) -> None:
     assert error.value.code == "manifest_json_duplicate"
 
 
-def test_manifest_rejects_plugin_declarations(tmp_path: Path) -> None:
+def test_manifest_rejects_undeclared_plugin_shapes(tmp_path: Path) -> None:
     for key, value in (("plugins", []), ("plugin_artifacts", [])):
         payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
         payload[key] = value
@@ -102,6 +109,24 @@ def test_manifest_rejects_plugin_declarations(tmp_path: Path) -> None:
     with pytest.raises(InstallerError) as error:
         load_manifest(path, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
     assert error.value.code == "manifest_core"
+
+
+def test_manifest_rejects_duplicate_or_invalid_builtin_plugins(tmp_path: Path) -> None:
+    payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    payload["builtin_plugins"].append(dict(payload["builtin_plugins"][0]))
+    path = tmp_path / "duplicate-plugin.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(InstallerError) as duplicate:
+        load_manifest(path, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    assert duplicate.value.code == "manifest_builtin_plugin_duplicate"
+
+    payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    payload["builtin_plugins"][0]["capabilities"] = ["browser", "browser"]
+    path = tmp_path / "duplicate-capability.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    with pytest.raises(InstallerError) as capability:
+        load_manifest(path, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+    assert capability.value.code == "manifest_builtin_plugin"
 
 
 def test_manifest_rejects_boolean_schema_version(tmp_path: Path) -> None:
@@ -147,7 +172,10 @@ def test_plan_reports_current_publication_blocker(tmp_path: Path, monkeypatch, c
 
     assert result == 2
     assert payload["status"] == "blocked"
+    assert payload["data"]["manifest"]["product_version"] == "0.0.1"
+    assert payload["data"]["manifest"]["builtin_plugins"][0]["id"] == "handbook"
     assert payload["data"]["manifest"]["browser_ready"] is False
+    assert payload["data"]["manifest"]["browser_install_phase"] == "setup"
     assert payload["data"]["manifest"]["setup_implemented"] is False
     assert payload["data"]["manifest"]["setup_command"] == "dispatch setup"
     assert payload["data"]["manifest"]["uninstall_user_scope_implemented"] is True

@@ -54,8 +54,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/manifest.py",
-      "sha256": "a37b6c45b050569999a92e1e37f4123e4fdb9b92ccacf9d1877a418b77498fcd",
-      "size": 6817
+      "sha256": "0d9f0943bec51b19b5f6ec6f6f7b12a077f2214348de7aa8e236b49ff131e087",
+      "size": 11077
     },
     {
       "path": "installer/src/dispatch_installer/uninstall.py",

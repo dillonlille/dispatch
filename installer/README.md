@@ -4,7 +4,7 @@ This standard-library-only component owns the Phase 5 installation boundary. It 
 
 ## Intended user flow
 
-After final publication, a user will copy a versioned, digest-pinned install command into a terminal. The bootstrap will retrieve the approved installer and release manifest, verify them, install only the manifest-declared Core/dependency artifacts, and create the `dispatch` launcher. It will never clone or download a source repository, enumerate release assets, or install built-in or external plugin source implicitly.
+After final publication, a user will copy a versioned, digest-pinned install command into a terminal. The bootstrap will retrieve the approved installer and product release manifest, verify them, install only the mandatory Core/dependency artifacts, and create the `dispatch` launcher. Built-in plugin artifacts remain optional declarations for `dispatch setup`; external plugins remain separate. The installer never clones source repositories, enumerates release assets, or infers packages from source layout.
 
 GitHub publication and the copy-and-paste command are deliberately deferred until the complete release passes licensing, security, CI, clean-machine, and acceptance gates.
 

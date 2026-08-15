@@ -2,7 +2,7 @@
 
 ## Purpose
 
-Phase 5 turns reviewed Dispatch Core source into a deterministic online installation foundation. It does not implement setup, Authentication, Collection Manager, provider workflows, scheduling, delivery, or domain plugins.
+Phase 5 turns reviewed Dispatch source into a deterministic Core-first online installation foundation. The product release manifest coordinates mandatory Core artifacts and optional built-in plugin artifacts, but initial installation downloads only the mandatory Core closure. It does not yet implement setup-time plugin installation, provider workflows, scheduling, or delivery.
 
 ## Intended public flow
 
@@ -63,10 +63,10 @@ A staged Core release is not sufficient for complete product activation. The pub
 
 ## Setup boundary
 
-The planning manifest records only the future setup UX contract:
+The planning manifest records the immutable product version, mandatory installer/Core declarations, the built-in plugin catalog, and the future setup UX contract:
 
 - `setup_implemented: false`;
-- setup command: `dispatch setup`;
+- setup command: `dispatch setup`, which will select and install built-in plugins from the same product release;
 - post-install choices: `start_setup` or `skip_for_now`.
 
 The installer must not collect credentials, account identifiers, provider configuration, MFA, CAPTCHA answers, schedules, or delivery settings.

@@ -1,6 +1,19 @@
 {
   "schema_version": 1,
   "ready": false,
+  "product": {
+    "name": "dispatch",
+    "version": "0.0.1"
+  },
+  "installer": {
+    "name": "dispatch-installer",
+    "version": "0.1.0",
+    "artifact": {
+      "url": null,
+      "size": null,
+      "sha256": null
+    }
+  },
   "core": {
     "name": "dispatch-core",
     "version": "1.0.0",
@@ -10,8 +23,22 @@
       "sha256": null
     }
   },
+  "builtin_plugins": [
+    {
+      "id": "handbook",
+      "package": "dispatch-local-handbook",
+      "version": "0.1.0",
+      "artifact": {
+        "url": null,
+        "size": null,
+        "sha256": null
+      },
+      "capabilities": []
+    }
+  ],
   "browser_runtime": {
     "ready": false,
+    "install_phase": "setup",
     "selector": "/etc/dispatch/browser-runtime-active.json",
     "generation_root": "/opt/dispatch/browser-runtimes"
   },

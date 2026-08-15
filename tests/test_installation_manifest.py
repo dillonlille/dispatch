@@ -2,8 +2,10 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import tomllib
 
 import jsonschema
+import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -14,8 +16,20 @@ def test_installation_release_manifest_matches_schema_and_is_fail_closed() -> No
 
     jsonschema.Draft202012Validator(schema).validate(manifest)
     assert manifest["ready"] is False
+    assert manifest["product"] == {"name": "dispatch", "version": "0.0.1"}
+    assert manifest["installer"]["artifact"] == {"url": None, "size": None, "sha256": None}
     assert manifest["core"]["artifact"] == {"url": None, "size": None, "sha256": None}
+    assert manifest["builtin_plugins"] == [
+        {
+            "id": "handbook",
+            "package": "dispatch-local-handbook",
+            "version": "0.1.0",
+            "artifact": {"url": None, "size": None, "sha256": None},
+            "capabilities": [],
+        }
+    ]
     assert manifest["browser_runtime"]["ready"] is False
+    assert manifest["browser_runtime"]["install_phase"] == "setup"
     assert manifest["post_install"] == {
         "setup_implemented": False,
         "setup_command": "dispatch setup",
@@ -29,3 +43,26 @@ def test_installation_release_manifest_matches_schema_and_is_fail_closed() -> No
         "purge_requires_confirmation": True,
         "privileged_browser_removal_implemented": False,
     }
+
+
+def test_product_manifest_versions_match_component_sources() -> None:
+    manifest = json.loads((ROOT / "packaging" / "installation-release-manifest.json").read_text(encoding="utf-8"))
+    installer = tomllib.loads((ROOT / "installer" / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    core = tomllib.loads((ROOT / "dispatch-core" / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    handbook = tomllib.loads((ROOT / "plugins" / "handbook" / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    handbook_manifest = yaml.safe_load((ROOT / "plugins" / "handbook" / "dispatch-plugin.yaml").read_text(encoding="utf-8"))
+
+    assert (manifest["installer"]["name"], manifest["installer"]["version"]) == (
+        installer["name"],
+        installer["version"],
+    )
+    assert (manifest["core"]["name"], manifest["core"]["version"]) == (core["name"], core["version"])
+    assert manifest["builtin_plugins"] == [
+        {
+            "id": handbook_manifest["id"],
+            "package": handbook["name"],
+            "version": handbook["version"],
+            "artifact": {"url": None, "size": None, "sha256": None},
+            "capabilities": [],
+        }
+    ]

@@ -6,18 +6,46 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .download import validate_core_release_asset_url
 from .layout import InstallerError
+
+
+_VERSION = re.compile(r"[0-9]+\.[0-9]+\.[0-9]+")
+_PLUGIN_ID = re.compile(r"[a-z][a-z0-9-]{0,63}")
+_PLUGIN_PACKAGE = re.compile(r"dispatch-[a-z0-9][a-z0-9-]{0,63}")
+_SHA256 = re.compile(r"[0-9a-f]{64}")
+
+
+@dataclass(frozen=True, slots=True)
+class ReleaseArtifact:
+    url: str | None
+    size: int | None
+    sha256: str | None
+
+    @property
+    def complete(self) -> bool:
+        return self.url is not None and self.size is not None and self.sha256 is not None
+
+
+@dataclass(frozen=True, slots=True)
+class BuiltinPlugin:
+    id: str
+    package: str
+    version: str
+    artifact: ReleaseArtifact
+    capabilities: tuple[str, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class InstallationManifest:
     ready: bool
+    product_version: str
+    installer_version: str
+    installer_artifact: ReleaseArtifact
     core_version: str
-    core_artifact_url: str | None
-    core_artifact_size: int | None
-    core_artifact_sha256: str | None
+    core_artifact: ReleaseArtifact
+    builtin_plugins: tuple[BuiltinPlugin, ...]
     browser_ready: bool
+    browser_install_phase: str
     setup_implemented: bool
     setup_command: str
     uninstall_user_scope_implemented: bool
@@ -26,6 +54,18 @@ class InstallationManifest:
     uninstall_default_mode: str
     uninstall_purge_requires_confirmation: bool
     uninstall_privileged_browser_removal_implemented: bool
+
+    @property
+    def core_artifact_url(self) -> str | None:
+        return self.core_artifact.url
+
+    @property
+    def core_artifact_size(self) -> int | None:
+        return self.core_artifact.size
+
+    @property
+    def core_artifact_sha256(self) -> str | None:
+        return self.core_artifact.sha256
 
 
 def _object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -37,12 +77,84 @@ def _object_without_duplicate_keys(pairs: list[tuple[str, object]]) -> dict[str,
     return value
 
 
+def _version(value: object, code: str, label: str) -> str:
+    if not isinstance(value, str) or _VERSION.fullmatch(value) is None:
+        raise InstallerError(code, f"installation manifest {label} version is invalid")
+    return value
+
+
+def _artifact(value: object, code: str, label: str) -> ReleaseArtifact:
+    if not isinstance(value, dict) or set(value) != {"url", "size", "sha256"}:
+        raise InstallerError(code, f"installation manifest {label} artifact is invalid")
+    url = value["url"]
+    size = value["size"]
+    digest = value["sha256"]
+    if url is None and size is None and digest is None:
+        return ReleaseArtifact(None, None, None)
+    if (
+        not isinstance(url, str)
+        or not url.startswith("https://")
+        or not isinstance(size, int)
+        or isinstance(size, bool)
+        or size <= 0
+        or not isinstance(digest, str)
+        or _SHA256.fullmatch(digest) is None
+    ):
+        raise InstallerError("manifest_partial_artifact", f"installation manifest {label} artifact is incomplete")
+    return ReleaseArtifact(url, size, digest)
+
+
+def _component(value: object, *, name: str, code: str, label: str) -> tuple[str, ReleaseArtifact]:
+    if not isinstance(value, dict) or set(value) != {"name", "version", "artifact"} or value["name"] != name:
+        raise InstallerError(code, f"installation manifest {label} declaration is invalid")
+    return _version(value["version"], f"{code}_version", label), _artifact(value["artifact"], f"{code}_artifact", label)
+
+
+def _builtin_plugins(value: object) -> tuple[BuiltinPlugin, ...]:
+    if not isinstance(value, list) or len(value) > 32:
+        raise InstallerError("manifest_builtin_plugins", "installation manifest built-in plugin catalog is invalid")
+    plugins: list[BuiltinPlugin] = []
+    seen_ids: set[str] = set()
+    seen_packages: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"id", "package", "version", "artifact", "capabilities"}:
+            raise InstallerError("manifest_builtin_plugin", "installation manifest built-in plugin declaration is invalid")
+        plugin_id = item["id"]
+        package = item["package"]
+        capabilities = item["capabilities"]
+        if not isinstance(plugin_id, str) or _PLUGIN_ID.fullmatch(plugin_id) is None:
+            raise InstallerError("manifest_builtin_plugin", "installation manifest built-in plugin id is invalid")
+        if not isinstance(package, str) or _PLUGIN_PACKAGE.fullmatch(package) is None:
+            raise InstallerError("manifest_builtin_plugin", "installation manifest built-in plugin package is invalid")
+        if plugin_id in seen_ids or package in seen_packages:
+            raise InstallerError("manifest_builtin_plugin_duplicate", "installation manifest built-in plugin is duplicated")
+        if (
+            not isinstance(capabilities, list)
+            or len(capabilities) > 16
+            or any(not isinstance(item, str) or _PLUGIN_ID.fullmatch(item) is None for item in capabilities)
+            or len(set(capabilities)) != len(capabilities)
+        ):
+            raise InstallerError("manifest_builtin_plugin", "installation manifest built-in plugin capabilities are invalid")
+        plugins.append(
+            BuiltinPlugin(
+                id=plugin_id,
+                package=package,
+                version=_version(item["version"], "manifest_builtin_plugin_version", "built-in plugin"),
+                artifact=_artifact(item["artifact"], "manifest_builtin_plugin_artifact", "built-in plugin"),
+                capabilities=tuple(capabilities),
+            )
+        )
+        seen_ids.add(plugin_id)
+        seen_packages.add(package)
+    return tuple(plugins)
+
+
 def load_manifest(path: Path, *, expected_sha256: str) -> InstallationManifest:
     if path.is_symlink() or not path.is_file():
         raise InstallerError("manifest_unsafe", "installation manifest must be a regular non-symlink file")
     if path.stat().st_size > 1024 * 1024:
         raise InstallerError("manifest_size", "installation manifest exceeds policy")
-    if not re.fullmatch(r"[0-9a-f]{64}", expected_sha256):
+    if _SHA256.fullmatch(expected_sha256) is None:
         raise InstallerError("manifest_digest_invalid", "expected installation manifest SHA-256 is invalid")
     data = path.read_bytes()
     if hashlib.sha256(data).hexdigest() != expected_sha256:
@@ -53,38 +165,60 @@ def load_manifest(path: Path, *, expected_sha256: str) -> InstallationManifest:
         raise InstallerError("manifest_json_invalid", "installation manifest JSON is invalid") from exc
     if not isinstance(payload, dict):
         raise InstallerError("manifest_shape", "installation manifest shape is invalid")
-    if set(payload) != {"schema_version", "ready", "core", "browser_runtime", "post_install", "uninstall"}:
+    expected_keys = {
+        "schema_version",
+        "ready",
+        "product",
+        "installer",
+        "core",
+        "builtin_plugins",
+        "browser_runtime",
+        "post_install",
+        "uninstall",
+    }
+    if set(payload) != expected_keys:
         raise InstallerError("manifest_shape", "installation manifest shape is invalid")
     if type(payload["schema_version"]) is not int or payload["schema_version"] != 1 or type(payload["ready"]) is not bool:
         raise InstallerError("manifest_version", "installation manifest version is unsupported")
     if payload["ready"]:
-        raise InstallerError(
-            "manifest_ready_unsupported",
-            "schema version 1 cannot authorize production installation",
-        )
-    core = payload["core"]
+        raise InstallerError("manifest_ready_unsupported", "schema version 1 cannot authorize production installation")
+
+    product = payload["product"]
+    if not isinstance(product, dict) or set(product) != {"name", "version"} or product["name"] != "dispatch":
+        raise InstallerError("manifest_product", "installation manifest product declaration is invalid")
+    product_version = _version(product["version"], "manifest_product_version", "product")
+    installer_version, installer_artifact = _component(
+        payload["installer"], name="dispatch-installer", code="manifest_installer", label="installer"
+    )
+    core_version, core_artifact = _component(
+        payload["core"], name="dispatch-core", code="manifest_core", label="Core"
+    )
+    builtin_plugins = _builtin_plugins(payload["builtin_plugins"])
+
+    artifacts = [installer_artifact, core_artifact, *(plugin.artifact for plugin in builtin_plugins)]
+    if any(artifact.complete for artifact in artifacts):
+        raise InstallerError("manifest_partial_artifact", "incomplete manifest must not publish artifact authority")
+
     browser = payload["browser_runtime"]
-    post_install = payload["post_install"]
-    uninstall = payload["uninstall"]
-    if not isinstance(core, dict) or set(core) != {"name", "version", "artifact"} or core["name"] != "dispatch-core":
-        raise InstallerError("manifest_core", "installation manifest Core declaration is invalid")
-    if not isinstance(core["version"], str) or not re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", core["version"]):
-        raise InstallerError("manifest_core_version", "installation manifest Core version is invalid")
-    artifact = core["artifact"]
-    if not isinstance(artifact, dict) or set(artifact) != {"url", "size", "sha256"}:
-        raise InstallerError("manifest_core_artifact", "installation manifest Core artifact is invalid")
-    if not isinstance(browser, dict) or set(browser) != {"ready", "selector", "generation_root"}:
+    if not isinstance(browser, dict) or set(browser) != {"ready", "install_phase", "selector", "generation_root"}:
         raise InstallerError("manifest_browser", "installation manifest browser declaration is invalid")
-    if browser["selector"] != "/etc/dispatch/browser-runtime-active.json" or browser["generation_root"] != "/opt/dispatch/browser-runtimes":
+    if (
+        browser["selector"] != "/etc/dispatch/browser-runtime-active.json"
+        or browser["generation_root"] != "/opt/dispatch/browser-runtimes"
+    ):
         raise InstallerError("manifest_browser_paths", "installation manifest browser authority paths differ")
-    if type(browser["ready"]) is not bool or browser["ready"] is not False:
+    if type(browser["ready"]) is not bool or browser["ready"] is not False or browser["install_phase"] != "setup":
         raise InstallerError("manifest_browser_ready", "installation manifest browser readiness is invalid")
+
+    post_install = payload["post_install"]
     if not isinstance(post_install, dict) or post_install != {
         "setup_implemented": False,
         "setup_command": "dispatch setup",
         "choices": ["start_setup", "skip_for_now"],
     }:
         raise InstallerError("manifest_post_install", "installation manifest post-install declaration is invalid")
+
+    uninstall = payload["uninstall"]
     expected_uninstall = {
         "user_scope_implemented": True,
         "administrative_command": "dispatch-installer uninstall",
@@ -96,37 +230,22 @@ def load_manifest(path: Path, *, expected_sha256: str) -> InstallationManifest:
     if not isinstance(uninstall, dict) or uninstall != expected_uninstall:
         raise InstallerError("manifest_uninstall", "installation manifest uninstall declaration is invalid")
 
-    url = artifact["url"]
-    size = artifact["size"]
-    digest = artifact["sha256"]
-    artifact_complete = (
-        isinstance(url, str)
-        and url.startswith("https://")
-        and isinstance(size, int)
-        and not isinstance(size, bool)
-        and size > 0
-        and isinstance(digest, str)
-        and re.fullmatch(r"[0-9a-f]{64}", digest) is not None
-    )
-    if artifact_complete:
-        validate_core_release_asset_url(url, version=core["version"])
-    if payload["ready"] and (not artifact_complete or not browser["ready"]):
-        raise InstallerError("manifest_false_ready", "installation manifest is marked ready without complete artifacts")
-    if not payload["ready"] and any(value is not None for value in (url, size, digest)):
-        raise InstallerError("manifest_partial_artifact", "incomplete manifest must not publish partial artifact authority")
     return InstallationManifest(
-        ready=payload["ready"],
-        core_version=core["version"],
-        core_artifact_url=url,
-        core_artifact_size=size,
-        core_artifact_sha256=digest,
-        browser_ready=browser["ready"],
-        setup_implemented=post_install["setup_implemented"],
-        setup_command=post_install["setup_command"],
-        uninstall_user_scope_implemented=uninstall["user_scope_implemented"],
-        uninstall_administrative_command=uninstall["administrative_command"],
-        uninstall_future_user_command=uninstall["future_user_command"],
-        uninstall_default_mode=uninstall["default_mode"],
-        uninstall_purge_requires_confirmation=uninstall["purge_requires_confirmation"],
-        uninstall_privileged_browser_removal_implemented=uninstall["privileged_browser_removal_implemented"],
+        ready=False,
+        product_version=product_version,
+        installer_version=installer_version,
+        installer_artifact=installer_artifact,
+        core_version=core_version,
+        core_artifact=core_artifact,
+        builtin_plugins=builtin_plugins,
+        browser_ready=False,
+        browser_install_phase="setup",
+        setup_implemented=False,
+        setup_command="dispatch setup",
+        uninstall_user_scope_implemented=True,
+        uninstall_administrative_command="dispatch-installer uninstall",
+        uninstall_future_user_command="dispatch uninstall",
+        uninstall_default_mode="keep-data",
+        uninstall_purge_requires_confirmation=True,
+        uninstall_privileged_browser_removal_implemented=False,
     )

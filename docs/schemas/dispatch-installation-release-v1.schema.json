@@ -1,38 +1,46 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dispatch.invalid/schemas/dispatch-installation-release-v1.schema.json",
-  "title": "Dispatch installation release planning manifest v1",
+  "title": "Dispatch product release planning manifest v1",
   "type": "object",
   "additionalProperties": false,
-  "required": ["schema_version", "ready", "core", "browser_runtime", "post_install", "uninstall"],
+  "required": [
+    "schema_version",
+    "ready",
+    "product",
+    "installer",
+    "core",
+    "builtin_plugins",
+    "browser_runtime",
+    "post_install",
+    "uninstall"
+  ],
   "properties": {
     "schema_version": {"const": 1},
     "ready": {"const": false},
-    "core": {
+    "product": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "version", "artifact"],
+      "required": ["name", "version"],
       "properties": {
-        "name": {"const": "dispatch-core"},
-        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
-        "artifact": {
-          "type": "object",
-          "additionalProperties": false,
-          "required": ["url", "size", "sha256"],
-          "properties": {
-            "url": {"const": null},
-            "size": {"const": null},
-            "sha256": {"const": null}
-          }
-        }
+        "name": {"const": "dispatch"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"}
       }
+    },
+    "installer": {"$ref": "#/$defs/installer"},
+    "core": {"$ref": "#/$defs/core"},
+    "builtin_plugins": {
+      "type": "array",
+      "maxItems": 32,
+      "items": {"$ref": "#/$defs/builtinPlugin"}
     },
     "browser_runtime": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["ready", "selector", "generation_root"],
+      "required": ["ready", "install_phase", "selector", "generation_root"],
       "properties": {
         "ready": {"const": false},
+        "install_phase": {"const": "setup"},
         "selector": {"const": "/etc/dispatch/browser-runtime-active.json"},
         "generation_root": {"const": "/opt/dispatch/browser-runtimes"}
       }
@@ -44,9 +52,7 @@
       "properties": {
         "setup_implemented": {"const": false},
         "setup_command": {"const": "dispatch setup"},
-        "choices": {
-          "const": ["start_setup", "skip_for_now"]
-        }
+        "choices": {"const": ["start_setup", "skip_for_now"]}
       }
     },
     "uninstall": {
@@ -67,6 +73,55 @@
         "default_mode": {"const": "keep-data"},
         "purge_requires_confirmation": {"const": true},
         "privileged_browser_removal_implemented": {"const": false}
+      }
+    }
+  },
+  "$defs": {
+    "artifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "size", "sha256"],
+      "properties": {
+        "url": {"const": null},
+        "size": {"const": null},
+        "sha256": {"const": null}
+      }
+    },
+    "installer": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "artifact"],
+      "properties": {
+        "name": {"const": "dispatch-installer"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "artifact": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "core": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "artifact"],
+      "properties": {
+        "name": {"const": "dispatch-core"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "artifact": {"$ref": "#/$defs/artifact"}
+      }
+    },
+    "builtinPlugin": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "package", "version", "artifact", "capabilities"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
+        "package": {"type": "string", "pattern": "^dispatch-[a-z0-9][a-z0-9-]{0,63}$"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "artifact": {"$ref": "#/$defs/artifact"},
+        "capabilities": {
+          "type": "array",
+          "maxItems": 16,
+          "uniqueItems": true,
+          "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"}
+        }
       }
     }
   }
