@@ -25,8 +25,8 @@ class CommandInterfaceError(RuntimeError):
         self.code = code
 
 
-def parser() -> argparse.ArgumentParser:
-    value = argparse.ArgumentParser(prog="dispatch-core")
+def parser(*, prog: str = "dispatch-core") -> argparse.ArgumentParser:
+    value = argparse.ArgumentParser(prog=prog)
     subcommands = value.add_subparsers(dest="action", required=True)
     subcommands.add_parser("health", help="report installed Core path readiness")
     subcommands.add_parser("verify", help="verify the installed Core package and path contract")
@@ -77,7 +77,7 @@ def _auth_result(args: argparse.Namespace) -> dict[str, Any]:
     except ImportError as exc:
         raise CommandInterfaceError(
             "authentication_dependency_missing",
-            "authentication capability dependencies are not installed; run dispatch setup",
+            "authentication is not enabled; install and set up a plugin that requires it",
         ) from exc
 
     try:
@@ -184,8 +184,8 @@ def _service_result(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
-def main(argv: Sequence[str] | None = None) -> int:
-    args = parser().parse_args(argv)
+def main(argv: Sequence[str] | None = None, *, prog: str = "dispatch-core") -> int:
+    args = parser(prog=prog).parse_args(argv)
     try:
         if args.action == "auth":
             result = _auth_result(args)

@@ -68,7 +68,7 @@
       },
       {
         "path": "dispatch_core/command_interface/__init__.py",
-        "sha256": "71d1bba4b8b2536f98ba4c49bf2cf0f4317a3784efd007d291d79a179a53e1a7"
+        "sha256": "d8212842f75d4f4ec614fb28668c10ee1276b2ce3a2a2f8365e68346af9b3863"
       },
       {
         "path": "dispatch_core/command_interface/__main__.py",

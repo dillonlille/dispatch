@@ -136,12 +136,14 @@ def test_dispatch_uninstall_routes_to_installer_cli(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     layout = layout_for(tmp_path)
-    captured: list[str] = []
+    captured: dict[str, object] = {}
     monkeypatch.setenv("HOME", str(layout.home))
     monkeypatch.setenv("XDG_RUNTIME_DIR", str(layout.runtime.parent))
 
-    def installer_main(arguments: list[str]) -> int:
-        captured.extend(arguments)
+    def installer_main(arguments: list[str], *, prog: str, public_uninstall: bool) -> int:
+        captured["arguments"] = arguments
+        captured["prog"] = prog
+        captured["public_uninstall"] = public_uninstall
         return 7
 
     monkeypatch.setattr(cli_module, "main", installer_main)
@@ -149,9 +151,140 @@ def test_dispatch_uninstall_routes_to_installer_cli(
     result = launcher_module.main(["uninstall", "--plan"])
 
     assert result == 7
-    assert captured == [
-        "--dispatch-home",
-        str(layout.dispatch_home),
-        "uninstall",
-        "--plan",
-    ]
+    assert captured == {
+        "arguments": [
+            "--dispatch-home",
+            str(layout.dispatch_home),
+            "--plan",
+        ],
+        "prog": "dispatch uninstall",
+        "public_uninstall": True,
+    }
+
+
+def test_dispatch_renders_human_output_by_default_and_keeps_json_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    layout = layout_for(tmp_path)
+    monkeypatch.setenv("HOME", str(layout.home))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(layout.runtime.parent))
+    payload = {
+        "ok": False,
+        "action": "uninstall",
+        "status": "error",
+        "data": {},
+        "error": {
+            "code": "confirmation_required",
+            "message": "uninstall requires --yes or --plan",
+        },
+    }
+
+    def installer_main(_arguments: list[str], *, prog: str, public_uninstall: bool) -> int:
+        assert prog == "dispatch uninstall"
+        assert public_uninstall is True
+        print(json.dumps(payload, sort_keys=True))
+        return 1
+
+    monkeypatch.setattr(cli_module, "main", installer_main)
+
+    assert launcher_module.main(["uninstall"]) == 1
+    human = capsys.readouterr().out
+    assert human.startswith("✗ Confirmation required")
+    assert "dispatch uninstall --plan" in human
+    assert "{" not in human
+
+    assert launcher_module.main(["--json", "uninstall"]) == 1
+    assert json.loads(capsys.readouterr().out) == payload
+
+
+def test_dispatch_without_arguments_shows_simple_help(capsys: pytest.CaptureFixture[str]) -> None:
+    assert launcher_module.main([]) == 0
+
+    output = capsys.readouterr().out
+    assert output.startswith("Dispatch\n\nUsage:\n  dispatch <command> [options]")
+    assert "health           Show Dispatch health" in output
+    assert "uninstall        Safely remove Dispatch" in output
+    assert "Add --json for machine-readable output." in output
+    assert "dispatch-core" not in output
+
+
+def test_json_help_is_one_machine_readable_document(capsys: pytest.CaptureFixture[str]) -> None:
+    assert launcher_module.main(["--json", "--help"]) == 0
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == "help"
+    assert payload["status"] == "help"
+    assert payload["data"]["help"].startswith("Dispatch\n\nUsage:")
+
+
+def test_json_mode_stays_structured_when_core_is_unavailable(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    layout = layout_for(tmp_path)
+    monkeypatch.setenv("HOME", str(layout.home))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(layout.runtime.parent))
+    monkeypatch.setattr(
+        launcher_module,
+        "inspect_installation",
+        lambda _layout: {"checks": {"core": {"status": "missing"}}},
+    )
+
+    assert launcher_module.main(["--json", "health"]) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == "launch"
+    assert payload["error"]["code"] == "core_release_unavailable"
+
+
+def test_json_mode_wraps_public_parser_errors(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    layout = layout_for(tmp_path)
+    monkeypatch.setenv("HOME", str(layout.home))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(layout.runtime.parent))
+
+    assert launcher_module.main(["--json", "uninstall", "--bad-option"]) == 2
+
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert captured.err == ""
+    assert payload["action"] == "uninstall"
+    assert payload["error"]["code"] == "invalid_arguments"
+    assert "--bad-option" in payload["error"]["message"]
+    assert "dispatch-installer" not in captured.out
+
+
+def test_human_uninstall_parser_errors_use_public_program_name(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    layout = layout_for(tmp_path)
+    monkeypatch.setenv("HOME", str(layout.home))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(layout.runtime.parent))
+
+    assert launcher_module.main(["uninstall", "--bad-option"]) == 2
+
+    captured = capsys.readouterr()
+    assert "usage: dispatch uninstall" in captured.err
+    assert "dispatch-installer" not in captured.err
+    assert "layout" not in captured.err
+
+
+def test_json_mode_wraps_parser_help_and_errors(capsys: pytest.CaptureFixture[str]) -> None:
+    import argparse
+
+    def command(arguments: list[str]) -> int:
+        argparse.ArgumentParser(prog="dispatch health").parse_args(arguments)
+        return 0
+
+    assert launcher_module._run_structured(
+        lambda: command(["--help"]), json_output=True, action="health"
+    ) == 0
+    help_payload = json.loads(capsys.readouterr().out)
+    assert help_payload["status"] == "help"
+    assert "usage: dispatch health" in help_payload["data"]["help"]
+
+    assert launcher_module._run_structured(
+        lambda: command(["--bad-option"]), json_output=True, action="health"
+    ) == 2
+    error_payload = json.loads(capsys.readouterr().out)
+    assert error_payload["error"]["code"] == "invalid_arguments"

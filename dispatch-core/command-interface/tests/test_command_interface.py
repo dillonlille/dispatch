@@ -9,6 +9,11 @@ from dispatch_core.command_interface import main
 ENVELOPE = {"ok", "action", "status", "data", "freshness", "delivery", "error"}
 
 
+def test_parser_can_use_the_public_dispatch_program_name() -> None:
+    assert command_interface.parser(prog="dispatch").prog == "dispatch"
+    assert command_interface.parser().prog == "dispatch-core"
+
+
 def test_health_command_serializes_the_standard_envelope(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))

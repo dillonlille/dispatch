@@ -44,9 +44,19 @@ def _record_install_phase(
     )
 
 
-def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="dispatch-installer")
+def _add_uninstall_arguments(parser: argparse.ArgumentParser) -> None:
+    parser.add_argument("--plan", action="store_true", help="show the uninstall plan without changing files")
+    parser.add_argument("--purge", action="store_true", help="also remove configuration and durable data")
+    parser.add_argument("--yes", action="store_true", help="confirm the uninstall operation")
+
+
+def _parser(*, prog: str = "dispatch-installer", public_uninstall: bool = False) -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(prog=prog)
     parser.add_argument("--dispatch-home", help="absolute per-user Dispatch root; defaults to $HOME/.dispatch")
+    if public_uninstall:
+        _add_uninstall_arguments(parser)
+        parser.set_defaults(action="uninstall")
+        return parser
     subparsers = parser.add_subparsers(dest="action", required=True)
     subparsers.add_parser("layout", help="print the resolved installation layout without changing it")
     prepare = subparsers.add_parser("prepare", help="create the private per-user directory layout")
@@ -63,9 +73,7 @@ def _parser() -> argparse.ArgumentParser:
     install.add_argument("--core-wheel", type=Path, required=True)
     install.add_argument("--yes", action="store_true", help="confirm Core installation")
     uninstall = subparsers.add_parser("uninstall", help="plan or apply a receipt-bound user-scope uninstall")
-    uninstall.add_argument("--plan", action="store_true", help="show the uninstall plan without changing files")
-    uninstall.add_argument("--purge", action="store_true", help="also remove configuration and durable data")
-    uninstall.add_argument("--yes", action="store_true", help="confirm the uninstall operation")
+    _add_uninstall_arguments(uninstall)
     return parser
 
 
@@ -84,8 +92,13 @@ def _emit(ok: bool, action: str, status: str, data: dict, error: dict | None = N
     )
 
 
-def main(argv: list[str] | None = None) -> int:
-    args = _parser().parse_args(argv)
+def main(
+    argv: list[str] | None = None,
+    *,
+    prog: str = "dispatch-installer",
+    public_uninstall: bool = False,
+) -> int:
+    args = _parser(prog=prog, public_uninstall=public_uninstall).parse_args(argv)
     try:
         layout = InstallLayout.from_environment(dispatch_home=args.dispatch_home)
         if args.action == "layout":
