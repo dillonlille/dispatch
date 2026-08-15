@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+import dispatch_core.command_interface as command_interface
 from dispatch_core.command_interface import main
 
 ENVELOPE = {"ok", "action", "status", "data", "freshness", "delivery", "error"}
@@ -17,6 +18,35 @@ def test_health_command_serializes_the_standard_envelope(monkeypatch, tmp_path, 
     assert set(payload) == ENVELOPE
     assert payload["action"] == "health"
     assert payload["status"] == "setup_incomplete"
+
+
+def test_plugin_commands_use_the_generic_runtime_contract(monkeypatch, capsys) -> None:
+    monkeypatch.setattr(
+        command_interface,
+        "list_plugins",
+        lambda: [{"id": "example", "distribution": "dispatch-example", "version": "1.2.3"}],
+    )
+    monkeypatch.setattr(
+        command_interface,
+        "invoke_plugin",
+        lambda plugin_id, request: {
+            "ok": True,
+            "action": request["action"],
+            "status": "ready",
+            "data": {"plugin": plugin_id, "request": request},
+            "freshness": None,
+            "delivery": None,
+            "error": None,
+        },
+    )
+
+    assert main(["plugin", "list"]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["data"]["plugins"][0]["id"] == "example"
+
+    assert main(["plugin", "invoke", "example", "--request", '{"action":"lookup","question":"hello"}']) == 0
+    invoked = json.loads(capsys.readouterr().out)
+    assert invoked["data"]["response"]["data"]["request"]["question"] == "hello"
 
 
 def test_browser_doctor_is_bounded_and_does_not_launch_a_browser(monkeypatch, tmp_path, capsys) -> None:

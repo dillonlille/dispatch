@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 import sqlite3
 
+import dispatch_core.health as health_runtime
 from dispatch_core.health import resolved
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -76,6 +77,44 @@ def test_core_only_setup_completion_does_not_require_browser_or_authentication(m
     assert health["data"]["configured"] is True
     assert health["data"]["planes"]["browser"] == "not_applicable"
     assert health["data"]["planes"]["authentication"] == "not_applicable"
+
+
+def test_selected_plugin_must_report_ready_before_setup_is_ready(monkeypatch, tmp_path: Path) -> None:
+    configure(monkeypatch, tmp_path)
+    setup_directory = tmp_path / "installed-home" / ".dispatch" / "state" / "install"
+    setup_directory.mkdir(mode=0o700, parents=True)
+    setup = setup_directory / "setup.json"
+    setup.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "complete",
+                "product_version": "0.0.1",
+                "selected_plugins": ["handbook"],
+                "plugins": [{"id": "handbook", "capabilities": []}],
+                "contains_secrets": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    setup.chmod(0o600)
+    monkeypatch.setattr(
+        health_runtime,
+        "plugin_health",
+        lambda selected: {
+            "ready": False,
+            "plugins": {selected[0]: {"ok": True, "status": "degraded"}},
+            "error": None,
+        },
+    )
+
+    health = resolved("health")
+
+    assert health["ok"] is True
+    assert health["status"] == "setup_incomplete"
+    assert health["data"]["configured"] is True
+    assert health["data"]["ready"] is False
+    assert health["data"]["planes"]["query"] == "unavailable"
 
 
 def test_installed_health_rejects_invalid_private_root(monkeypatch, tmp_path: Path) -> None:

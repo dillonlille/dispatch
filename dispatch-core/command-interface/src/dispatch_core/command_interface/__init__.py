@@ -16,6 +16,7 @@ from dispatch_core.collection_manager.supervisor import (
 )
 from dispatch_core.health import envelope, resolved
 from dispatch_core.paths import DispatchPaths, PathConfigError
+from dispatch_core.plugin_runtime import PluginRuntimeError, invoke_plugin, list_plugins
 
 
 class CommandInterfaceError(RuntimeError):
@@ -35,6 +36,15 @@ def parser() -> argparse.ArgumentParser:
     service.add_argument("--max-ticks", type=int)
     paths = subcommands.add_parser("paths", help="resolve non-mutating installation roots")
     paths.add_argument("--owner")
+
+    plugin = subcommands.add_parser("plugin", help="list or invoke installer-approved plugins")
+    plugin_actions = plugin.add_subparsers(dest="plugin_action", required=True)
+    plugin_actions.add_parser("list", help="list active discoverable plugins")
+    plugin_health = plugin_actions.add_parser("health", help="run a plugin's non-mutating health action")
+    plugin_health.add_argument("plugin_id")
+    plugin_invoke = plugin_actions.add_parser("invoke", help="send one bounded JSON request to a plugin")
+    plugin_invoke.add_argument("plugin_id")
+    plugin_invoke.add_argument("--request", required=True, help="JSON object accepted by the plugin")
 
     auth = subcommands.add_parser("auth", help="manage private Core authentication credentials")
     auth_actions = auth.add_subparsers(dest="auth_action", required=True)
@@ -125,6 +135,29 @@ def _collection_result(args: argparse.Namespace) -> dict[str, Any]:
     return envelope(ok=True, action=action, status="ready", data=data)
 
 
+def _plugin_result(args: argparse.Namespace) -> dict[str, Any]:
+    action = f"plugin-{args.plugin_action}"
+    if args.plugin_action == "list":
+        return envelope(ok=True, action=action, status="ready", data={"plugins": list_plugins()})
+    if args.plugin_action == "health":
+        request = {"action": "health"}
+    else:
+        try:
+            request = json.loads(args.request)
+        except json.JSONDecodeError as exc:
+            raise CommandInterfaceError("plugin_request_invalid", "plugin request must be valid JSON") from exc
+        if type(request) is not dict:
+            raise CommandInterfaceError("plugin_request_invalid", "plugin request must be a JSON object")
+    response = invoke_plugin(args.plugin_id, request)
+    return envelope(
+        ok=response["ok"],
+        action=action,
+        status=response["status"],
+        data={"plugin": args.plugin_id, "response": response},
+        error=response["error"],
+    )
+
+
 def _service_result(args: argparse.Namespace) -> dict[str, Any]:
     paths = DispatchPaths.from_environment()
     store = CollectionTaskStore.from_paths(paths)
@@ -158,12 +191,18 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _auth_result(args)
         elif args.action == "collection":
             result = _collection_result(args)
+        elif args.action == "plugin":
+            result = _plugin_result(args)
         elif args.action == "service":
             result = _service_result(args)
         else:
             result = resolved(args.action, getattr(args, "owner", None))
-    except (CommandInterfaceError, CollectionStoreError, PathConfigError) as exc:
-        code = exc.code if isinstance(exc, (CommandInterfaceError, CollectionStoreError)) else "invalid_path_configuration"
+    except (CommandInterfaceError, CollectionStoreError, PathConfigError, PluginRuntimeError) as exc:
+        code = (
+            exc.code
+            if isinstance(exc, (CommandInterfaceError, CollectionStoreError, PluginRuntimeError))
+            else "invalid_path_configuration"
+        )
         result = envelope(
             ok=False,
             action=(
@@ -172,7 +211,11 @@ def main(argv: Sequence[str] | None = None) -> int:
                 else (
                     f"collection-{getattr(args, 'collection_action', 'unknown')}"
                     if args.action == "collection"
-                    else args.action
+                    else (
+                        f"plugin-{getattr(args, 'plugin_action', 'unknown')}"
+                        if args.action == "plugin"
+                        else args.action
+                    )
                 )
             ),
             status="error",

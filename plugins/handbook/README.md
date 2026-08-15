@@ -28,4 +28,12 @@ The Aster Lantern fixture is wholly invented for public automated tests. Real do
 
 Installed/model-facing configuration must use absolute paths without traversal. The configured index must remain below `DISPATCH_HANDBOOK_DATA_ROOT`; read-only actions never create either path. The explicit demo target is separate operator-selected temporary output.
 
-The package remains a deferred plugin source candidate. It is not part of the immediate Core-only online installer, readiness contract, or clean-machine acceptance. A later reviewed plugin package may depend on `dispatch-core==1.0.0`; runtime installation must continue to exclude synthetic fixtures and tests. See [`../../docs/online-installation.md`](../../docs/online-installation.md).
+The wheel publishes the standard `dispatch.plugins` entry point named `handbook`. After installer-approved activation, Core discovers it without a generated registry or plugin-specific Core code:
+
+```bash
+dispatch plugin list
+dispatch plugin health handbook
+dispatch plugin invoke handbook --request '{"action":"lookup","question":"Where does the paper star go?"}'
+```
+
+Lookup readiness still requires an operator-provided index. Runtime installation excludes synthetic fixtures and tests, and setup does not modify Hermes. The optional Hermes adapter remains a narrow separate projection over the same `handle` function. See [`../../docs/online-installation.md`](../../docs/online-installation.md).

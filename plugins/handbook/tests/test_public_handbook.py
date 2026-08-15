@@ -4,6 +4,7 @@ import hashlib
 import importlib.util
 import json
 from pathlib import Path
+import tomllib
 
 import pytest
 
@@ -148,3 +149,10 @@ def test_runtime_release_excludes_tests_and_synthetic_fixture() -> None:
     members = {path.as_posix() for path in build_release.inputs(ROOT)}
     assert "examples/synthetic-handbook.json" not in members
     assert not any(member.startswith("tests/") for member in members)
+
+
+def test_package_publishes_the_simple_core_discovery_entry_point() -> None:
+    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    assert project["entry-points"]["dispatch.plugins"] == {
+        "handbook": "dispatch_handbook.service:handle"
+    }

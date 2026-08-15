@@ -7,6 +7,7 @@ import stat
 from typing import Any
 
 from dispatch_core.paths import DispatchPaths, PathConfigError
+from dispatch_core.plugin_runtime import plugin_health
 
 PLANES = (
     "registration",
@@ -176,10 +177,16 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
         )
         browser_ready = inspection["ready"] is True
         setup = _setup_state(paths)
+        plugins = (
+            plugin_health(setup["selected_plugins"])
+            if setup["complete"] is True
+            else {"ready": False, "plugins": {}, "error": None}
+        )
         browser_required = "browser" in setup["capabilities"]
         authentication_required = "authentication" in setup["capabilities"]
         setup_ready = (
             setup["complete"] is True
+            and plugins["ready"] is True
             and (not browser_required or browser_ready)
             and (not authentication_required or authentication_ready)
         )
@@ -196,7 +203,7 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             }
         )
         if action in {"health", "verify"}:
-            planes["query"] = "ready"
+            planes["query"] = "ready" if plugins["ready"] is True else "unavailable"
             planes["collector"] = "ready" if collection_ready else "unavailable"
             planes["authentication"] = (
                 ("ready" if authentication_ready else "unavailable")
@@ -210,6 +217,7 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             "operational": browser_ready if action == "browser-doctor" else core_operational,
             "planes": planes,
             "setup": setup,
+            "plugin_runtime": plugins,
             "browser_manager": {
                 **inspection,
                 "realms": RealmRegistry().safe_data(),

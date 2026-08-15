@@ -32,6 +32,7 @@ RELEASE_FILES = (
     "core-manifest.json",
     "pyproject.toml",
     "src/dispatch_core/__init__.py",
+    "src/dispatch_core/plugin_runtime.py",
     "paths/README.md",
     "paths/src/dispatch_core/paths/__init__.py",
     "health/README.md",

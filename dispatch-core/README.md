@@ -38,6 +38,9 @@ dispatch-core verify
 dispatch-core health
 dispatch-core browser-doctor
 dispatch-core paths --owner example-plugin
+dispatch-core plugin list
+dispatch-core plugin health handbook
+dispatch-core plugin invoke handbook --request '{"action":"overview"}'
 dispatch-core auth status
 dispatch-core auth enroll amazon-operations
 dispatch-core auth remove amazon-operations --yes
@@ -48,7 +51,7 @@ dispatch-core collection cancel TASK_ID
 dispatch-core collection resume TASK_ID
 ```
 
-Installed execution requires an explicit `DISPATCH_CODE_ROOT` naming the installed code or release authority. Every command preserves the exact seven-field response envelope. Read-only commands create no private roots; explicit authentication enrollment and removal may create or update the private encrypted credential store.
+Installed execution requires an explicit `DISPATCH_CODE_ROOT` naming the installed code or release authority. Every command preserves the exact seven-field response envelope. Plugin discovery uses the standard `dispatch.plugins` package entry-point group and only the active IDs and paths verified by the installer; adding a plugin requires no Core-specific registry code. Read-only commands create no private roots; explicit authentication enrollment and removal may create or update the private encrypted credential store.
 
 Browser Manager creates private state only when explicitly instantiated by a Core service or test. It uses persistent isolated profiles with temporary Chromium processes and typed internal leases rather than generic browser commands. Collection Manager likewise creates its private database only when explicitly opened; health and `collection status` inspection do not create an empty store. A zero-collector worker exits successfully without claiming queued work it cannot execute.
 

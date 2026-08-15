@@ -84,7 +84,7 @@
       },
       {
         "path": "dispatch_core/command_interface/__init__.py",
-        "sha256": "360aaaf06c9d028a7454fdec6c7a64b46a194c2f21145bb099780be2f878a478"
+        "sha256": "71d1bba4b8b2536f98ba4c49bf2cf0f4317a3784efd007d291d79a179a53e1a7"
       },
       {
         "path": "dispatch_core/command_interface/__main__.py",
@@ -92,11 +92,15 @@
       },
       {
         "path": "dispatch_core/health/__init__.py",
-        "sha256": "39fcbef60cbc0e616ad868a515cfd9663ff96b56deb384b7698ad355e09e1cfc"
+        "sha256": "827767fc37d0be7a1ae54c5e8bb93beeef4bee2bdb006711ff01ba302a88e91e"
       },
       {
         "path": "dispatch_core/paths/__init__.py",
         "sha256": "1f3f6f6b6e5d86900a0d4d350c5e94fb5f8d66eb0c3b7c41b9a40de6670851ff"
+      },
+      {
+        "path": "dispatch_core/plugin_runtime.py",
+        "sha256": "a8d32e73cb707d1058aee9dab22608b9d0faa31c2f343716b6aa65a72cf63dd3"
       }
     ],
     "requires_dist": [

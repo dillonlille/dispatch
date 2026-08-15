@@ -93,6 +93,19 @@ Hermes `plugin.yaml`, launcher manifests, release manifests, installed profile p
 
 Runtime paths in the source manifest are logical projection declarations. Generated releases, selectors, launcher manifests, and activation records do not need to exist in a clean source checkout; conformance validates their contents when installed artifacts are present.
 
+### 4.1 Core discovery contract
+
+An installable plugin needs one Python package entry point. It does not require a Core registry edit, generated Python module, repository scan, or package-specific Core adapter:
+
+```toml
+[project.entry-points."dispatch.plugins"]
+example = "dispatch_example.service:handle"
+```
+
+The entry-point name must equal the plugin ID in the approved product manifest. The target is a callable accepting one bounded JSON object and returning the standard seven-field Dispatch envelope. At minimum it handles `{"action":"health"}`; all other supported actions remain plugin-owned. The installer verifies the exact entry point while admitting the wheel, records only explicitly selected plugins, and gives Core only those verified IDs and paths. Core never scans repositories or unapproved environments for plugins.
+
+That entry point is the complete Core discovery contract. Additional Hermes adapters, collectors, services, configuration, or browser/authentication capabilities are added only when the plugin actually needs them.
+
 ## 5. Capability planes
 
 ### Query plane
@@ -258,6 +271,17 @@ Every conforming owner provides executable entrypoints:
 ```
 
 Commands must work from the owner root. `test` must discover a nonzero count and require no undocumented import path. A release may use a bounded self-test instead of shipping the complete source suite, but metadata must not advertise tests that are absent.
+
+### Core discovery contract
+
+A Python plugin becomes discoverable by publishing one entry point whose name matches its manifest `id`:
+
+```toml
+[project.entry-points."dispatch.plugins"]
+example = "dispatch_example.service:handle"
+```
+
+The target is one callable accepting a bounded JSON object and returning the standard response envelope. No registration class, decorator, generated registry, or Core modification is required. Setup verifies the entry point before activation, and Core loads entry points only from installer-approved active plugin paths.
 
 Minimum focused coverage:
 

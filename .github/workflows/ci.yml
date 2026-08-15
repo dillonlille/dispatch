@@ -58,7 +58,7 @@ jobs:
         run: ./dispatch-core/scripts/test
 
   plugin-tests:
-    name: Deferred Handbook plugin (Python 3.11)
+    name: Discoverable Handbook plugin (Python 3.11)
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     steps:
@@ -76,6 +76,37 @@ jobs:
         run: python -m pip install ./dispatch-core "./plugins/handbook[dev]"
       - name: Verify Handbook independently
         run: ./plugins/handbook/scripts/test
+      - name: Invoke Handbook through the installed Core plugin boundary
+        shell: bash
+        run: |
+          set -euo pipefail
+          site_packages="$(python -c 'import site; print(site.getsitepackages()[0])')"
+          data_root="$RUNNER_TEMP/handbook-data"
+          index="$data_root/handbook.sqlite3"
+          mkdir -m 700 "$data_root"
+          dispatch-handbook demo-init \
+            --fixture plugins/handbook/examples/synthetic-handbook.json \
+            --target "$index" >/dev/null
+          export DISPATCH_ACTIVE_PLUGINS=handbook
+          export DISPATCH_PLUGIN_PATHS="$site_packages"
+          export DISPATCH_HANDBOOK_DATA_ROOT="$data_root"
+          export DISPATCH_HANDBOOK_INDEX="$index"
+          dispatch-core plugin list > "$RUNNER_TEMP/plugin-list.json"
+          dispatch-core plugin health handbook > "$RUNNER_TEMP/plugin-health.json"
+          dispatch-core plugin invoke handbook \
+            --request '{"action":"lookup","question":"Where does a paper star with a curled corner go?"}' \
+            > "$RUNNER_TEMP/plugin-lookup.json"
+          python - <<'PY'
+          import json, os
+          root = os.environ["RUNNER_TEMP"]
+          listed = json.load(open(root + "/plugin-list.json", encoding="utf-8"))
+          health = json.load(open(root + "/plugin-health.json", encoding="utf-8"))
+          lookup = json.load(open(root + "/plugin-lookup.json", encoding="utf-8"))
+          assert listed["data"]["plugins"][0]["id"] == "handbook"
+          assert health["status"] == "ready"
+          evidence = lookup["data"]["response"]["data"]["evidence"]
+          assert evidence and "star" in evidence[0]["text"].lower()
+          PY
 
   core-artifact-boundary:
     name: Build and verify Core-only wheels

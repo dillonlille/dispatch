@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import configparser
 import hashlib
 import json
 import os
@@ -108,7 +109,7 @@ def load_installed_manifest(layout: InstallLayout) -> InstallationManifest:
     return manifest
 
 
-def active_plugin_paths(layout: InstallLayout) -> list[Path]:
+def active_plugins(layout: InstallLayout) -> list[tuple[str, Path]]:
     setup_path = layout.state / "install" / "setup.json"
     if not setup_path.exists():
         return []
@@ -138,7 +139,7 @@ def active_plugin_paths(layout: InstallLayout) -> list[Path]:
     if receipt.get("product_version") != manifest.product_version:
         raise InstallerError("setup_receipt_invalid", "setup product version differs from release authority")
     catalog = {plugin.id: plugin for plugin in manifest.builtin_plugins}
-    paths: list[Path] = []
+    plugins: list[tuple[str, Path]] = []
     seen: set[str] = set()
     for plugin in receipt["plugins"]:
         if not isinstance(plugin, dict) or set(plugin) != {
@@ -184,10 +185,14 @@ def active_plugin_paths(layout: InstallLayout) -> list[Path]:
             raise InstallerError("setup_plugin_selector_invalid", "active plugin selector differs from setup receipt")
         _verify_plugin_release(expected.parent, authority)
         seen.add(plugin_id)
-        paths.append(expected)
+        plugins.append((plugin_id, expected))
     if receipt["selected_plugins"] != [plugin["id"] for plugin in receipt["plugins"]]:
         raise InstallerError("setup_receipt_invalid", "setup plugin selection differs from installed plugins")
-    return paths
+    return plugins
+
+
+def active_plugin_paths(layout: InstallLayout) -> list[Path]:
+    return [path for _plugin_id, path in active_plugins(layout)]
 
 
 def _plugin_wheel_identity(wheel: Path, plugin: BuiltinPlugin, core_version: str) -> dict[str, zipfile.ZipInfo]:
@@ -201,16 +206,30 @@ def _plugin_wheel_identity(wheel: Path, plugin: BuiltinPlugin, core_version: str
         record_names = [name for name in members if name.endswith(".dist-info/RECORD")]
         wheel_names = [name for name in members if name.endswith(".dist-info/WHEEL")]
         top_level_names = [name for name in members if name.endswith(".dist-info/top_level.txt")]
+        entry_point_names = [name for name in members if name.endswith(".dist-info/entry_points.txt")]
         license_names = [name for name in members if name.endswith(".dist-info/licenses/LICENSE")]
         if not all(
             len(names) == 1
-            for names in (metadata_names, record_names, wheel_names, top_level_names, license_names)
+            for names in (
+                metadata_names,
+                record_names,
+                wheel_names,
+                top_level_names,
+                entry_point_names,
+                license_names,
+            )
         ):
             raise InstallerError("plugin_wheel_metadata", "built-in plugin wheel metadata set is invalid")
         metadata_root = metadata_names[0].removesuffix("METADATA")
         if any(
             not name.startswith(metadata_root)
-            for name in (record_names[0], wheel_names[0], top_level_names[0], license_names[0])
+            for name in (
+                record_names[0],
+                wheel_names[0],
+                top_level_names[0],
+                entry_point_names[0],
+                license_names[0],
+            )
         ):
             raise InstallerError("plugin_wheel_metadata", "built-in plugin metadata roots differ")
         metadata = BytesParser().parsebytes(archive.read(members[metadata_names[0]]))
@@ -234,6 +253,22 @@ def _plugin_wheel_identity(wheel: Path, plugin: BuiltinPlugin, core_version: str
         if len(top_levels) != 1 or re.fullmatch(r"dispatch_[a-z0-9_]+", top_levels[0]) is None:
             raise InstallerError("plugin_wheel_top_level", "built-in plugin top-level package is invalid")
         package_root = f"{top_levels[0]}/"
+        entry_points = configparser.ConfigParser(interpolation=None, strict=True)
+        try:
+            entry_points.read_string(archive.read(members[entry_point_names[0]]).decode("utf-8"))
+        except (configparser.Error, UnicodeError) as exc:
+            raise InstallerError("plugin_wheel_entry_point", "built-in plugin entry point metadata is invalid") from exc
+        if not entry_points.has_section("dispatch.plugins") or set(entry_points["dispatch.plugins"]) != {plugin.id}:
+            raise InstallerError(
+                "plugin_wheel_entry_point",
+                "built-in plugin must publish one dispatch.plugins entry point matching its id",
+            )
+        target = entry_points["dispatch.plugins"][plugin.id].strip()
+        if re.fullmatch(
+            rf"{re.escape(top_levels[0])}(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*:[a-zA-Z_][a-zA-Z0-9_]*",
+            target,
+        ) is None:
+            raise InstallerError("plugin_wheel_entry_point", "built-in plugin entry point target is invalid")
         if any(
             name.endswith(".pth")
             or ".data/" in name

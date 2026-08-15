@@ -42,11 +42,11 @@ The GitHub workflows under `.github/workflows/` build only explicit project root
 - digest-pinned installation-manifest, approved-GitHub download, transactional Core release, doctor, verification, and receipt-bound user-scope uninstall primitives;
 - a closed, digest-bound browser-generation manifest plus fixed-authority evidence receipts, synthetic-path immutable staging, full-tree verification, one atomic active selector, and explicit-target rollback primitives owned by the installer;
 - a pinned Core and browser runtime package plan for the future production install orchestration;
-- independently packaged, deferred Handbook plugin source and one explicitly declared fictional demo fixture;
+- independently packaged Handbook plugin source with one standard Core discovery entry point and one explicitly declared fictional demo fixture;
 - fail-closed source-scope, provenance, path, fixture, configuration, and secret checks;
 - focused source, lifecycle, Authentication, Browser Manager, and Collection Manager tests.
 
-No domain collectors, Companion Bridge, Slack delivery, enabled schedules, production documents, or private Handbook content are included. Collection Manager can durably queue, schedule, and supervise registered collectors, but there are currently zero registered collectors and zero configured schedules. Authorized live-account acceptance and persistent OS service installation remain pending. Handbook and all other plugins are deferred from the immediate readiness contract.
+No domain collectors, Companion Bridge, Slack delivery, enabled schedules, production documents, or private Handbook content are included. Collection Manager can durably queue, schedule, and supervise registered collectors, but there are currently zero registered collectors and zero configured schedules. Authorized live-account acceptance and persistent OS service installation remain pending. Handbook is discoverable after explicit setup, but production index onboarding remains outside the immediate readiness contract.
 
 ## Current readiness
 
@@ -63,7 +63,7 @@ The user-scope uninstall boundary is defined in [`docs/uninstallation.md`](docs/
 
 ## Configuration and integration prerequisites
 
-The current Core proof needs no credentials or external accounts. Deferred plugin examples are not installed by the Core-only package contract. No deferred integration receives a public configuration template until its credential, browser, lifecycle, and privacy boundaries are reviewed.
+The current Core proof needs no credentials or external accounts. Built-in plugins are never installed by the mandatory Core-only installation phase; explicit setup activates only manifest-approved wheels. No integration receives a public configuration template until its credential, browser, lifecycle, and privacy boundaries are reviewed.
 
 ## Development checks
 
@@ -81,7 +81,7 @@ plugins/handbook/scripts/verify
 plugins/handbook/scripts/health
 ```
 
-The Handbook checks preserve the deferred source candidate; they do not add Handbook to the immediate runtime package contract.
+The Handbook checks exercise its independent source contract and generic `dispatch.plugins` discovery boundary; they do not add Handbook to mandatory Core installation.
 
 GitHub-hosted CI additionally builds the Core and installer from their explicit project roots, runs `scripts/verify-core-wheel` against the Core artifact, and clean-installs each wheel on an ephemeral runner. It deliberately does not run live browser, account, installed-host health, or production service acceptance.
 

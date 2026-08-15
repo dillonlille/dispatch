@@ -22,6 +22,7 @@ EXPECTED_FEATURES = {
 }
 REQUIRED_SOURCES = (
     "src/dispatch_core/__init__.py",
+    "src/dispatch_core/plugin_runtime.py",
     "paths/src/dispatch_core/paths/__init__.py",
     "health/src/dispatch_core/health/__init__.py",
     "command-interface/src/dispatch_core/command_interface/__init__.py",

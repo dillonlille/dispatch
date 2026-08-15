@@ -60,8 +60,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/launcher.py",
-      "sha256": "73c5b3318bba5097a438eef4a6671ed781deae1bc09d30a73b2b47e58725634e",
-      "size": 2330
+      "sha256": "c10701d172880635fe75a51d30e3e803821b95344cf810bd15cc31f198b929dd",
+      "size": 2575
     },
     {
       "path": "installer/src/dispatch_installer/layout.py",
@@ -80,8 +80,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/setup.py",
-      "sha256": "6e8ce6dfe7745a9e6427cb0bd2caa4ad6588680a01b912ed5d87d7f5957bf8de",
-      "size": 23992
+      "sha256": "82869509782da51f589de963a56ddcf412bc4383ab27f5b4ab7ff200b68eabca",
+      "size": 25546
     },
     {
       "path": "installer/src/dispatch_installer/uninstall.py",

@@ -5,9 +5,12 @@ import csv
 import hashlib
 import io
 import json
+import os
 import subprocess
+import sys
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -33,10 +36,68 @@ def test_installed_launcher_routes_setup_before_loading_core(monkeypatch) -> Non
     assert observed["arguments"] == ["--yes"]
 
 
+def test_launcher_pairs_approved_plugin_ids_with_their_paths(monkeypatch, tmp_path: Path) -> None:
+    layout = _layout(tmp_path)
+    core_path = layout.releases / "core-release" / "site-packages"
+    plugin_path = layout.plugins / "handbook" / "releases" / "release" / "site-packages"
+    core_path.mkdir(parents=True)
+    plugin_path.mkdir(parents=True)
+    observed: dict[str, object] = {}
+
+    def command_main(arguments):
+        observed["arguments"] = arguments
+        observed["ids"] = os.environ["DISPATCH_ACTIVE_PLUGINS"]
+        observed["paths"] = os.environ["DISPATCH_PLUGIN_PATHS"]
+        return 0
+
+    for name in (
+        "DISPATCH_HOME",
+        "DISPATCH_CODE_ROOT",
+        "DISPATCH_CONFIG_ROOT",
+        "DISPATCH_DATA_ROOT",
+        "DISPATCH_STATE_ROOT",
+        "DISPATCH_CACHE_ROOT",
+        "DISPATCH_RUNTIME_ROOT",
+        "DISPATCH_ACTIVE_PLUGINS",
+        "DISPATCH_PLUGIN_PATHS",
+    ):
+        monkeypatch.setenv(name, "")
+    monkeypatch.setattr(
+        launcher_runtime,
+        "InstallLayout",
+        SimpleNamespace(from_environment=lambda: layout),
+    )
+    monkeypatch.setattr(
+        launcher_runtime,
+        "inspect_installation",
+        lambda _layout: {"checks": {"core": {"status": "ready", "release_id": "core-release"}}},
+    )
+    monkeypatch.setattr(launcher_runtime, "active_plugins", lambda _layout: [("handbook", plugin_path)])
+    monkeypatch.setattr(launcher_runtime.importlib, "import_module", lambda _name: SimpleNamespace(main=command_main))
+
+    try:
+        assert launcher_runtime.main(["plugin", "list"]) == 0
+    finally:
+        for path in (str(core_path), str(plugin_path)):
+            while path in sys.path:
+                sys.path.remove(path)
+
+    assert observed == {
+        "arguments": ["plugin", "list"],
+        "ids": "handbook",
+        "paths": str(plugin_path),
+    }
+
+
 MANIFEST = ROOT / "packaging" / "installation-release-manifest.json"
 
 
-def _wheel(tmp_path: Path, *, license_bytes: bytes | None = None) -> Path:
+def _wheel(
+    tmp_path: Path,
+    *,
+    license_bytes: bytes | None = None,
+    entry_point_bytes: bytes | None = None,
+) -> Path:
     wheel = tmp_path / "dispatch_local_handbook-0.1.0-py3-none-any.whl"
     root = "dispatch_local_handbook-0.1.0.dist-info/"
     members = {
@@ -52,6 +113,11 @@ def _wheel(tmp_path: Path, *, license_bytes: bytes | None = None) -> Path:
         ).encode(),
         f"{root}WHEEL": b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n\n",
         f"{root}top_level.txt": b"dispatch_handbook\n",
+        f"{root}entry_points.txt": (
+            entry_point_bytes
+            if entry_point_bytes is not None
+            else b"[dispatch.plugins]\nhandbook = dispatch_handbook.service:handle\n"
+        ),
         f"{root}licenses/LICENSE": (
             license_bytes if license_bytes is not None else (ROOT / "LICENSE").read_bytes()
         ),
@@ -144,6 +210,24 @@ def test_builtin_plugin_requires_exact_apache_license(tmp_path: Path, monkeypatc
         configure_plugins(layout, ["handbook"])
 
     assert error.value.code == "plugin_wheel_license"
+
+
+def test_builtin_plugin_requires_matching_discovery_entry_point(tmp_path: Path, monkeypatch) -> None:
+    wheel = _wheel(tmp_path, entry_point_bytes=b"[dispatch.plugins]\nother = dispatch_handbook.service:handle\n")
+    manifest_path, digest = _ready_manifest(tmp_path, wheel)
+    layout = _layout(tmp_path)
+    persist_release_manifest(layout, manifest_path, expected_sha256=digest, product_version="0.0.1")
+
+    def download(_url, destination, **_policy):
+        destination.write_bytes(wheel.read_bytes())
+        destination.chmod(0o600)
+        return {"path": str(destination)}
+
+    monkeypatch.setattr(setup_runtime, "download_release_artifact", download)
+    with pytest.raises(InstallerError) as error:
+        configure_plugins(layout, ["handbook"])
+
+    assert error.value.code == "plugin_wheel_entry_point"
 
 
 def test_selected_builtin_plugin_is_verified_activated_and_receipted(tmp_path: Path, monkeypatch) -> None:

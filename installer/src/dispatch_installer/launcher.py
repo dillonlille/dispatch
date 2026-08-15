@@ -7,7 +7,7 @@ import sys
 
 from .doctor import inspect_installation
 from .layout import InstallLayout, InstallerError
-from .setup import active_plugin_paths, run_setup
+from .setup import active_plugins, run_setup
 
 
 def _error(code: str, message: str) -> int:
@@ -44,11 +44,14 @@ def main(argv: list[str] | None = None) -> int:
             raise InstallerError("core_site_packages_missing", "active Core package root is missing")
         os.environ.update(layout.core_environment(release))
         existing = os.environ.get("PYTHONPATH")
-        plugin_paths = active_plugin_paths(layout)
+        plugins = active_plugins(layout)
+        plugin_paths = [path for _plugin_id, path in plugins]
         import_paths = [str(site_packages), *(str(path) for path in plugin_paths)]
         if existing:
             import_paths.append(existing)
         os.environ["PYTHONPATH"] = os.pathsep.join(import_paths)
+        os.environ["DISPATCH_ACTIVE_PLUGINS"] = ",".join(plugin_id for plugin_id, _path in plugins)
+        os.environ["DISPATCH_PLUGIN_PATHS"] = os.pathsep.join(str(path) for path in plugin_paths)
         sys.path.insert(0, str(site_packages))
         for index, plugin_path in enumerate(plugin_paths, start=1):
             sys.path.insert(index, str(plugin_path))
