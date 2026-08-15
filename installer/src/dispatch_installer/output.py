@@ -23,9 +23,9 @@ _COMMANDS = (
     ("verify", "Verify the installed Core"),
     ("setup", "Configure Dispatch plugins"),
     ("paths", "Show Dispatch paths"),
-    ("plugin", "Inspect installed plugins"),
-    ("auth", "Inspect authentication state"),
-    ("collection", "Inspect collection state"),
+    ("plugin", "Manage installed plugins"),
+    ("auth", "Manage authentication"),
+    ("collection", "Manage collection work"),
     ("browser-doctor", "Inspect the browser runtime"),
     ("service", "Run the foreground collection service"),
     ("uninstall", "Safely remove Dispatch"),
@@ -71,6 +71,8 @@ def _headline(payload: Mapping[str, object]) -> str:
             return "✗ Authentication is not available"
         if action == "browser-doctor":
             return "✗ Browser support is not available"
+        if action == "health":
+            return "✗ Dispatch needs attention"
         return f"✗ {_label(action)} failed"
 
     if action == "uninstall":
@@ -94,12 +96,17 @@ def _headline(payload: Mapping[str, object]) -> str:
             "available": "Dispatch setup options",
             "complete": "✓ Dispatch setup is complete",
         }.get(status, f"✓ Setup: {_label(status)}")
+    data = payload.get("data")
     if action == "verify" and payload.get("ok"):
-        return "✓ Dispatch verification passed"
+        if status == "ready" and isinstance(data, Mapping) and data.get("ready") is True:
+            return "✓ Dispatch verification passed"
+        return "○ Dispatch verification needs attention"
     if action == "paths" and payload.get("ok"):
         return "✓ Dispatch paths are ready"
     if action == "collection-status" and payload.get("ok"):
-        return "✓ Collection queue is ready"
+        if status == "ready" and (not isinstance(data, Mapping) or data.get("ready") is not False):
+            return "✓ Collection queue is ready"
+        return "○ Collection queue needs attention"
     return f"{'✓' if payload.get('ok') else '✗'} {_label(action)}: {_label(status)}"
 
 
@@ -278,6 +285,10 @@ def _paths_lines(data: Mapping[str, object]) -> list[str]:
 
 def _collection_lines(data: Mapping[str, object]) -> list[str]:
     lines: list[str] = []
+    if data.get("status") is not None:
+        lines.append(f"State: {_label(data['status'])}")
+    if "ready" in data:
+        lines.append(f"Ready: {_value(data['ready'])}")
     tasks = data.get("tasks")
     if isinstance(tasks, Mapping):
         counts = {str(key): value for key, value in tasks.items() if isinstance(value, int)}
@@ -309,35 +320,39 @@ def format_human(payload: Mapping[str, object]) -> str:
             lines.extend(("", *rendered))
         return "\n".join(lines)
 
+    specialized = False
     if payload.get("action") == "health" and isinstance(data, Mapping):
+        specialized = True
         rendered = _health_lines(data)
         if rendered:
             lines.extend(("", *rendered))
-        return "\n".join(lines)
 
     action = payload.get("action")
     if action == "verify" and isinstance(data, Mapping):
+        specialized = True
         rendered = _verify_lines(data)
         if rendered:
             lines.extend(("", *rendered))
-        return "\n".join(lines)
-    if action == "paths" and isinstance(data, Mapping):
+    elif action == "paths" and isinstance(data, Mapping):
+        specialized = True
         rendered = _paths_lines(data)
         if rendered:
             lines.extend(("", *rendered))
-        return "\n".join(lines)
-    if action == "collection-status" and isinstance(data, Mapping):
+    elif action == "collection-status" and isinstance(data, Mapping):
+        specialized = True
         rendered = _collection_lines(data)
         if rendered:
             lines.extend(("", *rendered))
-        return "\n".join(lines)
-    if action == "plugin-list" and isinstance(data, Mapping) and not data.get("plugins"):
+    elif action == "plugin-list" and isinstance(data, Mapping) and not data.get("plugins"):
         return "✓ No plugins are installed"
 
     if isinstance(error, Mapping):
         message = error.get("message")
         if message:
             lines.extend(("", str(message).rstrip(".") + "."))
+        return "\n".join(lines)
+
+    if specialized:
         return "\n".join(lines)
 
     hidden = _TECHNICAL_KEYS if isinstance(data, Mapping) else _ENVELOPE_KEYS

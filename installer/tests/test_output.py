@@ -187,3 +187,62 @@ def test_paths_and_collection_status_are_concise() -> None:
     assert "Queued: 2" in collection
     assert "Running: 1" in collection
     assert "Failed" not in collection
+
+
+def test_health_error_keeps_its_actionable_message() -> None:
+    output = format_human(
+        {
+            "ok": False,
+            "action": "health",
+            "status": "degraded",
+            "data": {"installed": True, "operational": False},
+            "error": {"code": "collection_invalid", "message": "collection database is invalid"},
+        }
+    )
+
+    assert output.startswith("✗ Dispatch needs attention")
+    assert "Core operational: No" in output
+    assert "collection database is invalid." in output
+
+
+def test_verify_does_not_claim_success_when_not_ready() -> None:
+    output = format_human(
+        {
+            "ok": True,
+            "action": "verify",
+            "status": "setup_incomplete",
+            "data": {
+                "ready": False,
+                "package": "dispatch-core",
+                "version": "1.0.0",
+                "setup": {"complete": False, "selected_plugins": []},
+            },
+            "error": None,
+        }
+    )
+
+    assert output.startswith("○ Dispatch verification needs attention")
+    assert "Installation: Needs attention" in output
+    assert "verification passed" not in output
+
+
+def test_collection_status_does_not_claim_readiness_during_reconciliation() -> None:
+    output = format_human(
+        {
+            "ok": True,
+            "action": "collection-status",
+            "status": "reconciliation_required",
+            "data": {
+                "ready": False,
+                "status": "reconciliation_required",
+                "tasks": {"queued": 2},
+                "workers": 0,
+                "overdue_workers": 1,
+            },
+            "error": None,
+        }
+    )
+
+    assert output.startswith("○ Collection queue needs attention")
+    assert "State: Reconciliation Required" in output
+    assert "Ready: No" in output

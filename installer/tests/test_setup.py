@@ -46,6 +46,22 @@ def test_installed_launcher_routes_setup_before_loading_core(monkeypatch) -> Non
     assert observed["human"] is True
 
 
+def test_json_setup_requires_noninteractive_confirmation(monkeypatch, tmp_path: Path, capsys) -> None:
+    layout = _layout(tmp_path)
+    monkeypatch.setattr(
+        setup_runtime,
+        "load_installed_manifest",
+        lambda _layout: SimpleNamespace(builtin_plugins=[]),
+    )
+
+    assert setup_runtime.run_setup(layout, [], human=False) == 1
+
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["action"] == "setup"
+    assert payload["error"]["code"] == "confirmation_required"
+    assert "Available built-in plugins" not in json.dumps(payload)
+
+
 def test_launcher_pairs_approved_plugin_ids_with_their_paths(monkeypatch, tmp_path: Path) -> None:
     layout = _layout(tmp_path)
     core_path = layout.releases / "core-release" / "site-packages"

@@ -675,6 +675,21 @@ def run_setup(layout: InstallLayout, argv: list[str] | None = None, *, human: bo
         return 0
     selected = list(args.plugin)
     if not args.yes:
+        if not human:
+            emit(
+                {
+                    "ok": False,
+                    "action": "setup",
+                    "status": "error",
+                    "data": {},
+                    "error": {
+                        "code": "confirmation_required",
+                        "message": "setup requires --yes or --list in JSON mode",
+                    },
+                },
+                json_output=True,
+            )
+            return 1
         print("Available built-in plugins:")
         for index, plugin in enumerate(catalog, start=1):
             print(f"  {index}. {plugin.id}")
