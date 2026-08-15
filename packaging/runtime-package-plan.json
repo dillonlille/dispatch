@@ -72,7 +72,7 @@
         },
         {
           "path": "dispatch_core/command_interface/__init__.py",
-          "sha256": "71d1bba4b8b2536f98ba4c49bf2cf0f4317a3784efd007d291d79a179a53e1a7",
+          "sha256": "919e372d153a0d8babf662e4a4c07b7de775b3e38f317c769bdd9fa19a93b54b",
           "source": "dispatch-core/command-interface/src/dispatch_core/command_interface/__init__.py"
         },
         {

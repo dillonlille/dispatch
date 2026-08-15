@@ -155,3 +155,47 @@ def test_dispatch_uninstall_routes_to_installer_cli(
         "uninstall",
         "--plan",
     ]
+
+
+def test_dispatch_renders_human_output_by_default_and_keeps_json_option(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    layout = layout_for(tmp_path)
+    monkeypatch.setenv("HOME", str(layout.home))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(layout.runtime.parent))
+    payload = {
+        "ok": False,
+        "action": "uninstall",
+        "status": "error",
+        "data": {},
+        "error": {
+            "code": "confirmation_required",
+            "message": "uninstall requires --yes or --plan",
+        },
+    }
+
+    def installer_main(_arguments: list[str]) -> int:
+        print(json.dumps(payload, sort_keys=True))
+        return 1
+
+    monkeypatch.setattr(cli_module, "main", installer_main)
+
+    assert launcher_module.main(["uninstall"]) == 1
+    human = capsys.readouterr().out
+    assert human.startswith("✗ Confirmation required")
+    assert "dispatch uninstall --plan" in human
+    assert "{" not in human
+
+    assert launcher_module.main(["--json", "uninstall"]) == 1
+    assert json.loads(capsys.readouterr().out) == payload
+
+
+def test_dispatch_without_arguments_shows_simple_help(capsys: pytest.CaptureFixture[str]) -> None:
+    assert launcher_module.main([]) == 0
+
+    output = capsys.readouterr().out
+    assert output.startswith("Dispatch\n\nUsage:\n  dispatch <command> [options]")
+    assert "health           Show Dispatch health" in output
+    assert "uninstall        Safely remove Dispatch" in output
+    assert "Add --json for machine-readable output." in output
+    assert "dispatch-core" not in output

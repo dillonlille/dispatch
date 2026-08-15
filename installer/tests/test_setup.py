@@ -33,15 +33,17 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_installed_launcher_routes_setup_before_loading_core(monkeypatch) -> None:
     observed: dict[str, object] = {}
 
-    def run(layout, arguments):
+    def run(layout, arguments, *, human=False):
         observed["layout"] = layout
         observed["arguments"] = arguments
+        observed["human"] = human
         return 7
 
     monkeypatch.setattr(launcher_runtime, "run_setup", run)
 
     assert launcher_runtime.main(["setup", "--yes"]) == 7
     assert observed["arguments"] == ["--yes"]
+    assert observed["human"] is True
 
 
 def test_launcher_pairs_approved_plugin_ids_with_their_paths(monkeypatch, tmp_path: Path) -> None:
@@ -52,8 +54,9 @@ def test_launcher_pairs_approved_plugin_ids_with_their_paths(monkeypatch, tmp_pa
     plugin_path.mkdir(parents=True)
     observed: dict[str, object] = {}
 
-    def command_main(arguments):
+    def command_main(arguments, *, prog="dispatch-core"):
         observed["arguments"] = arguments
+        observed["prog"] = prog
         observed["ids"] = os.environ["DISPATCH_ACTIVE_PLUGINS"]
         observed["paths"] = os.environ["DISPATCH_PLUGIN_PATHS"]
         return 0
@@ -92,6 +95,7 @@ def test_launcher_pairs_approved_plugin_ids_with_their_paths(monkeypatch, tmp_pa
 
     assert observed == {
         "arguments": ["plugin", "list"],
+        "prog": "dispatch",
         "ids": "handbook",
         "paths": str(plugin_path),
     }

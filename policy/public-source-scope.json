@@ -198,7 +198,7 @@
     "dispatch-core/command-interface/src/dispatch_core/command_interface/__init__.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "71d1bba4b8b2536f98ba4c49bf2cf0f4317a3784efd007d291d79a179a53e1a7"
+      "sha256": "919e372d153a0d8babf662e4a4c07b7de775b3e38f317c769bdd9fa19a93b54b"
     },
     "dispatch-core/command-interface/src/dispatch_core/command_interface/__main__.py": {
       "kind": "file",
@@ -208,7 +208,7 @@
     "dispatch-core/command-interface/tests/test_command_interface.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "a4113ee615fcbc30dfac3592139ff138f28a637ee5f032ead6d18d0ba5d7f336"
+      "sha256": "766c704245c12eaee1d088f995abed977faac7552164f1e4177cdc19dfcc05d5"
     },
     "dispatch-core/conftest.py": {
       "kind": "file",
@@ -463,7 +463,7 @@
     "installer/src/dispatch_installer/launcher.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "2d61465b565d11a92c08f79d64ce8b19e917007cc0caf1efe5b344bbc009ecd3"
+      "sha256": "e449b47708b8fbc3cd8d2fc99a528f019912d57e7a02bb890e0ea19366465ca1"
     },
     "installer/src/dispatch_installer/layout.py": {
       "kind": "file",
@@ -475,6 +475,11 @@
       "origin": "generated_public",
       "sha256": "bfaa830ecfdc2c37bcc2b7bc1e647cb0dcb1075f67ba72279e29096c019a9206"
     },
+    "installer/src/dispatch_installer/output.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "ea3a291424b830964b0a15822ff80d617c3a3dbbe5fc85ab56b7c8510e812343"
+    },
     "installer/src/dispatch_installer/service.py": {
       "kind": "file",
       "origin": "generated_public",
@@ -483,12 +488,12 @@
     "installer/src/dispatch_installer/setup.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "32dcc0830830a4b29cc96c13ff4770b715843f155a7d65e4992df6be900eb224"
+      "sha256": "21cd05f2623794b50044e57afcf3e97e005a47037fb2aa9f9f3f2dd2b631d8e3"
     },
     "installer/src/dispatch_installer/uninstall.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "3e5b7a741252fe54a02df585e465c713772384ee95407223167992e146fd9255"
+      "sha256": "77360a7b818534a9d1d03a5b538b04dfbf6817b117ab360e98e036ce3f11755b"
     },
     "installer/src/dispatch_installer/user_command.py": {
       "kind": "file",
@@ -525,6 +530,11 @@
       "origin": "generated_public",
       "sha256": "fda9bc4a7cf5aa45c8adc818aac0e11d9e4c520976e16b12a5d9a23547f5746b"
     },
+    "installer/tests/test_output.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "849f6e7968f96850c2a98fe21324a3b4bd920285c1346eb046527f8a0d226f46"
+    },
     "installer/tests/test_service.py": {
       "kind": "file",
       "origin": "generated_public",
@@ -533,17 +543,17 @@
     "installer/tests/test_setup.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "6027834e998dc61b53b27d11bb09e0bad497160bd67067188caf0b19bae69008"
+      "sha256": "e041b888449b2e6c8505afbac259ff465f9fd1ad0bba2308ef636e5a61eb2f78"
     },
     "installer/tests/test_uninstall.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "0ff9fa7de0d837ac4138e4bd439d7c0549051bdbd1015a198b5899918b6994ed"
+      "sha256": "f407bba3ecb0e535cef8c7a0de8b080661228f11c24cf42b108463752983b777"
     },
     "installer/tests/test_user_command.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "a9c9c97c1805c45a66bf977aef2c13d1a9b65077b27e34231fc238141524cb7e"
+      "sha256": "703030e2405f7b9a819057ab0888178eab25797ae38fd28e8c9f2b4f3ea08d80"
     },
     "packaging/browser-runtime-plan.json": {
       "kind": "file",
@@ -558,17 +568,17 @@
     "packaging/installation-release-manifest.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "33f9c5898667ad8b7b962169a6d0109736fc5aee2f81056e1507525a389d0bff"
+      "sha256": "2aa55ed00c4ae51c7e13d1f94182541a56505085dfce0f3227fd4c475c686858"
     },
     "packaging/installer-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "943a4bd42f1c5300aa61bb892fa845a31c58bb478855c2dfa47f52835dfac0d9"
+      "sha256": "460064910c3064a389670b045412c01ef589735d40c88c3f500c2e412d8480e8"
     },
     "packaging/runtime-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "22135c7268cf62a433decbf4f24645d231bc23dfe9279c93e0126be9909ba6e1"
+      "sha256": "c2bb24c8be2df23860bec68929eb7af9e13b83bd15dee1766eaa0e1a2b279277"
     },
     "plugins/handbook/LICENSE": {
       "kind": "file",

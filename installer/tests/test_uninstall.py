@@ -229,6 +229,41 @@ def test_keep_data_uninstall_is_idempotent(tmp_path: Path) -> None:
     assert not layout.runtime.exists()
     assert not layout.active_release_selector.exists()
     assert (layout.state / "install" / "uninstall-receipt.json").is_file()
+    assert not any(
+        str(path).startswith("/proc/self/fd/")
+        for key in ("remove", "preserve")
+        for path in cast(list[str], repeated[key])
+    )
+
+
+def test_stale_uninstall_receipt_does_not_skip_reinstalled_assets(tmp_path: Path) -> None:
+    layout, _ = installed_layout(tmp_path)
+    (layout.bin / "dispatch").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (layout.bin / "dispatch").chmod(0o700)
+    install_user_command(layout)
+    assert uninstall(layout)["status"] == "uninstalled"
+    assert (layout.state / "install" / "uninstall-receipt.json").is_file()
+
+    layout.prepare()
+    wheel = tmp_path / "dispatch_core-1.0.0-py3-none-any.whl"
+    staged = stage_core_wheel(
+        layout,
+        wheel,
+        expected_sha256=sha256_file(wheel),
+        expected_version="1.0.0",
+    )
+    release = layout.releases / str(staged["release_id"])
+    activate_core_release(layout, release)
+    (layout.bin / "dispatch").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (layout.bin / "dispatch").chmod(0o700)
+    install_user_command(layout)
+
+    assert plan_uninstall(layout)["status"] == "planned"
+    result = uninstall(layout)
+
+    assert result["status"] == "uninstalled"
+    assert not release.exists()
+    assert not command_path(layout).exists()
 
 
 def test_purge_removes_entire_owned_root(tmp_path: Path) -> None:

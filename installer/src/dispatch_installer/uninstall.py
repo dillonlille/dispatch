@@ -1052,9 +1052,17 @@ def _base_plan(
         for path in sorted(layout.dispatch_home.iterdir())
         if path.name not in expected_names
     )
+    installed_assets_remain = bool(
+        verified_releases
+        or quarantined_releases
+        or layout.active_release_selector.exists()
+        or command["status"] in {"ready", "incomplete"}
+        or (layout.state / "install" / "service.json").exists()
+        or any(path.exists() for path in targets)
+    )
     if blockers:
         plan["status"] = "blocked"
-    elif already_uninstalled and not purge:
+    elif already_uninstalled and not purge and not installed_assets_remain:
         plan["status"] = "planned" if transaction is not None else "already-uninstalled"
     plan["remove"] = sorted(set(remove))
     plan["preserve"] = sorted(set(preserve))
@@ -1070,6 +1078,29 @@ def plan_uninstall(layout: InstallLayout, *, purge: bool = False) -> dict[str, o
         if journal is not None and not purge:
             raise InstallerError("uninstall_resume_mode", "an interrupted purge must be resumed with --purge")
         return _base_plan(layout, purge=purge, resume_journal=journal)
+
+
+def _public_plan_paths(
+    plan: dict[str, object],
+    internal_layout: InstallLayout,
+    public_layout: InstallLayout,
+) -> dict[str, object]:
+    internal_root = str(internal_layout.dispatch_home)
+    public_root = str(public_layout.dispatch_home)
+    if internal_root == public_root:
+        return plan
+    result = dict(plan)
+    for key in ("remove", "preserve"):
+        values = plan.get(key)
+        if isinstance(values, list):
+            result[key] = [
+                public_root + value.removeprefix(internal_root)
+                if isinstance(value, str)
+                and (value == internal_root or value.startswith(internal_root + os.sep))
+                else value
+                for value in values
+            ]
+    return result
 
 
 def _unlink_known_install_files(layout: InstallLayout, *, keep_receipts: bool) -> None:
@@ -1281,7 +1312,7 @@ def uninstall(layout: InstallLayout, *, purge: bool = False) -> dict[str, object
                     if preliminary["blockers"]:
                         raise InstallerError("uninstall_incomplete", "; ".join(str(item) for item in preliminary["blockers"])[:512])
                     preliminary["status"] = "purged-with-preserved-files"
-                return preliminary
+                return _public_plan_paths(preliminary, pinned_layout, layout)
             with installation_transaction_lock(
                 pinned_layout,
                 allow_state_creation=journal is not None,

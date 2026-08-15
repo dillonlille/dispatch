@@ -19,6 +19,7 @@ from .core_release import _safe_members, _verify_record, sha256_file
 from .download import download_release_artifact
 from .layout import InstallLayout, InstallerError, atomic_json
 from .manifest import BuiltinPlugin, InstallationManifest, load_manifest
+from .output import emit
 
 
 _MAX_PLUGIN_WHEEL_FILES = 512
@@ -660,7 +661,7 @@ def configure_plugins(layout: InstallLayout, selected: Iterable[str]) -> dict[st
     return {"status": "complete", "selected_plugins": selected_ids, "plugins": installed}
 
 
-def run_setup(layout: InstallLayout, argv: list[str]) -> int:
+def run_setup(layout: InstallLayout, argv: list[str] | None = None, *, human: bool = False) -> int:
     parser = argparse.ArgumentParser(prog="dispatch setup")
     parser.add_argument("--plugin", action="append", default=[], help="built-in plugin ID; may be repeated")
     parser.add_argument("--yes", action="store_true", help="accept the explicit plugin selection")
@@ -669,7 +670,8 @@ def run_setup(layout: InstallLayout, argv: list[str]) -> int:
     manifest = load_installed_manifest(layout)
     catalog = list(manifest.builtin_plugins)
     if args.list:
-        print(json.dumps({"ok": True, "action": "setup", "status": "available", "plugins": [plugin.id for plugin in catalog]}, sort_keys=True))
+        payload = {"ok": True, "action": "setup", "status": "available", "plugins": [plugin.id for plugin in catalog]}
+        emit(payload, json_output=not human)
         return 0
     selected = list(args.plugin)
     if not args.yes:
@@ -686,5 +688,5 @@ def run_setup(layout: InstallLayout, argv: list[str]) -> int:
                 raise InstallerError("setup_selection_invalid", "plugin selection is invalid") from exc
             selected = [catalog[index - 1].id for index in indexes]
     result = configure_plugins(layout, selected)
-    print(json.dumps({"ok": True, "action": "setup", **result}, sort_keys=True))
+    emit({"ok": True, "action": "setup", **result}, json_output=not human)
     return 0
