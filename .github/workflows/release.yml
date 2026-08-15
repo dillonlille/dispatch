@@ -91,4 +91,4 @@ jobs:
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "Dispatch $GITHUB_REF_NAME" \
-            --notes "First Core-only Dispatch release. Install from https://dispatch.dillonlille.com/install.sh"
+            --notes "Core-only Dispatch release. Install from https://dispatch.dillonlille.com/install.sh"
