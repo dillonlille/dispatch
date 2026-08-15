@@ -563,7 +563,7 @@
     "packaging/installer-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "5f4aeb44ee4e5e618e8f79e36a8daaece99bec089365fa30be99954d18e6504c"
+      "sha256": "6cc2d9c03f6ac3068c87e44f198e516cf0af97d4880937fd80f8acf854c1885c"
     },
     "packaging/runtime-package-plan.json": {
       "kind": "file",
@@ -748,7 +748,7 @@
     "tests/test_installer_package_plan.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "acc9ef4ec50f6c6077f457595134e9e19ef8110d48731acf10d857da900a1823"
+      "sha256": "6ba13d4fb84276914c109b9db659f01837c2697dfbbabc8185d1f6ae7b76beb1"
     },
     "tests/test_runtime_package_plan.py": {
       "kind": "file",
