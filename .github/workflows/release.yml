@@ -53,7 +53,7 @@ jobs:
           set -euo pipefail
           test "$GITHUB_REF_TYPE" = tag
           product_version="$(python -c 'import json; print(json.load(open("packaging/installation-release-manifest.json"))["product"]["version"])')"
-          test "$GITHUB_REF_NAME" = "v$product_version"
+          test "$GITHUB_REF_NAME" = "$product_version"
           export SOURCE_DATE_EPOCH="$(git log -1 --format=%ct)"
           python - <<'PY'
           import os
@@ -89,5 +89,5 @@ jobs:
           gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release/* \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
-            --title "Dispatch ${GITHUB_REF_NAME#v}" \
+            --title "Dispatch $GITHUB_REF_NAME" \
             --notes "First Core-only Dispatch release. Install from https://dispatch.dillonlille.com/install.sh"
