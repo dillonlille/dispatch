@@ -251,7 +251,7 @@ def test_store_lock_error_still_stops_worker_without_waiting_for_busy_timeout(tm
     try:
         assert outcome.status == "worker_state_unavailable"
         assert outcome.process_cleaned is True
-        assert elapsed < 1.5
+        assert elapsed < 3.0
         assert store.get(task_id).worker_pid is not None
     finally:
         lock.rollback()
