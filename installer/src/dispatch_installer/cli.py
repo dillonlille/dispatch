@@ -15,7 +15,11 @@ from .doctor import inspect_installation
 from .layout import InstallLayout, InstallerError, atomic_json, installation_lock
 from .manifest import load_manifest
 from .service import install_user_service
-from .setup import persist_release_manifest
+from .setup import (
+    complete_core_only_setup_migration,
+    persist_release_manifest,
+    prepare_core_only_setup_migration,
+)
 from .uninstall import plan_uninstall, uninstall as apply_uninstall
 from .user_command import install_user_command, validate_user_command_install
 
@@ -163,6 +167,7 @@ def main(argv: list[str] | None = None) -> int:
                         "a different incomplete installation must be repaired before another release is installed",
                     )
             validate_user_command_install(layout)
+            setup_migration = prepare_core_only_setup_migration(layout, manifest)
             _record_install_phase(
                 layout,
                 manifest_sha256=args.manifest_sha256,
@@ -190,6 +195,8 @@ def main(argv: list[str] | None = None) -> int:
                 expected_sha256=args.manifest_sha256,
                 product_version=manifest.product_version,
             )
+            if setup_migration:
+                complete_core_only_setup_migration(layout, manifest)
             _record_install_phase(
                 layout,
                 manifest_sha256=args.manifest_sha256,

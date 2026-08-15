@@ -145,7 +145,7 @@ def test_core_release_staging_activation_and_reuse(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(
         doctor_module,
         "load_installed_manifest",
-        lambda _layout: SimpleNamespace(core_version="1.0.0", product_version="0.0.2", browser_ready=False),
+        lambda _layout: SimpleNamespace(core_version="1.0.0", product_version="0.0.3", browser_ready=False),
     )
     monkeypatch.setattr(
         doctor_module,

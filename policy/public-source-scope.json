@@ -38,7 +38,7 @@
     "README.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "6562bc6d06e88efbcac4b904adf7307b6fb19276cd86a64e923c65b3730c830c"
+      "sha256": "dfc00a1f42b2ea1d0e3a20145bd99deb24f3e1712847c05af4d65fb88b3ef587"
     },
     "SECURITY.md": {
       "kind": "file",
@@ -333,7 +333,7 @@
     "docs/online-installation.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "42abeb1ce2055f47457f58824ab799cbc892ca7075ac0d4c7585c1dfcf871522"
+      "sha256": "9ffc52b5c0d6b67f8b4a6027a7be80608d1c04e752d4e3b4f1295bc6ac14e6a3"
     },
     "docs/path-configuration.md": {
       "kind": "file",
@@ -343,7 +343,7 @@
     "docs/phase-5-installation-contract.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "3b331b3fa7036fc53919606993b7145353f7b3f348d22990b23e321dade97ffb"
+      "sha256": "f8609a83eebf70757f94afa78a8de0d9c02d60f1cca29a88a0f4d85431d76d7d"
     },
     "docs/private-github-setup.md": {
       "kind": "file",
@@ -418,12 +418,12 @@
     "installer/pyproject.toml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "a16cc1e0ef73f5911260a97cf312014188ba60d236c4914bd729bf4c01dc4e89"
+      "sha256": "b51f91a55eb08e6f1c562de5ec1e3af72e43a5b7b19975e85dd25addd9c3e7dc"
     },
     "installer/src/dispatch_installer/__init__.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "4008426970e0799fbbb13a697ad7c1f9ecbc086283b601a9ce0631ecd7bcad34"
+      "sha256": "5eaad766e5113a88cd1b3ca3f288f9154c1e7132ddb4fd70bef7d3a91aadce9c"
     },
     "installer/src/dispatch_installer/__main__.py": {
       "kind": "file",
@@ -443,7 +443,7 @@
     "installer/src/dispatch_installer/cli.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "bbd554ac69c459b4326fc901e598bb5c5626879911a14002ec7ca96bedf37530"
+      "sha256": "b81dce06d683f23331a9424078f3dd6f02e46d46a67b2e3e1526ebcd34e227a9"
     },
     "installer/src/dispatch_installer/core_release.py": {
       "kind": "file",
@@ -483,12 +483,12 @@
     "installer/src/dispatch_installer/setup.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "82869509782da51f589de963a56ddcf412bc4383ab27f5b4ab7ff200b68eabca"
+      "sha256": "32dcc0830830a4b29cc96c13ff4770b715843f155a7d65e4992df6be900eb224"
     },
     "installer/src/dispatch_installer/uninstall.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "0eea8ae6bd5f51517350797d3c5c7a499ca5e2afc047a762d42990c34165b4e8"
+      "sha256": "3e5b7a741252fe54a02df585e465c713772384ee95407223167992e146fd9255"
     },
     "installer/src/dispatch_installer/user_command.py": {
       "kind": "file",
@@ -503,12 +503,12 @@
     "installer/tests/test_browser_runtime.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "87b43221383bdc128427c2e1b3fa9fd69d51d0114292d9d6d5371f58d20ba10a"
+      "sha256": "9209f1eaa5f4cd5b005fde3ad263108fc5401690f822db386db3d2475ddfcc2b"
     },
     "installer/tests/test_core_release.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "3618eb5d52336f8f3c60dd0bf277735979f752fc7a3d46d9b4432b095f9377e4"
+      "sha256": "02d8959ee8346200655dbc4e57a0e2d0965626debf14d24c931cadbf191f0ad7"
     },
     "installer/tests/test_download.py": {
       "kind": "file",
@@ -523,7 +523,7 @@
     "installer/tests/test_manifest_cli.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "9150212dc76697bf139995b9ba93492abb96b2bddac192a998a2de60dd915473"
+      "sha256": "d6c8961bacddc97e208a6d7d218c1474dc5d7d88ab44c141e3394a1a25370bbb"
     },
     "installer/tests/test_service.py": {
       "kind": "file",
@@ -533,7 +533,7 @@
     "installer/tests/test_setup.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "cd4d5064c32b7956cfebe50375251bb72d98c7d78a6cd066c4d21958cfe3e692"
+      "sha256": "8859ee7cdd7dc567074fe95acbc663d09a10342269d46a244f08302d738205ab"
     },
     "installer/tests/test_uninstall.py": {
       "kind": "file",
@@ -558,12 +558,12 @@
     "packaging/installation-release-manifest.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "b7dd7432c01bb8bf5107d44f3be5ad68924ac445a6dcbd1dc0ebedcf4e4bd710"
+      "sha256": "19c5ae093ac473d52b489c8621ddf39f6ae45c2cf510229400d8ecec4872b0d6"
     },
     "packaging/installer-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "f1419b3ef3c49b6903b99d16a0c5ade97408f56c0ae163dc913407a6292657eb"
+      "sha256": "5f4aeb44ee4e5e618e8f79e36a8daaece99bec089365fa30be99954d18e6504c"
     },
     "packaging/runtime-package-plan.json": {
       "kind": "file",
@@ -733,7 +733,7 @@
     "tests/test_bootstrap_template.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "803bd3c8854d09557e8508310e12d821a5ff19764c76b4e5fcc71be643cb4210"
+      "sha256": "ceb1e33ee2f5028f26c9e141f6f72079635605b85950cf0594947a2e85849a16"
     },
     "tests/test_core_wheel_policy.py": {
       "kind": "file",
@@ -743,7 +743,7 @@
     "tests/test_installation_manifest.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "6b192e7005fee40e9f326e168668817f7f30f8bde10b1ba7a743502cf8d2fb37"
+      "sha256": "df282e2de2be053e97699840ab78a2e8165dc440a911912f2891ae3e5c823c02"
     },
     "tests/test_installer_package_plan.py": {
       "kind": "file",

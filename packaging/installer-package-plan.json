@@ -5,7 +5,7 @@
     "name": "dispatch-installer",
     "pyproject": "installer/pyproject.toml",
     "python_requires": ">=3.11,<3.14",
-    "version": "0.1.1"
+    "version": "0.1.2"
   },
   "files": [
     {
@@ -15,12 +15,12 @@
     },
     {
       "path": "installer/pyproject.toml",
-      "sha256": "a16cc1e0ef73f5911260a97cf312014188ba60d236c4914bd729bf4c01dc4e89",
+      "sha256": "b51f91a55eb08e6f1c562de5ec1e3af72e43a5b7b19975e85dd25addd9c3e7dc",
       "size": 607
     },
     {
       "path": "installer/src/dispatch_installer/__init__.py",
-      "sha256": "4008426970e0799fbbb13a697ad7c1f9ecbc086283b601a9ce0631ecd7bcad34",
+      "sha256": "5eaad766e5113a88cd1b3ca3f288f9154c1e7132ddb4fd70bef7d3a91aadce9c",
       "size": 961
     },
     {
@@ -40,8 +40,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/cli.py",
-      "sha256": "bbd554ac69c459b4326fc901e598bb5c5626879911a14002ec7ca96bedf37530",
-      "size": 11954
+      "sha256": "b81dce06d683f23331a9424078f3dd6f02e46d46a67b2e3e1526ebcd34e227a9",
+      "size": 12225
     },
     {
       "path": "installer/src/dispatch_installer/core_release.py",
@@ -80,13 +80,13 @@
     },
     {
       "path": "installer/src/dispatch_installer/setup.py",
-      "sha256": "82869509782da51f589de963a56ddcf412bc4383ab27f5b4ab7ff200b68eabca",
-      "size": 25546
+      "sha256": "32dcc0830830a4b29cc96c13ff4770b715843f155a7d65e4992df6be900eb224",
+      "size": 31319
     },
     {
       "path": "installer/src/dispatch_installer/uninstall.py",
-      "sha256": "0eea8ae6bd5f51517350797d3c5c7a499ca5e2afc047a762d42990c34165b4e8",
-      "size": 56183
+      "sha256": "3e5b7a741252fe54a02df585e465c713772384ee95407223167992e146fd9255",
+      "size": 56211
     },
     {
       "path": "installer/src/dispatch_installer/user_command.py",

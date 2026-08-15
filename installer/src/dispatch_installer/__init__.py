@@ -13,7 +13,7 @@ from .download import download_core_release_artifact
 from .layout import InstallLayout, InstallerError
 from .uninstall import plan_uninstall, uninstall as apply_uninstall
 
-__version__ = "0.1.1"
+__version__ = "0.1.2"
 
 __all__ = [
     "InstallLayout",

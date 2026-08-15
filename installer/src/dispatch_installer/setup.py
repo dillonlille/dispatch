@@ -109,6 +109,140 @@ def load_installed_manifest(layout: InstallLayout) -> InstallationManifest:
     return manifest
 
 
+_SETUP_RECEIPT_FIELDS = {
+    "schema_version",
+    "status",
+    "product_version",
+    "selected_plugins",
+    "plugins",
+    "contains_secrets",
+}
+
+
+def _safe_json_receipt(path: Path, *, maximum: int, code: str) -> tuple[dict[str, object], bytes]:
+    try:
+        details = path.lstat()
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.geteuid()
+            or details.st_nlink != 1
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_size > maximum
+        ):
+            raise InstallerError(code, f"receipt is unsafe: {path}")
+        content = path.read_bytes()
+        payload = json.loads(content)
+    except InstallerError:
+        raise
+    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+        raise InstallerError(code, f"receipt is invalid: {path}") from exc
+    if not isinstance(payload, dict):
+        raise InstallerError(code, f"receipt is invalid: {path}")
+    return payload, content
+
+
+def prepare_core_only_setup_migration(layout: InstallLayout, target: InstallationManifest) -> bool:
+    """Durably authorize only an empty Core-only setup receipt for a new product manifest."""
+    setup_path = layout.state / "install" / "setup.json"
+    migration_path = layout.state / "install" / "setup-migration.json"
+    if migration_path.exists():
+        migration, _ = _safe_json_receipt(
+            migration_path, maximum=16 * 1024, code="setup_migration_invalid"
+        )
+        if (
+            set(migration)
+            != {
+                "schema_version",
+                "status",
+                "from_product_version",
+                "to_product_version",
+                "setup_sha256",
+                "migrated_setup",
+                "migrated_setup_sha256",
+                "contains_secrets",
+            }
+            or migration.get("schema_version") != 1
+            or migration.get("status") != "prepared"
+            or migration.get("to_product_version") != target.product_version
+            or migration.get("contains_secrets") is not False
+            or not isinstance(migration.get("migrated_setup"), dict)
+        ):
+            raise InstallerError("setup_migration_invalid", "setup migration receipt is invalid")
+        setup, content = _safe_json_receipt(setup_path, maximum=64 * 1024, code="setup_migration_invalid")
+        observed = hashlib.sha256(content).hexdigest()
+        if observed not in {migration.get("setup_sha256"), migration.get("migrated_setup_sha256")}:
+            raise InstallerError("setup_migration_invalid", "setup receipt differs from migration authority")
+        return True
+    if not setup_path.exists():
+        return False
+    previous = load_installed_manifest(layout)
+    setup, content = _safe_json_receipt(setup_path, maximum=64 * 1024, code="setup_migration_invalid")
+    if setup.get("product_version") == target.product_version:
+        return False
+    if (
+        set(setup) != _SETUP_RECEIPT_FIELDS
+        or setup.get("schema_version") != 1
+        or setup.get("status") != "complete"
+        or setup.get("contains_secrets") is not False
+        or setup.get("product_version") != previous.product_version
+        or setup.get("selected_plugins") != []
+        or setup.get("plugins") != []
+        or previous.builtin_plugins
+        or target.builtin_plugins
+    ):
+        raise InstallerError(
+            "setup_migration_unsupported",
+            "only an empty verified Core-only setup receipt can migrate between product manifests",
+        )
+    migrated = dict(setup)
+    migrated["product_version"] = target.product_version
+    migrated_content = (json.dumps(migrated, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
+    atomic_json(
+        migration_path,
+        {
+            "schema_version": 1,
+            "status": "prepared",
+            "from_product_version": previous.product_version,
+            "to_product_version": target.product_version,
+            "setup_sha256": hashlib.sha256(content).hexdigest(),
+            "migrated_setup": migrated,
+            "migrated_setup_sha256": hashlib.sha256(migrated_content).hexdigest(),
+            "contains_secrets": False,
+        },
+        mode=0o600,
+    )
+    return True
+
+
+def complete_core_only_setup_migration(layout: InstallLayout, target: InstallationManifest) -> None:
+    migration_path = layout.state / "install" / "setup-migration.json"
+    if not migration_path.exists():
+        return
+    migration, _ = _safe_json_receipt(migration_path, maximum=16 * 1024, code="setup_migration_invalid")
+    migrated_setup = migration.get("migrated_setup")
+    if (
+        migration.get("schema_version") != 1
+        or migration.get("status") != "prepared"
+        or migration.get("to_product_version") != target.product_version
+        or migration.get("contains_secrets") is not False
+        or not isinstance(migrated_setup, dict)
+    ):
+        raise InstallerError("setup_migration_invalid", "setup migration receipt is invalid")
+    setup_path = layout.state / "install" / "setup.json"
+    _, content = _safe_json_receipt(setup_path, maximum=64 * 1024, code="setup_migration_invalid")
+    observed = hashlib.sha256(content).hexdigest()
+    if observed == migration.get("setup_sha256"):
+        atomic_json(setup_path, migrated_setup, mode=0o600)
+        _, migrated_content = _safe_json_receipt(
+            setup_path, maximum=64 * 1024, code="setup_migration_invalid"
+        )
+        observed = hashlib.sha256(migrated_content).hexdigest()
+    if observed != migration.get("migrated_setup_sha256"):
+        raise InstallerError("setup_migration_invalid", "migrated setup receipt differs from authority")
+    migration_path.unlink()
+    _fsync_directory(migration_path.parent)
+
+
 def active_plugins(layout: InstallLayout) -> list[tuple[str, Path]]:
     setup_path = layout.state / "install" / "setup.json"
     if not setup_path.exists():

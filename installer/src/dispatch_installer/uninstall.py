@@ -46,6 +46,7 @@ _KNOWN_INSTALL_FILES = {
     "release.json",
     "service.json",
     "setup.json",
+    "setup-migration.json",
     "uninstall-receipt.json",
     "uninstall-transaction.json",
 }
