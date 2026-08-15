@@ -708,12 +708,12 @@
     "scripts/finalize-installation-release": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "880baf0ec0cd950799c64dbbb6984ddb9bd59fb3af8bbd22ab641cbc746b4252"
+      "sha256": "ef3b58e4fae12d539c71e72a7e34b9d94efac3f0ff0c3fbffed0d29709b8dada"
     },
     "scripts/prepare-release": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "377b6f1d1cee640141d2bea904596c6a27972409458dba72a7f1d50aad1e561b"
+      "sha256": "09a24701a704fc936322b0e8b3b08fe46d57c906dd3a6ab0af4f99faea30bc46"
     },
     "scripts/release_version.py": {
       "kind": "file",
@@ -748,7 +748,7 @@
     "scripts/verify-release-readiness": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "21d9b04eca78fa3389e90fd390c701b0e41812061f12447687a7ec9b27dcf14f"
+      "sha256": "2e2428e7120b8d94863bf6a218c83a777b5475a82d47c9ac55116a4692c7e93e"
     },
     "scripts/verify-source-export": {
       "kind": "file",
