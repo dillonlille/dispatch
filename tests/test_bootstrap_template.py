@@ -37,8 +37,8 @@ def test_bootstrap_template_is_fail_closed_and_shell_valid(tmp_path: Path) -> No
 
 def test_public_bootstrap_is_the_digest_pinned_core_release() -> None:
     content = PUBLIC.read_text(encoding="utf-8")
-    assert "PRODUCT_VERSION='0.0.1'" in content
-    assert "MANIFEST_SHA256='aacd0fddf9cf7af685677050600b72e6ca21819b7c1599b2070b1587a503c8c1'" in content
+    assert "PRODUCT_VERSION='0.0.7'" in content
+    assert "MANIFEST_SHA256='69e3c869dc496f81b64e0746131983bf24bf902b0ca7bdcd3a2f05b2855aa302'" in content
     assert "installation is not available yet" not in content
 
 

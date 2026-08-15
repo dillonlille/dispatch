@@ -1,12 +1,12 @@
 #!/bin/sh
 set -eu
 
-PRODUCT_VERSION='0.0.1'
-MANIFEST_URL='https://dispatch.dillonlille.com/releases/0.0.1/installation-release-manifest.json'
-MANIFEST_SHA256='aacd0fddf9cf7af685677050600b72e6ca21819b7c1599b2070b1587a503c8c1'
-INSTALLER_URL='https://dispatch.dillonlille.com/releases/0.0.1/dispatch_installer-0.1.0-py3-none-any.whl'
-INSTALLER_SIZE='60684'
-INSTALLER_SHA256='463b4cdf87a17dea1fc63dc9a5020a1d8d69ba04db662c808ec554744889c0cd'
+PRODUCT_VERSION='0.0.7'
+MANIFEST_URL='https://dispatch.dillonlille.com/releases/0.0.7/installation-release-manifest.json'
+MANIFEST_SHA256='69e3c869dc496f81b64e0746131983bf24bf902b0ca7bdcd3a2f05b2855aa302'
+INSTALLER_URL='https://dispatch.dillonlille.com/releases/0.0.7/dispatch_installer-0.1.5-py3-none-any.whl'
+INSTALLER_SIZE='65043'
+INSTALLER_SHA256='2db9873d46ff94965a55099a39a9b97d33a0544113ecf03c7df60c7b38522b7c'
 DISPATCH_HOME="${DISPATCH_HOME:-$HOME/.dispatch}"
 
 fail() {
