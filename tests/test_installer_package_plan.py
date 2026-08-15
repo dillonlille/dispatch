@@ -20,6 +20,8 @@ def test_installer_package_plan_matches_source_and_metadata() -> None:
     assert plan["distribution"]["version"] == project["version"]
     assert plan["distribution"]["python_requires"] == project["requires-python"]
     assert plan["distribution"]["dependencies"] == project["dependencies"]
+    assert plan["distribution"]["license"] == project["license"] == "Apache-2.0"
+    assert project["license-files"] == ["LICENSE"]
     assert pyproject["tool"]["setuptools"]["packages"] == ["dispatch_installer"]
     assert pyproject["tool"]["setuptools"]["package-dir"] == {
         "dispatch_installer": "src/dispatch_installer"
@@ -33,7 +35,7 @@ def test_installer_package_plan_matches_source_and_metadata() -> None:
         assert path.stat().st_size == entry["size"]
         assert hashlib.sha256(path.read_bytes()).hexdigest() == entry["sha256"]
 
-    actual = {"installer/pyproject.toml"} | {
+    actual = {"installer/LICENSE", "installer/pyproject.toml"} | {
         path.relative_to(ROOT).as_posix()
         for path in (ROOT / "installer" / "src").rglob("*.py")
     }

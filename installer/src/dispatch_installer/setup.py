@@ -20,8 +20,9 @@ from .layout import InstallLayout, InstallerError, atomic_json
 from .manifest import BuiltinPlugin, InstallationManifest, load_manifest
 
 
-_MAX_WHEEL_FILES = 512
-_MAX_WHEEL_MEMBER = 64 * 1024 * 1024
+_MAX_PLUGIN_WHEEL_FILES = 512
+_MAX_PLUGIN_WHEEL_MEMBER_BYTES = 64 * 1024 * 1024
+_APACHE_2_LICENSE_SHA256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 
 
 def _fsync_directory(path: Path) -> None:
@@ -200,10 +201,17 @@ def _plugin_wheel_identity(wheel: Path, plugin: BuiltinPlugin, core_version: str
         record_names = [name for name in members if name.endswith(".dist-info/RECORD")]
         wheel_names = [name for name in members if name.endswith(".dist-info/WHEEL")]
         top_level_names = [name for name in members if name.endswith(".dist-info/top_level.txt")]
-        if not all(len(names) == 1 for names in (metadata_names, record_names, wheel_names, top_level_names)):
+        license_names = [name for name in members if name.endswith(".dist-info/licenses/LICENSE")]
+        if not all(
+            len(names) == 1
+            for names in (metadata_names, record_names, wheel_names, top_level_names, license_names)
+        ):
             raise InstallerError("plugin_wheel_metadata", "built-in plugin wheel metadata set is invalid")
         metadata_root = metadata_names[0].removesuffix("METADATA")
-        if any(not name.startswith(metadata_root) for name in (record_names[0], wheel_names[0], top_level_names[0])):
+        if any(
+            not name.startswith(metadata_root)
+            for name in (record_names[0], wheel_names[0], top_level_names[0], license_names[0])
+        ):
             raise InstallerError("plugin_wheel_metadata", "built-in plugin metadata roots differ")
         metadata = BytesParser().parsebytes(archive.read(members[metadata_names[0]]))
         name = metadata.get("Name", "").lower().replace("_", "-")
@@ -211,6 +219,10 @@ def _plugin_wheel_identity(wheel: Path, plugin: BuiltinPlugin, core_version: str
         expected_root = f"{plugin.package.replace('-', '_')}-{plugin.version}.dist-info/"
         if name != plugin.package or version != plugin.version or metadata_root != expected_root:
             raise InstallerError("plugin_wheel_identity", "built-in plugin wheel identity differs from release authority")
+        if metadata.get("License-Expression") != "Apache-2.0" or hashlib.sha256(
+            archive.read(members[license_names[0]])
+        ).hexdigest() != _APACHE_2_LICENSE_SHA256:
+            raise InstallerError("plugin_wheel_license", "built-in plugin wheel license differs from Apache-2.0 policy")
         if metadata.get("Requires-Python") != "<3.14,>=3.11":
             raise InstallerError("plugin_wheel_python", "built-in plugin Python requirement differs from policy")
         if (
@@ -274,7 +286,11 @@ def _plugin_tree(site_packages: Path) -> list[dict[str, object]]:
             size = path.stat().st_size
             count += 1
             total_size += size
-            if count > _MAX_WHEEL_FILES or size > _MAX_WHEEL_MEMBER or total_size > 128 * 1024 * 1024:
+            if (
+                count > _MAX_PLUGIN_WHEEL_FILES
+                or size > _MAX_PLUGIN_WHEEL_MEMBER_BYTES
+                or total_size > 128 * 1024 * 1024
+            ):
                 raise InstallerError("plugin_release_bounds", "built-in plugin release exceeds verification bounds")
             entries.append(
                 {

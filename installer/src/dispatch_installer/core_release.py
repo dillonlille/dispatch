@@ -19,6 +19,7 @@ from pathlib import Path, PurePosixPath
 from .layout import InstallLayout, InstallerError, atomic_json, installation_lock
 
 _RELEASE_RE = re.compile(r"^dispatch-core-[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{16}$")
+_APACHE_2_LICENSE_SHA256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 
 
 def sha256_file(path: Path) -> str:
@@ -141,11 +142,13 @@ def _wheel_identity(
     if metadata_root != expected_root:
         raise InstallerError("wheel_metadata_root", "wheel metadata root does not match package identity")
     wheel_name = f"{metadata_root}WHEEL"
+    license_name = f"{metadata_root}licenses/LICENSE"
     expected_metadata = {
         f"{metadata_root}METADATA",
         f"{metadata_root}WHEEL",
         f"{metadata_root}entry_points.txt",
         f"{metadata_root}top_level.txt",
+        license_name,
         f"{metadata_root}RECORD",
     }
     package_policy = dict(expected_package_files)
@@ -165,6 +168,10 @@ def _wheel_identity(
     for path, digest in package_policy.items():
         if hashlib.sha256(archive.read(members[path])).hexdigest() != digest:
             raise InstallerError("wheel_package_digest", "Core wheel package bytes differ from approved policy")
+    if metadata.get("License-Expression") != "Apache-2.0" or hashlib.sha256(
+        archive.read(members[license_name])
+    ).hexdigest() != _APACHE_2_LICENSE_SHA256:
+        raise InstallerError("wheel_license", "Core wheel license differs from Apache-2.0 policy")
     if metadata.get("Requires-Python") != "<3.14,>=3.11":
         raise InstallerError("wheel_python_requirement", "wheel Python requirement differs from policy")
     dependency_policy = set(expected_requires_dist)

@@ -1,8 +1,8 @@
 # Dispatch
 
-Dispatch is being rebuilt as a clean-installable, per-user Linux product. This directory is a **sanitized private product-source repository candidate**, not a published release. It contains Dispatch Core, the installer, and independently packaged Dispatch-owned built-in plugin source. External plugins live in separate repositories. The fail-closed Phase 5 installer foundation is not yet a complete production installer.
+Dispatch is being rebuilt as a clean-installable, per-user Linux product. This is the public product-source repository, not yet a published release. It contains Dispatch Core, the installer, and independently packaged Dispatch-owned built-in plugin source. External plugins live in separate repositories. The fail-closed installer foundation is not yet a complete production installer.
 
-The repository is prepared for private GitHub development and GitHub-hosted source verification. Product installation, browser, and authorized-account acceptance remain reserved for a separate clean test system.
+The repository uses GitHub-hosted source verification. Product installation, browser, and authorized-account acceptance remain reserved for a separate clean test system.
 
 ## Repository structure
 
@@ -58,7 +58,7 @@ The source candidate contains canonical source and declared synthetic test mater
 
 See [`docs/public-source-boundary.md`](docs/public-source-boundary.md) and [`docs/path-configuration.md`](docs/path-configuration.md).
 The current installer boundary is defined in [`docs/phase-5-installation-contract.md`](docs/phase-5-installation-contract.md).
-Private repository controls are defined in [`docs/private-github-setup.md`](docs/private-github-setup.md).
+Repository controls are defined in [`docs/private-github-setup.md`](docs/private-github-setup.md).
 The user-scope uninstall boundary is defined in [`docs/uninstallation.md`](docs/uninstallation.md).
 
 ## Configuration and integration prerequisites
@@ -85,4 +85,10 @@ The Handbook checks preserve the deferred source candidate; they do not add Hand
 
 GitHub-hosted CI additionally builds the Core and installer from their explicit project roots, runs `scripts/verify-core-wheel` against the Core artifact, and clean-installs each wheel on an ephemeral runner. It deliberately does not run live browser, account, installed-host health, or production service acceptance.
 
-Test dependencies remain separate from future production dependencies. A license has not yet been selected; rights review will occur before public distribution.
+Test dependencies remain separate from future production dependencies.
+
+## License
+
+Copyright 2026 Dillon Lille.
+
+Dispatch is licensed under the [Apache License 2.0](LICENSE).

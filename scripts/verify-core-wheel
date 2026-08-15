@@ -21,6 +21,7 @@ ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PLAN = ROOT / "packaging" / "runtime-package-plan.json"
 MAX_MEMBER_SIZE = 8 * 1024 * 1024
 MAX_WHEEL_SIZE = 32 * 1024 * 1024
+APACHE_2_LICENSE_SHA256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
 
 
 class WheelPolicyError(RuntimeError):
@@ -158,6 +159,7 @@ def verify_core_wheel(wheel: Path, plan_path: Path = DEFAULT_PLAN) -> dict[str, 
         f"{metadata_root}/WHEEL",
         f"{metadata_root}/entry_points.txt",
         f"{metadata_root}/top_level.txt",
+        f"{metadata_root}/licenses/LICENSE",
         f"{metadata_root}/RECORD",
     }
     with zipfile.ZipFile(wheel) as archive:
@@ -171,6 +173,10 @@ def verify_core_wheel(wheel: Path, plan_path: Path = DEFAULT_PLAN) -> dict[str, 
             raise WheelPolicyError("wheel_package_digest_mismatch")
 
     metadata = BytesParser().parsebytes(members[f"{metadata_root}/METADATA"])
+    if metadata.get("License-Expression") != "Apache-2.0" or _sha256(
+        members[f"{metadata_root}/licenses/LICENSE"]
+    ) != APACHE_2_LICENSE_SHA256:
+        raise WheelPolicyError("wheel_license_mismatch")
     declared_dependencies = metadata.get_all("Requires-Dist", [])
     expected_dependencies = set(distribution.get("requires_dist", [])) | set(
         distribution.get("optional_requires_dist", [])

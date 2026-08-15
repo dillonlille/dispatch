@@ -36,7 +36,7 @@ def test_installed_launcher_routes_setup_before_loading_core(monkeypatch) -> Non
 MANIFEST = ROOT / "packaging" / "installation-release-manifest.json"
 
 
-def _wheel(tmp_path: Path) -> Path:
+def _wheel(tmp_path: Path, *, license_bytes: bytes | None = None) -> Path:
     wheel = tmp_path / "dispatch_local_handbook-0.1.0-py3-none-any.whl"
     root = "dispatch_local_handbook-0.1.0.dist-info/"
     members = {
@@ -45,12 +45,16 @@ def _wheel(tmp_path: Path) -> Path:
             "Metadata-Version: 2.4\n"
             "Name: dispatch-local-handbook\n"
             "Version: 0.1.0\n"
+            "License-Expression: Apache-2.0\n"
             "Requires-Python: <3.14,>=3.11\n"
             "Requires-Dist: dispatch-core==1.0.0\n"
             'Requires-Dist: pytest==9.1.1; extra == "dev"\n\n'
         ).encode(),
         f"{root}WHEEL": b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n\n",
         f"{root}top_level.txt": b"dispatch_handbook\n",
+        f"{root}licenses/LICENSE": (
+            license_bytes if license_bytes is not None else (ROOT / "LICENSE").read_bytes()
+        ),
     }
     rows = []
     for name, content in members.items():
@@ -122,6 +126,24 @@ def test_release_authority_is_persisted_for_later_setup(tmp_path: Path) -> None:
     assert persisted.read_bytes() == manifest_path.read_bytes()
     assert loaded.product_version == "0.0.1"
     assert loaded.builtin_plugins[0].id == "handbook"
+
+
+def test_builtin_plugin_requires_exact_apache_license(tmp_path: Path, monkeypatch) -> None:
+    wheel = _wheel(tmp_path, license_bytes=b"not the approved license\n")
+    manifest_path, digest = _ready_manifest(tmp_path, wheel)
+    layout = _layout(tmp_path)
+    persist_release_manifest(layout, manifest_path, expected_sha256=digest, product_version="0.0.1")
+
+    def download(_url, destination, **_policy):
+        destination.write_bytes(wheel.read_bytes())
+        destination.chmod(0o600)
+        return {"path": str(destination)}
+
+    monkeypatch.setattr(setup_runtime, "download_release_artifact", download)
+    with pytest.raises(InstallerError) as error:
+        configure_plugins(layout, ["handbook"])
+
+    assert error.value.code == "plugin_wheel_license"
 
 
 def test_selected_builtin_plugin_is_verified_activated_and_receipted(tmp_path: Path, monkeypatch) -> None:

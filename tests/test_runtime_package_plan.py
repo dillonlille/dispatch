@@ -14,6 +14,11 @@ def test_runtime_package_plan_matches_pyproject_and_sources() -> None:
     distribution = plan["distributions"][0]
     pyproject = tomllib.loads((ROOT / distribution["pyproject"]).read_text(encoding="utf-8"))
     project = pyproject["project"]
+    assert distribution["license"] == project["license"] == "Apache-2.0"
+    assert project["license-files"] == ["LICENSE"]
+    license_path = ROOT / distribution["license_file"]["source"]
+    assert license_path == ROOT / "dispatch-core" / "LICENSE"
+    assert hashlib.sha256(license_path.read_bytes()).hexdigest() == distribution["license_file"]["sha256"]
 
     assert plan["installation_mode"] == "online-only"
     assert plan["runtime_downloads_allowed"] is False

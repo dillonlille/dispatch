@@ -91,6 +91,11 @@
           "source": "dispatch-core/paths/src/dispatch_core/paths/__init__.py"
         }
       ],
+      "license": "Apache-2.0",
+      "license_file": {
+        "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+        "source": "dispatch-core/LICENSE"
+      },
       "name": "dispatch-core",
       "optional_requires_dist": [
         "cryptography==48.0.1; extra == \"authentication\"",

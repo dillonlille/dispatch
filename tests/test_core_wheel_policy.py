@@ -64,6 +64,7 @@ def _make_wheel(
                 "Metadata-Version: 2.4\n"
                 f"Name: {distribution['name']}\n"
                 f"Version: {version}\n"
+                "License-Expression: Apache-2.0\n"
                 f"Requires-Python: {plan['python_requires']}\n"
                 f"{provides_extra}"
                 f"{requires_dist}\n"
@@ -82,6 +83,7 @@ def _make_wheel(
             f"{metadata_root}/top_level.txt": (
                 "\n".join(distribution["top_level"]) + "\n"
             ).encode(),
+            f"{metadata_root}/licenses/LICENSE": (ROOT / "LICENSE").read_bytes(),
         }
     )
     files.update(extra or {})

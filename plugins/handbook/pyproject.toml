@@ -7,6 +7,8 @@ name = "dispatch-local-handbook"
 version = "0.1.0"
 description = "Portable read-only local handbook retrieval for Dispatch"
 requires-python = ">=3.11,<3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
 dependencies = ["dispatch-core==1.0.0"]
 
 [project.optional-dependencies]

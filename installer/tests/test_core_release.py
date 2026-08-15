@@ -47,6 +47,7 @@ def make_wheel(
         "dispatch_core/__init__.py": f'__version__ = "{value}"\n'.encode(),
         "dispatch_core-1.0.0.dist-info/METADATA": (
             b"Metadata-Version: 2.1\nName: dispatch-core\nVersion: 1.0.0\n"
+            b"License-Expression: Apache-2.0\n"
             b"Requires-Python: <3.14,>=3.11\n"
             b"Requires-Dist: cryptography==48.0.1\nRequires-Dist: playwright==1.62.0\n\n"
         ),
@@ -55,6 +56,9 @@ def make_wheel(
             b"[console_scripts]\ndispatch-core = dispatch_core.command_interface:main\n"
         ),
         "dispatch_core-1.0.0.dist-info/top_level.txt": b"dispatch_core\n",
+        "dispatch_core-1.0.0.dist-info/licenses/LICENSE": (
+            Path(__file__).resolve().parents[2] / "LICENSE"
+        ).read_bytes(),
     }
     files.update(extra or {})
     record_name = "dispatch_core-1.0.0.dist-info/RECORD"
@@ -72,6 +76,28 @@ def make_wheel(
             archive.writestr(name, data)
     path.chmod(0o644)
     return path
+
+
+def test_core_wheel_requires_exact_apache_license(tmp_path: Path) -> None:
+    layout = layout_for(tmp_path)
+    wheel = make_wheel(
+        tmp_path / "dispatch_core-1.0.0-py3-none-any.whl",
+        extra={"dispatch_core-1.0.0.dist-info/licenses/LICENSE": b"not the approved license\n"},
+    )
+
+    with pytest.raises(InstallerError) as error:
+        _stage_core_wheel(
+            layout,
+            wheel,
+            expected_sha256=sha256_file(wheel),
+            expected_version="1.0.0",
+            expected_package_files={
+                "dispatch_core/__init__.py": hashlib.sha256(b'__version__ = "1.0.0"\n').hexdigest()
+            },
+            expected_requires_dist=("cryptography==48.0.1", "playwright==1.62.0"),
+        )
+
+    assert error.value.code == "wheel_license"
 
 
 def stage_core_wheel(layout: InstallLayout, wheel: Path, **kwargs):
@@ -258,6 +284,7 @@ def test_active_dependency_cannot_hide_behind_extra_marker(tmp_path: Path) -> No
     layout = layout_for(tmp_path)
     metadata = (
         b"Metadata-Version: 2.1\nName: dispatch-core\nVersion: 1.0.0\n"
+        b"License-Expression: Apache-2.0\n"
         b"Requires-Python: <3.14,>=3.11\n"
         b"Requires-Dist: cryptography==48.0.1\n"
         b"Requires-Dist: playwright==1.62.0\n"

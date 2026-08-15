@@ -47,6 +47,7 @@ def make_wheel(path: Path) -> Path:
         "dispatch_core/__init__.py": b'__version__ = "1.0.0"\n',
         "dispatch_core-1.0.0.dist-info/METADATA": (
             b"Metadata-Version: 2.1\nName: dispatch-core\nVersion: 1.0.0\n"
+            b"License-Expression: Apache-2.0\n"
             b"Requires-Python: <3.14,>=3.11\n"
             b"Requires-Dist: cryptography==48.0.1\nRequires-Dist: playwright==1.62.0\n\n"
         ),
@@ -57,6 +58,9 @@ def make_wheel(path: Path) -> Path:
             b"[console_scripts]\ndispatch-core = dispatch_core.command_interface:main\n"
         ),
         "dispatch_core-1.0.0.dist-info/top_level.txt": b"dispatch_core\n",
+        "dispatch_core-1.0.0.dist-info/licenses/LICENSE": (
+            Path(__file__).resolve().parents[2] / "LICENSE"
+        ).read_bytes(),
     }
     record_name = "dispatch_core-1.0.0.dist-info/RECORD"
     output = io.StringIO()

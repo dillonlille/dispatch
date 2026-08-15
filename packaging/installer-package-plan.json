@@ -1,6 +1,7 @@
 {
   "distribution": {
     "dependencies": [],
+    "license": "Apache-2.0",
     "name": "dispatch-installer",
     "pyproject": "installer/pyproject.toml",
     "python_requires": ">=3.11,<3.14",
@@ -8,9 +9,14 @@
   },
   "files": [
     {
+      "path": "installer/LICENSE",
+      "sha256": "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4",
+      "size": 11357
+    },
+    {
       "path": "installer/pyproject.toml",
-      "sha256": "51625b35a1160c70fdb4316d68b4e2b066a100b9184a04686134af719daa8960",
-      "size": 556
+      "sha256": "b53ec5f9bb02b1000e4a739d1ebbd66ab3c197d1f3cccc76ee78acf82ed0a43c",
+      "size": 607
     },
     {
       "path": "installer/src/dispatch_installer/__init__.py",
@@ -39,8 +45,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/core_release.py",
-      "sha256": "67f3ba304cfd9898ad76dbb76d6c05bd7512593ece61e7dc6e44b4fb4cb32b10",
-      "size": 25187
+      "sha256": "6f045e48ed8e150ba6ea3d1090dbeb989de02a4c951210f37b0f7c8ade77bee9",
+      "size": 25624
     },
     {
       "path": "installer/src/dispatch_installer/doctor.py",
@@ -74,8 +80,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/setup.py",
-      "sha256": "fe04ca7637dd2cf91549f4f6b10d7762c9d40b86ba16a7398303bf5b5f93c543",
-      "size": 23289
+      "sha256": "6e8ce6dfe7745a9e6427cb0bd2caa4ad6588680a01b912ed5d87d7f5957bf8de",
+      "size": 23992
     },
     {
       "path": "installer/src/dispatch_installer/uninstall.py",
