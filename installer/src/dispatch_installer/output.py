@@ -67,6 +67,10 @@ def _headline(payload: Mapping[str, object]) -> str:
     if isinstance(error, Mapping):
         if error.get("code") == "confirmation_required":
             return "✗ Confirmation required"
+        if action == "auth-status":
+            return "✗ Authentication is not available"
+        if action == "browser-doctor":
+            return "✗ Browser support is not available"
         return f"✗ {_label(action)} failed"
 
     if action == "uninstall":
@@ -90,6 +94,12 @@ def _headline(payload: Mapping[str, object]) -> str:
             "available": "Dispatch setup options",
             "complete": "✓ Dispatch setup is complete",
         }.get(status, f"✓ Setup: {_label(status)}")
+    if action == "verify" and payload.get("ok"):
+        return "✓ Dispatch verification passed"
+    if action == "paths" and payload.get("ok"):
+        return "✓ Dispatch paths are ready"
+    if action == "collection-status" and payload.get("ok"):
+        return "✓ Collection queue is ready"
     return f"{'✓' if payload.get('ok') else '✗'} {_label(action)}: {_label(status)}"
 
 
@@ -328,9 +338,6 @@ def format_human(payload: Mapping[str, object]) -> str:
         message = error.get("message")
         if message:
             lines.extend(("", str(message).rstrip(".") + "."))
-        code = error.get("code")
-        if code:
-            lines.append(f"Code: {code}")
         return "\n".join(lines)
 
     hidden = _TECHNICAL_KEYS if isinstance(data, Mapping) else _ENVELOPE_KEYS

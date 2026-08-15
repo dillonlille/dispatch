@@ -198,7 +198,7 @@
     "dispatch-core/command-interface/src/dispatch_core/command_interface/__init__.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "919e372d153a0d8babf662e4a4c07b7de775b3e38f317c769bdd9fa19a93b54b"
+      "sha256": "d8212842f75d4f4ec614fb28668c10ee1276b2ce3a2a2f8365e68346af9b3863"
     },
     "dispatch-core/command-interface/src/dispatch_core/command_interface/__main__.py": {
       "kind": "file",
@@ -478,7 +478,7 @@
     "installer/src/dispatch_installer/output.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "b334cf36b516be1e75ce8bd2f988ea363d112a0c6aeb29f33e4e88e5d7e7be71"
+      "sha256": "9aead11873e6f93c3ae79897c6f62be5a14c9111b1c714c1b9129ca0d20ac6b5"
     },
     "installer/src/dispatch_installer/service.py": {
       "kind": "file",
@@ -533,7 +533,7 @@
     "installer/tests/test_output.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "681e06ed9f539aafa20e85dc71c135bf8cae550c8de14dae9d4389eb064d7765"
+      "sha256": "f8eeb9baffc459fb3b915630d89a1db40028054394a057cd4941905652f132f3"
     },
     "installer/tests/test_service.py": {
       "kind": "file",
@@ -568,17 +568,17 @@
     "packaging/installation-release-manifest.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "2aa55ed00c4ae51c7e13d1f94182541a56505085dfce0f3227fd4c475c686858"
+      "sha256": "2a9b051990b216957f96674b3b0b3bfa2d7c82358ad9b2881eb03316f18e95f2"
     },
     "packaging/installer-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "5eec7a338dafcc0a54b583241003f2ee662b1e51dc4793d7a3ed74414050e9e3"
+      "sha256": "d9e90bd634a4bb14c45b55ddebb3a44ec4010ddc7926a7e8e0614ff7850edc5f"
     },
     "packaging/runtime-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "c2bb24c8be2df23860bec68929eb7af9e13b83bd15dee1766eaa0e1a2b279277"
+      "sha256": "884618b1b699802ec4b42c91b3790fcc274104dc872b4385b7191a5c60f1b42c"
     },
     "plugins/handbook/LICENSE": {
       "kind": "file",

@@ -179,7 +179,7 @@ def test_paths_and_collection_status_are_concise() -> None:
     )
 
     assert paths == (
-        "✓ Paths: Ready\n\n"
+        "✓ Dispatch paths are ready\n\n"
         "Code: /users/example/.dispatch/releases/core\n"
         "Data: /users/example/.dispatch/data"
     )

@@ -77,7 +77,7 @@ def _auth_result(args: argparse.Namespace) -> dict[str, Any]:
     except ImportError as exc:
         raise CommandInterfaceError(
             "authentication_dependency_missing",
-            "authentication capability dependencies are not installed; run dispatch setup",
+            "authentication is not enabled; install and set up a plugin that requires it",
         ) from exc
 
     try:
