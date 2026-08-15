@@ -91,7 +91,7 @@
     {
       "path": "installer/src/dispatch_installer/uninstall.py",
       "sha256": "77360a7b818534a9d1d03a5b538b04dfbf6817b117ab360e98e036ce3f11755b",
-      "size": 57387
+      "size": 57368
     },
     {
       "path": "installer/src/dispatch_installer/user_command.py",
