@@ -5,7 +5,7 @@
     "name": "dispatch-installer",
     "pyproject": "installer/pyproject.toml",
     "python_requires": ">=3.11,<3.14",
-    "version": "0.1.4"
+    "version": "0.1.5"
   },
   "files": [
     {
@@ -15,12 +15,12 @@
     },
     {
       "path": "installer/pyproject.toml",
-      "sha256": "13437cfebd657f0729f5ed6be1fb0d0bc893179e54b4bbcd3dba46afd952a1da",
+      "sha256": "be03ad5163164734655a9ee25e2d5d8c48b440494477a940182b7d323d6036d6",
       "size": 607
     },
     {
       "path": "installer/src/dispatch_installer/__init__.py",
-      "sha256": "4fd4116f4b5a5650f1ee1eff4dc2e6599b2964b3f4cd498214358983d1e10fc5",
+      "sha256": "b71995c70cae0f507096014533bc092eff6ef6581dbb269c94f56f0aca17501f",
       "size": 961
     },
     {

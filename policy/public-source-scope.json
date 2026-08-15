@@ -38,7 +38,7 @@
     "README.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "d9c7b9dfce2f4dfc97436f5821b5bb892a13ed552bdce100b76f2a8dda3de17a"
+      "sha256": "373646991f3dbc3c79eeabef9d4dfe863f9986605eccc8bcf862e16e85e4f4b0"
     },
     "SECURITY.md": {
       "kind": "file",
@@ -333,7 +333,7 @@
     "docs/online-installation.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "bb147a8f80415f248f55b6dfe3054b953b3c37bddc863522ea02c72b9b1ed465"
+      "sha256": "45f7810726ad6a8841a64e8b308feea093160932cde2ced34440f9f2e638d579"
     },
     "docs/path-configuration.md": {
       "kind": "file",
@@ -343,7 +343,7 @@
     "docs/phase-5-installation-contract.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "a7f11b51f50548e45fc70363367fe716f36ac7b96fae57e972698cec5ad0a3f2"
+      "sha256": "bc6b0937868448d42c7b5269ec18a335eee425862d089288112e64e6ebfa9020"
     },
     "docs/private-github-setup.md": {
       "kind": "file",
@@ -418,12 +418,12 @@
     "installer/pyproject.toml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "13437cfebd657f0729f5ed6be1fb0d0bc893179e54b4bbcd3dba46afd952a1da"
+      "sha256": "be03ad5163164734655a9ee25e2d5d8c48b440494477a940182b7d323d6036d6"
     },
     "installer/src/dispatch_installer/__init__.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "4fd4116f4b5a5650f1ee1eff4dc2e6599b2964b3f4cd498214358983d1e10fc5"
+      "sha256": "b71995c70cae0f507096014533bc092eff6ef6581dbb269c94f56f0aca17501f"
     },
     "installer/src/dispatch_installer/__main__.py": {
       "kind": "file",
@@ -503,12 +503,12 @@
     "installer/tests/test_browser_runtime.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "c23ef99ee715e586362f1f466a98d1c8dcb09a6989fac526205738801271b58c"
+      "sha256": "86af0c647e5c5c15ec39190813103804623f4b8eeafcf07a41f66bd0c6fc24d1"
     },
     "installer/tests/test_core_release.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "c89266aced478dbe1c77d29897847e856ec7fd1ae78f84afef761be2dd3d549b"
+      "sha256": "189333dce02f97cad3c7cf0e94a24037969ed1ab0e5781087fa8b4bec1208bac"
     },
     "installer/tests/test_download.py": {
       "kind": "file",
@@ -523,7 +523,7 @@
     "installer/tests/test_manifest_cli.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "3d5b74b75266c130ddba9b0afe8b9cc9f0007eed10a3a28d0e38f8bafa991f20"
+      "sha256": "879beb4dfd404d81d87c34b91b422ccde517d43ac2d5ee5f8c90b600d72bdcd2"
     },
     "installer/tests/test_service.py": {
       "kind": "file",
@@ -533,7 +533,7 @@
     "installer/tests/test_setup.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "0480b85942f7af2032790dbef7794af5474a37e905b9d938a09642a0d651644d"
+      "sha256": "3bc46e0772555adb3f9d7e4818fc0d692be6eb4f7586845b8959d16d116def04"
     },
     "installer/tests/test_uninstall.py": {
       "kind": "file",
@@ -558,12 +558,12 @@
     "packaging/installation-release-manifest.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "fb5c3b335924bde3160edac3ce9e5d615aa9095aa86eb3a8327d81ee894d909f"
+      "sha256": "b35a5b7921dc58886bfee54d52276c8bf1df0ba339330fce73f796983f1b4fa9"
     },
     "packaging/installer-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "27962938399926b9bd9fb43962eb8d70eacd8b2f64c8ae45d3e78e8062629ac8"
+      "sha256": "943a4bd42f1c5300aa61bb892fa845a31c58bb478855c2dfa47f52835dfac0d9"
     },
     "packaging/runtime-package-plan.json": {
       "kind": "file",
@@ -733,7 +733,7 @@
     "tests/test_bootstrap_template.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "63302c807d1fd5a99b5bebabb855e5ffc74a75e8f44c587c48db728cf0994fa4"
+      "sha256": "465596cbb73693eec89098118fc662e7735d2b658cf96510264173e3a63c0d55"
     },
     "tests/test_core_wheel_policy.py": {
       "kind": "file",
@@ -743,7 +743,7 @@
     "tests/test_installation_manifest.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "40464acd1415484dc4c21d3d0e1cf666c32a3368e968a1c7d2f6f18309bab813"
+      "sha256": "b7290f8853c938d0192ddf7d6c252a8e099a14fdf464011c588d69f313a13028"
     },
     "tests/test_installer_package_plan.py": {
       "kind": "file",
