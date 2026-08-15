@@ -404,7 +404,9 @@ class CollectionWorkerSupervisor:
                                 waiting = False
                                 parent.send({"command": "resume"})
                                 command_sent = True
-        except (BrokenPipeError, EOFError, OSError, CollectionStoreError):
+        except (BrokenPipeError, EOFError):
+            status = "worker_crashed"
+        except (OSError, CollectionStoreError):
             status = "worker_state_unavailable"
         except Exception:
             status = "worker_state_unavailable"
