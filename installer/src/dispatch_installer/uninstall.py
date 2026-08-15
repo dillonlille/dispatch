@@ -37,6 +37,7 @@ _LAYOUT_KEYS = {
 }
 _KNOWN_INSTALL_FILES = {
     "active-release.json",
+    "install-transaction.json",
     "installer.lock",
     "layout.json",
     "release-manifest.json",

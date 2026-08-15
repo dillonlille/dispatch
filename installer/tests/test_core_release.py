@@ -9,6 +9,7 @@ import os
 import stat
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -136,10 +137,24 @@ def test_core_release_staging_activation_and_reuse(tmp_path: Path, monkeypatch: 
     report = inspect_installation(layout)
     assert report["checks"]["core"]["status"] == "ready"
     assert report["checks"]["browser_authority"]["status"] == "verified"
-    assert report["checks"]["production_release"]["status"] == "blocked"
-    assert report["checks"]["browser_launch_composition"]["status"] == "blocked"
+    assert report["checks"]["production_release"]["status"] == "missing"
+    assert report["checks"]["browser_launch_composition"]["status"] == "not_applicable"
     assert report["ok"] is False
     assert report["status"] == "incomplete"
+
+    monkeypatch.setattr(
+        doctor_module,
+        "load_installed_manifest",
+        lambda _layout: SimpleNamespace(core_version="1.0.0", product_version="0.0.1", browser_ready=False),
+    )
+    monkeypatch.setattr(
+        doctor_module,
+        "inspect_user_service",
+        lambda _layout: {"status": "ready", "active": True, "enabled": True},
+    )
+    ready_report = inspect_installation(layout)
+    assert ready_report["ok"] is True
+    assert ready_report["status"] == "ready"
 
 
 def test_unsafe_artifact_alias_and_mode_are_rejected(tmp_path: Path) -> None:

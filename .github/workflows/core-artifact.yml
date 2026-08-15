@@ -52,6 +52,7 @@ jobs:
           test "${#core_wheels[@]}" -eq 1
           test "${#installer_wheels[@]}" -eq 1
           python -B scripts/verify-core-wheel "${core_wheels[0]}" --json
+          python -B scripts/verify-installer-wheel "${installer_wheels[0]}" --json
           python -m venv "$RUNNER_TEMP/core-smoke"
           "$RUNNER_TEMP/core-smoke/bin/python" -m pip install --no-deps "${core_wheels[0]}"
           "$RUNNER_TEMP/core-smoke/bin/python" -c 'import dispatch_core, dispatch_core.browser_manager, dispatch_core.collection_manager, dispatch_core.command_interface, dispatch_core.health, dispatch_core.paths'

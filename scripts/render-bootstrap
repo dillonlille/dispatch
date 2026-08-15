@@ -4,12 +4,16 @@ from __future__ import annotations
 import argparse
 import hashlib
 import os
+import sys
 import tempfile
 from pathlib import Path
 from urllib.parse import urlsplit
 
-from dispatch_installer.layout import InstallerError
-from dispatch_installer.manifest import load_manifest
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "installer" / "src"))
+
+from dispatch_installer.layout import InstallerError  # noqa: E402
+from dispatch_installer.manifest import load_manifest  # noqa: E402
 
 
 def main() -> int:

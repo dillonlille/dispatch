@@ -5,23 +5,7 @@
     "ready": false,
     "selector": "/etc/dispatch/browser-runtime-active.json"
   },
-  "builtin_plugins": [
-    {
-      "artifact": {
-        "sha256": null,
-        "size": null,
-        "url": null
-      },
-      "capabilities": [],
-      "id": "handbook",
-      "package": "dispatch-local-handbook",
-      "requires_dist": [
-        "dispatch-core==1.0.0",
-        "pytest==9.1.1; extra == \"dev\""
-      ],
-      "version": "0.1.0"
-    }
-  ],
+  "builtin_plugins": [],
   "core": {
     "artifact": {
       "sha256": null,

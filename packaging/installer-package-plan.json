@@ -40,8 +40,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/cli.py",
-      "sha256": "45c54c676e711dd915552404e014a40e8b87a6bc0e7943c04d8d75715a46f8fa",
-      "size": 6902
+      "sha256": "00dd5dac5ba7ff90de84ce6f350e423edac7ef94d6c56a05559421b12935c3ba",
+      "size": 11355
     },
     {
       "path": "installer/src/dispatch_installer/core_release.py",
@@ -50,8 +50,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/doctor.py",
-      "sha256": "162cd57d86b1925e89fad965894f03d4016781e9d2dc1da3e0393f263b5f37e4",
-      "size": 6442
+      "sha256": "6f303466de81abd1cc733b5a9d97d1c493880f5114518b3b1da2f8d0fa4016f4",
+      "size": 7414
     },
     {
       "path": "installer/src/dispatch_installer/download.py",
@@ -75,8 +75,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/service.py",
-      "sha256": "201f6be4d96f247ab9667706e69df83cc54f20add122b2a40a75de7d1b067823",
-      "size": 4298
+      "sha256": "5724f3e6e42109603e74c14726b5fc2c9652278bc842f29c810b2158c71e5f88",
+      "size": 7734
     },
     {
       "path": "installer/src/dispatch_installer/setup.py",
@@ -85,8 +85,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/uninstall.py",
-      "sha256": "debf121a54c6f4e3119699ce40a6c7b0ad0d825a0ad288b59d44f871590543c5",
-      "size": 55613
+      "sha256": "f2d35d0b8d3c489bfaa9be39151fa1e4531401f965088e4c4207b83e6974a561",
+      "size": 55645
     }
   ],
   "online_only": true,

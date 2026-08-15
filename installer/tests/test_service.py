@@ -8,7 +8,7 @@ import pytest
 
 import dispatch_installer.uninstall as uninstall_module
 from dispatch_installer.layout import InstallLayout, InstallerError
-from dispatch_installer.service import install_user_service
+from dispatch_installer.service import inspect_user_service, install_user_service
 from dispatch_installer.uninstall import _remove_user_service
 
 
@@ -61,6 +61,29 @@ def test_failed_service_activation_preserves_prepared_receipt(tmp_path: Path) ->
     receipt = json.loads((layout.state / "install" / "service.json").read_text(encoding="utf-8"))
     assert error.value.code == "service_activation_failed"
     assert receipt["status"] == "prepared"
+
+
+def test_service_inspection_requires_receipt_unit_enablement_and_activity(tmp_path: Path) -> None:
+    layout = layout_for(tmp_path)
+    successful = lambda command: subprocess.CompletedProcess(command, 0, "", "")
+    install_user_service(layout, layout.bin / "dispatch", run=successful)
+
+    report = inspect_user_service(layout, run=successful)
+
+    assert report["status"] == "ready"
+    assert report["enabled"] is True
+    assert report["active"] is True
+
+
+def test_service_inspection_reports_inactive_service_as_incomplete(tmp_path: Path) -> None:
+    layout = layout_for(tmp_path)
+    successful = lambda command: subprocess.CompletedProcess(command, 0, "", "")
+    install_user_service(layout, layout.bin / "dispatch", run=successful)
+
+    def inactive(command):
+        return subprocess.CompletedProcess(command, 1, "", "inactive")
+
+    assert inspect_user_service(layout, run=inactive)["status"] == "incomplete"
 
 
 def test_receipt_bound_service_is_disabled_and_removed(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

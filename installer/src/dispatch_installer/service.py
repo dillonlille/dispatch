@@ -112,3 +112,78 @@ def install_user_service(
     receipt["status"] = "active"
     atomic_json(receipt_path, receipt, mode=0o600)
     return {"status": "active", "unit": str(unit), "service": "dispatch-core.service"}
+
+
+def inspect_user_service(
+    layout: InstallLayout,
+    *,
+    run: RunCommand = _run,
+) -> dict[str, object]:
+    receipt_path = layout.state / "install" / "service.json"
+    unit = layout.home / ".config" / "systemd" / "user" / "dispatch-core.service"
+    if not receipt_path.exists() and not receipt_path.is_symlink():
+        return {"status": "missing", "service": "dispatch-core.service", "unit": str(unit)}
+    try:
+        if receipt_path.is_symlink() or not receipt_path.is_file():
+            raise InstallerError("service_receipt_unsafe", "Dispatch service receipt is unsafe")
+        details = receipt_path.stat()
+        if (
+            details.st_uid != os.geteuid()
+            or details.st_nlink != 1
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_size > 16 * 1024
+        ):
+            raise InstallerError("service_receipt_unsafe", "Dispatch service receipt is unsafe")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if (
+            not isinstance(receipt, dict)
+            or set(receipt)
+            != {
+                "schema_version",
+                "unit",
+                "unit_sha256",
+                "launcher",
+                "service",
+                "status",
+                "contains_secrets",
+            }
+            or receipt.get("schema_version") != 1
+            or receipt.get("unit") != str(unit)
+            or receipt.get("launcher") != str(layout.bin / "dispatch")
+            or receipt.get("service") != "dispatch-core.service"
+            or receipt.get("status") not in {"prepared", "active"}
+            or receipt.get("contains_secrets") is not False
+            or not isinstance(receipt.get("unit_sha256"), str)
+            or len(receipt["unit_sha256"]) != 64
+            or any(character not in "0123456789abcdef" for character in receipt["unit_sha256"])
+        ):
+            raise InstallerError("service_receipt_invalid", "Dispatch service receipt is invalid")
+        if unit.is_symlink() or not unit.is_file():
+            raise InstallerError("service_unit_missing", "Dispatch user service unit is missing or unsafe")
+        unit_details = unit.stat()
+        if (
+            unit_details.st_uid != os.geteuid()
+            or unit_details.st_nlink != 1
+            or stat.S_IMODE(unit_details.st_mode) != 0o600
+            or unit_details.st_size > 16 * 1024
+            or hashlib.sha256(unit.read_bytes()).hexdigest() != receipt["unit_sha256"]
+        ):
+            raise InstallerError("service_unit_invalid", "Dispatch user service unit differs from its receipt")
+        enabled = run(("systemctl", "--user", "is-enabled", "--quiet", "dispatch-core.service")).returncode == 0
+        active = run(("systemctl", "--user", "is-active", "--quiet", "dispatch-core.service")).returncode == 0
+        ready = receipt["status"] == "active" and enabled and active
+        return {
+            "status": "ready" if ready else "incomplete",
+            "service": "dispatch-core.service",
+            "unit": str(unit),
+            "enabled": enabled,
+            "active": active,
+            "receipt_status": receipt["status"],
+        }
+    except (InstallerError, OSError, UnicodeError, json.JSONDecodeError) as exc:
+        return {
+            "status": "unsafe",
+            "service": "dispatch-core.service",
+            "unit": str(unit),
+            "error": str(exc)[:512],
+        }

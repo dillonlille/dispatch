@@ -5,7 +5,6 @@ from pathlib import Path
 import tomllib
 
 import jsonschema
-import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -19,16 +18,7 @@ def test_installation_release_manifest_matches_schema_and_is_fail_closed() -> No
     assert manifest["product"] == {"name": "dispatch", "version": "0.0.1"}
     assert manifest["installer"]["artifact"] == {"url": None, "size": None, "sha256": None}
     assert manifest["core"]["artifact"] == {"url": None, "size": None, "sha256": None}
-    assert manifest["builtin_plugins"] == [
-        {
-            "id": "handbook",
-            "package": "dispatch-local-handbook",
-            "version": "0.1.0",
-            "artifact": {"url": None, "size": None, "sha256": None},
-            "capabilities": [],
-            "requires_dist": ["dispatch-core==1.0.0", "pytest==9.1.1; extra == \"dev\""],
-        }
-    ]
+    assert manifest["builtin_plugins"] == []
     assert manifest["browser_runtime"]["ready"] is False
     assert manifest["browser_runtime"]["install_phase"] == "setup"
     assert manifest["post_install"] == {
@@ -50,8 +40,7 @@ def test_product_manifest_versions_match_component_sources() -> None:
     manifest = json.loads((ROOT / "packaging" / "installation-release-manifest.json").read_text(encoding="utf-8"))
     installer = tomllib.loads((ROOT / "installer" / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     core = tomllib.loads((ROOT / "dispatch-core" / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    handbook = tomllib.loads((ROOT / "plugins" / "handbook" / "pyproject.toml").read_text(encoding="utf-8"))["project"]
-    handbook_manifest = yaml.safe_load((ROOT / "plugins" / "handbook" / "dispatch-plugin.yaml").read_text(encoding="utf-8"))
+
 
     assert (manifest["installer"]["name"], manifest["installer"]["version"]) == (
         installer["name"],
@@ -67,13 +56,4 @@ def test_product_manifest_versions_match_component_sources() -> None:
         *core_plan["requires_dist"],
         *core_plan["optional_requires_dist"],
     ]
-    assert manifest["builtin_plugins"] == [
-        {
-            "id": handbook_manifest["id"],
-            "package": handbook["name"],
-            "version": handbook["version"],
-            "artifact": {"url": None, "size": None, "sha256": None},
-            "capabilities": [],
-            "requires_dist": ["dispatch-core==1.0.0", "pytest==9.1.1; extra == \"dev\""],
-        }
-    ]
+    assert manifest["builtin_plugins"] == []

@@ -141,6 +141,16 @@ def _ready_manifest(tmp_path: Path, wheel: Path) -> tuple[Path, str]:
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     payload["ready"] = True
     payload["post_install"]["setup_implemented"] = True
+    payload["builtin_plugins"] = [
+        {
+            "artifact": {"sha256": None, "size": None, "url": None},
+            "capabilities": [],
+            "id": "handbook",
+            "package": "dispatch-local-handbook",
+            "requires_dist": ['dispatch-core==1.0.0', 'pytest==9.1.1; extra == "dev"'],
+            "version": "0.1.0",
+        }
+    ]
     filenames = (
         "dispatch_installer-0.1.0-py3-none-any.whl",
         "dispatch_core-1.0.0-py3-none-any.whl",

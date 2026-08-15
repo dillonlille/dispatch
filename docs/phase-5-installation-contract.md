@@ -57,7 +57,7 @@ A staged Core release is not sufficient for complete product activation. The pub
 
 - the digest-pinned release manifest and installer bootstrap are complete and approved;
 - the Core artifact and pinned Python dependency closure are downloaded, staged, and reverified;
-- the installer-owned browser generation and sandbox receipts are published and pass Browser Manager authority validation;
+- browser generation and sandbox receipts pass Browser Manager authority validation only when the selected product release requires browser capability;
 - the final `dispatch` launcher is installed;
 - post-install doctor and verify pass without setup, authentication, browser navigation, collection, scheduling, or delivery.
 
@@ -65,7 +65,7 @@ A staged Core release is not sufficient for complete product activation. The pub
 
 The planning manifest records the immutable product version, mandatory installer/Core declarations, the built-in plugin catalog, and the future setup UX contract:
 
-- `setup_implemented: true` for the current capability-free Handbook catalog;
+- `setup_implemented: true` for the Core-only `0.0.1` catalog;
 - setup command: `dispatch setup`, which selects, verifies, activates, and receipts built-in plugins from the same product release;
 - post-install choices: `start_setup` or `skip_for_now`.
 
@@ -73,7 +73,7 @@ The installer must not collect credentials, account identifiers, provider config
 
 ## Current fail-closed boundary
 
-`packaging/installation-release-manifest.json` intentionally remains `ready: false`, and schema version 1 rejects every `ready: true` declaration. The browser-generation transaction foundation currently accepts only an already assembled exact manifest-bound source tree and fresh, closed-shape evidence receipts from the fixed generation authority; it copies and binds those receipts into generations and is exercised only beneath isolated synthetic authority paths. Caller-selected evidence paths and self-supplied expected evidence digests are rejected by the API. Approved online URLs, artifact sizes/hashes, archive extraction, signature authority, the real Playwright/Chromium generation payload, trusted Ubuntu dependency/AppArmor/launch-probe producers, a selected-generation Python bootstrap, a production privileged helper, browser quiescence/service integration, privileged removal, launcher, and final bootstrap are outstanding. Therefore the installer exposes no production `install` command, and doctor reports explicit `production_release` and `browser_launch_composition` blockers even when Core and browser authority verify independently.
+`packaging/installation-release-manifest.json` remains `ready: false` until exact installer and Core artifacts are published and clean-machine acceptance passes. Schema version 1 accepts `ready: true` only when every required artifact has its exact production URL, size, and SHA-256. The installer exposes a manifest-authorized `install` command, records durable install phases, activates the user service, and verifies the installed Core-only release. Browser generation remains outside `0.0.1`; doctor treats browser launch composition as not applicable for releases that do not require it.
 
 The implemented user-scope uninstaller preserves configuration and durable data by default and requires `--purge --yes` to remove them. It preserves Hermes and shared operating-system packages in every mode. It fails closed before mutation when root-owned browser authority, non-quiescent runtime state, invalid receipts, invalid releases, symlinks, hard links, ownership changes, or mount-boundary crossings are present. The exact contract is documented in [`uninstallation.md`](uninstallation.md).
 
@@ -85,9 +85,9 @@ This is not replaced with development cache authority, arbitrary paths, test wra
 - repeated installation proves idempotence;
 - interrupted staging preserves or safely reconciles activation;
 - artifact, hard-link, installed-tree, selector, redirect, and manifest tampering fail closed;
-- privileged browser generation provisioning and production sandbox probe pass;
+- browser provisioning is not invoked by the Core-only release;
 - no secrets appear in source, manifests, receipts, logs, profiles, or model output;
 - Python 3.12 and 3.13 matrix checks;
-- final post-install setup choice is added only when setup itself exists;
-- repair, upgrade, rollback, privileged browser removal, and complete service-integrated uninstall acceptance in their later lifecycle phase;
+- final post-install Start Setup / Skip for Now behavior passes through the real bootstrap;
+- same-release repair, service-integrated uninstall, keep-data reinstall, and purge acceptance pass; cross-version rollback remains a later-release feature because `0.0.1` has no predecessor;
 - rights and licensing review before publication.

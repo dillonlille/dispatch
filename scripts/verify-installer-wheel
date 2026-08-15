@@ -1,0 +1,97 @@
+#!/usr/bin/env python3
+"""Verify an installer wheel against the reviewed installer package plan."""
+from __future__ import annotations
+
+import argparse
+import hashlib
+import json
+import sys
+import zipfile
+from email.parser import BytesParser
+from pathlib import Path
+
+ROOT = Path(__file__).resolve().parents[1]
+sys.path.insert(0, str(ROOT / "installer" / "src"))
+
+from dispatch_installer.core_release import _safe_members, _verify_record  # noqa: E402
+from dispatch_installer.layout import InstallerError  # noqa: E402
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("wheel", type=Path)
+    parser.add_argument("--plan", type=Path, default=ROOT / "packaging" / "installer-package-plan.json")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+
+    plan = json.loads(args.plan.read_text(encoding="utf-8"))
+    distribution = plan["distribution"]
+    version = distribution["version"]
+    expected_name = f"dispatch_installer-{version}-py3-none-any.whl"
+    if args.wheel.is_symlink() or not args.wheel.is_file() or args.wheel.name != expected_name:
+        raise InstallerError("installer_wheel_path", "installer wheel path or filename is invalid")
+
+    dist_info = f"dispatch_installer-{version}.dist-info"
+    package_sources = {
+        entry["path"].removeprefix("installer/src/"): ROOT / entry["path"]
+        for entry in plan["files"]
+        if entry["path"].startswith("installer/src/dispatch_installer/")
+    }
+    expected_members = {
+        *package_sources,
+        f"{dist_info}/licenses/LICENSE",
+        f"{dist_info}/METADATA",
+        f"{dist_info}/WHEEL",
+        f"{dist_info}/entry_points.txt",
+        f"{dist_info}/top_level.txt",
+        f"{dist_info}/RECORD",
+    }
+
+    with zipfile.ZipFile(args.wheel) as archive:
+        members = _safe_members(archive)
+        if set(members) != expected_members:
+            raise InstallerError("installer_wheel_members", "installer wheel member set differs from policy")
+        record_name = f"{dist_info}/RECORD"
+        _verify_record(archive, members, record_name)
+        for name, source in package_sources.items():
+            content = archive.read(members[name])
+            if content != source.read_bytes():
+                raise InstallerError("installer_wheel_source", f"installer wheel source differs: {name}")
+
+        metadata = BytesParser().parsebytes(archive.read(members[f"{dist_info}/METADATA"]))
+        if (
+            metadata.get("Name") != distribution["name"]
+            or metadata.get("Version") != version
+            or set(str(metadata.get("Requires-Python", "")).split(","))
+            != set(distribution["python_requires"].split(","))
+            or metadata.get("License-Expression") != distribution["license"]
+            or metadata.get_all("Requires-Dist", []) != distribution["dependencies"]
+        ):
+            raise InstallerError("installer_wheel_metadata", "installer wheel metadata differs from policy")
+        if archive.read(members[f"{dist_info}/licenses/LICENSE"]) != (ROOT / "installer" / "LICENSE").read_bytes():
+            raise InstallerError("installer_wheel_license", "installer wheel license differs from policy")
+        if archive.read(members[f"{dist_info}/entry_points.txt"]).decode("utf-8") != (
+            "[console_scripts]\n"
+            "dispatch-installer = dispatch_installer.cli:main\n"
+        ):
+            raise InstallerError("installer_wheel_entry_point", "installer wheel entry point differs from policy")
+        if archive.read(members[f"{dist_info}/top_level.txt"]) != b"dispatch_installer\n":
+            raise InstallerError("installer_wheel_top_level", "installer wheel top-level declaration differs")
+        wheel_metadata = archive.read(members[f"{dist_info}/WHEEL"]).decode("utf-8")
+        if "Root-Is-Purelib: true\n" not in wheel_metadata or "Tag: py3-none-any\n" not in wheel_metadata:
+            raise InstallerError("installer_wheel_tag", "installer wheel platform declaration differs")
+
+    result = {
+        "status": "verified_installer",
+        "artifact": args.wheel.name,
+        "version": version,
+        "member_count": len(expected_members),
+        "size": args.wheel.stat().st_size,
+        "sha256": hashlib.sha256(args.wheel.read_bytes()).hexdigest(),
+    }
+    print(json.dumps(result, sort_keys=True) if args.json else f"verified: {args.wheel.name}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

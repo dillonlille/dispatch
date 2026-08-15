@@ -10,9 +10,10 @@ from pathlib import Path
 from .browser_runtime import inspect_browser_runtime
 from .core_release import verify_core_release
 from .layout import InstallLayout, InstallerError
+from .service import inspect_user_service
+from .setup import load_installed_manifest
 
 
-_PRODUCTION_INSTALL_READY = False
 _BROWSER_LAUNCH_COMPOSITION_READY = False
 _MAX_SELECTOR_BYTES = 4096
 
@@ -79,7 +80,7 @@ def _sha256(path: Path) -> str:
 def inspect_installation(layout: InstallLayout) -> dict:
     checks: dict[str, dict] = {}
     checks["dispatch_home"] = _check_private_directory(layout.dispatch_home)
-    for name in ("releases", "bin", "config", "data", "state", "cache", "staging"):
+    for name in ("releases", "plugins", "bin", "config", "data", "state", "cache", "staging"):
         checks[name] = _check_private_directory(getattr(layout, name))
 
     core: dict[str, str | int | bool | None] = {
@@ -119,25 +120,47 @@ def inspect_installation(layout: InstallLayout) -> dict:
         core = {"status": "unsafe", "selector": str(selector), "release_id": None, "error": str(exc)[:512]}
     checks["core"] = core
 
+    checks["service"] = inspect_user_service(layout)
     checks["browser_authority"] = inspect_browser_runtime(layout)
-    checks["production_release"] = {
-        "status": "ready" if _PRODUCTION_INSTALL_READY else "blocked",
-        "ready": _PRODUCTION_INSTALL_READY,
-        "reason": None if _PRODUCTION_INSTALL_READY else "production release manifest is intentionally not ready",
-    }
+    installed_manifest = None
+    try:
+        installed_manifest = load_installed_manifest(layout)
+        if core.get("version") != installed_manifest.core_version:
+            raise InstallerError("installed_core_version", "active Core version differs from release authority")
+        checks["production_release"] = {
+            "status": "ready",
+            "ready": True,
+            "product_version": installed_manifest.product_version,
+        }
+    except InstallerError as exc:
+        receipt_exists = (layout.state / "install" / "release.json").exists()
+        checks["production_release"] = {
+            "status": "unsafe" if receipt_exists else "missing",
+            "ready": False,
+            "reason": str(exc)[:512],
+        }
+    browser_required = bool(installed_manifest and installed_manifest.browser_ready)
+    browser_composition_ready = not browser_required or _BROWSER_LAUNCH_COMPOSITION_READY
     checks["browser_launch_composition"] = {
-        "status": "ready" if _BROWSER_LAUNCH_COMPOSITION_READY else "blocked",
-        "ready": _BROWSER_LAUNCH_COMPOSITION_READY,
-        "reason": None
-        if _BROWSER_LAUNCH_COMPOSITION_READY
-        else "selected-generation Playwright bootstrap is not implemented",
+        "status": (
+            "not_applicable"
+            if not browser_required
+            else ("ready" if _BROWSER_LAUNCH_COMPOSITION_READY else "blocked")
+        ),
+        "ready": browser_composition_ready,
+        "reason": (
+            None
+            if browser_composition_ready
+            else "selected-generation Playwright bootstrap is not implemented"
+        ),
     }
     unsafe = any(check.get("status") == "unsafe" for check in checks.values())
     ready = (
         not unsafe
-        and _PRODUCTION_INSTALL_READY
-        and _BROWSER_LAUNCH_COMPOSITION_READY
+        and checks["production_release"]["status"] == "ready"
+        and checks["service"]["status"] == "ready"
+        and browser_composition_ready
         and checks["core"]["status"] == "ready"
-        and checks["browser_authority"]["status"] == "verified"
+        and (not browser_required or checks["browser_authority"]["status"] == "verified")
     )
     return {"ok": ready, "status": "ready" if ready else ("unsafe" if unsafe else "incomplete"), "checks": checks}

@@ -22,10 +22,20 @@ python3 -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < 
 umask 077
 mkdir -p "$DISPATCH_HOME/staging"
 chmod 700 "$DISPATCH_HOME" "$DISPATCH_HOME/staging"
-[ ! -e "$DISPATCH_HOME/installer-venv" ] || fail 'an installer environment already exists; upgrade is not implemented yet'
 work="$(mktemp -d "$DISPATCH_HOME/staging/bootstrap.XXXXXX")"
 installer_stage="$DISPATCH_HOME/staging/installer-venv.$$"
+installer_environment="$DISPATCH_HOME/installer-venv"
+installer_backup=''
+install_complete=0
 cleanup() {
+    if [ -n "$installer_backup" ] && [ -e "$installer_backup" ]; then
+        if [ "$install_complete" -eq 1 ]; then
+            rm -rf "$installer_backup"
+        else
+            rm -rf "$installer_environment"
+            mv "$installer_backup" "$installer_environment"
+        fi
+    fi
     rm -rf "$work" "$installer_stage"
 }
 trap cleanup EXIT HUP INT TERM
@@ -59,6 +69,7 @@ plan="$work/plan.json"
 if ! "$installer_stage/bin/dispatch-installer" plan --manifest "$manifest" --manifest-sha256 "$MANIFEST_SHA256" >"$plan"; then
     fail 'product release is not ready'
 fi
+installer_version="$(PLAN="$plan" python3 -c 'import json,os; print(json.load(open(os.environ["PLAN"]))["data"]["manifest"]["installer_version"])')"
 core_url="$(PLAN="$plan" python3 -c 'import json,os; print(json.load(open(os.environ["PLAN"]))["data"]["manifest"]["core_artifact"]["url"])')"
 core_size="$(PLAN="$plan" python3 -c 'import json,os; print(json.load(open(os.environ["PLAN"]))["data"]["manifest"]["core_artifact"]["size"])')"
 core_sha256="$(PLAN="$plan" python3 -c 'import json,os; print(json.load(open(os.environ["PLAN"]))["data"]["manifest"]["core_artifact"]["sha256"])')"
@@ -74,13 +85,37 @@ if len(content) != int(os.environ['CORE_SIZE']) or hashlib.sha256(content).hexdi
     raise SystemExit(1)
 PY
 
-mv "$installer_stage" "$DISPATCH_HOME/installer-venv"
-"$DISPATCH_HOME/installer-venv/bin/dispatch-installer" install \
+if [ -e "$installer_environment" ] || [ -L "$installer_environment" ]; then
+    INSTALLER_ENVIRONMENT="$installer_environment" python3 - <<'PY' || fail 'existing installer environment is unsafe'
+import os
+import stat
+from pathlib import Path
+path = Path(os.environ['INSTALLER_ENVIRONMENT'])
+details = path.lstat()
+if not stat.S_ISDIR(details.st_mode) or details.st_uid != os.geteuid() or details.st_mode & 0o022:
+    raise SystemExit(1)
+PY
+    if "$installer_environment/bin/python" -c \
+        'import dispatch_installer,sys; raise SystemExit(0 if dispatch_installer.__version__ == sys.argv[1] else 1)' \
+        "$installer_version" 2>/dev/null; then
+        rm -rf "$installer_stage"
+    else
+        installer_backup="$DISPATCH_HOME/installer-venv.previous.$$"
+        [ ! -e "$installer_backup" ] || fail 'temporary installer backup already exists'
+        mv "$installer_environment" "$installer_backup"
+        mv "$installer_stage" "$installer_environment"
+    fi
+else
+    mv "$installer_stage" "$installer_environment"
+fi
+"$installer_environment/bin/dispatch-installer" install \
     --manifest "$manifest" \
     --manifest-sha256 "$MANIFEST_SHA256" \
     --core-wheel "$core_wheel" \
     --yes
 "$DISPATCH_HOME/bin/dispatch" health >/dev/null || fail 'Core health verification failed'
+"$installer_environment/bin/dispatch-installer" verify >/dev/null || fail 'installation verification failed'
+install_complete=1
 
 printf '\nDispatch %s is installed.\n' "$PRODUCT_VERSION"
 printf '1. Start Setup\n2. Skip for Now\n'

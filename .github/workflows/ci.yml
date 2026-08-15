@@ -132,13 +132,16 @@ jobs:
           mkdir -p "$RUNNER_TEMP/dist/core" "$RUNNER_TEMP/dist/installer"
           python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/dist/core" ./dispatch-core
           python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/dist/installer" ./installer
-      - name: Verify exact Core wheel closure
+      - name: Verify exact Core and installer wheel closure
         shell: bash
         run: |
           set -euo pipefail
           core_wheels=("$RUNNER_TEMP"/dist/core/dispatch_core-*.whl)
+          installer_wheels=("$RUNNER_TEMP"/dist/installer/dispatch_installer-*.whl)
           test "${#core_wheels[@]}" -eq 1
+          test "${#installer_wheels[@]}" -eq 1
           python -B scripts/verify-core-wheel "${core_wheels[0]}" --json
+          python -B scripts/verify-installer-wheel "${installer_wheels[0]}" --json
           test -z "$(find "$RUNNER_TEMP/dist" -type f -path '*/plugins/*' -print -quit)"
           test -z "$(find "$RUNNER_TEMP/dist" -type f -name 'dispatch_handbook*.whl' -print -quit)"
       - name: Clean-install built Core wheel
