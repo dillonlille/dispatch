@@ -713,7 +713,7 @@
     "scripts/smoke-install-core-application": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "d93830233072f5665867794a23b1e2aadd66c03038d39795fcd08d809888a878"
+      "sha256": "43b9837835cbb8ee295e2453d2331661635c9eb66ec145f63574c9fbf9ef7f5e"
     },
     "scripts/smoke-stage-core-wheel": {
       "kind": "file",
