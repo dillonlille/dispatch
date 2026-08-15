@@ -35,14 +35,14 @@ def test_installed_health_and_owner_paths_use_standard_envelopes(monkeypatch, tm
     paths = resolved("paths", "handbook")
 
     assert set(health) == ENVELOPE
-    assert health["ok"] is False
-    assert health["status"] == "degraded"
+    assert health["ok"] is True
+    assert health["status"] == "setup_incomplete"
     assert health["data"]["installed"] is True
-    assert health["data"]["operational"] is False
+    assert health["data"]["operational"] is True
     assert health["data"]["browser_manager"]["ready"] is False
     assert health["data"]["collection_manager"]["status"] == "no_collectors"
     assert health["data"]["planes"]["collector"] == "ready"
-    assert health["error"]["code"] == health["data"]["browser_manager"]["error_code"]
+    assert health["error"] is None
     assert set(paths) == ENVELOPE
     owner_data = Path(paths["data"]["paths"]["DISPATCH_HANDBOOK_DATA_ROOT"])
     assert owner_data == tmp_path / "installed-home" / ".dispatch" / "data" / "handbook"
@@ -68,8 +68,11 @@ def test_health_verify_and_browser_doctor_agree_when_installer_runtime_is_absent
     verification = resolved("verify")
     doctor = resolved("browser-doctor")
 
-    assert health["ok"] is verification["ok"] is doctor["ok"] is False
-    assert health["error"]["code"] == verification["error"]["code"] == doctor["error"]["code"]
+    assert health["ok"] is verification["ok"] is True
+    assert doctor["ok"] is False
+    assert health["status"] == verification["status"] == "setup_incomplete"
+    assert health["error"] is verification["error"] is None
+    assert doctor["error"]["code"] == doctor["data"]["browser_manager"]["error_code"]
     assert verification["data"]["package"] == "dispatch-core"
 
 

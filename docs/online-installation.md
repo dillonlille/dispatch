@@ -10,7 +10,7 @@ Production installation remains fail-closed. `packaging/installation-release-man
 
 After final GitHub publication, the user-facing entry point will be a versioned, digest-pinned terminal command. It will retrieve the reviewed bootstrap and approved release artifacts from the future GitHub repository or separately approved dependency hosts. The command and URLs are not generated now.
 
-The private product-source repository is never an installation payload. It contains only Dispatch-owned built-in plugin source; external plugin source lives in separate repositories. Installation must not use `git clone`, a GitHub source ZIP, archive/zipball/tarball endpoints, raw plugin paths, moving `latest` aliases, or release-asset enumeration. One immutable product manifest identifies the exact mandatory Core closure and the optional built-in plugin catalog. Initial installation downloads only mandatory artifacts; `dispatch setup` downloads only selected, manifest-declared built-in plugin artifacts.
+The private product-source repository is never an installation payload. It contains only Dispatch-owned built-in plugin source; external plugin source lives in separate repositories. Installation must not use `git clone`, a GitHub source ZIP, archive/zipball/tarball endpoints, raw plugin paths, moving `latest` aliases, or release-asset enumeration. One immutable product manifest identifies the exact mandatory Core closure and the optional built-in plugin catalog. Core has no mandatory third-party runtime dependency. Initial installation downloads only the installer and Core artifacts; `dispatch setup` downloads selected, manifest-declared built-in plugin artifacts and only the authentication or browser capability dependencies they require.
 
 Setup is a separate future phase. Once installation is complete, the `dispatch` CLI will offer **Start setup process** or **Skip for now**. A skipped setup can later be launched with `dispatch setup`. No setup prompts, credentials, account configuration, or provider automation are implemented by this installer phase.
 
@@ -23,14 +23,14 @@ dispatch-core==1.0.0
 Python >=3.11,<3.14
 ```
 
-Browser Manager adds the pinned runtime dependency:
+Browser Manager adds the setup-time `browser` capability extra:
 
 ```text
 playwright==1.62.0
 Chromium 151.0.7922.34 (Playwright revision 1234)
 ```
 
-Authentication also pins:
+Authentication adds the setup-time `authentication` capability extra:
 
 ```text
 cryptography==48.0.1

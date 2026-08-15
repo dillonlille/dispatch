@@ -8,9 +8,8 @@ from types import MappingProxyType
 import hashlib
 import re
 import secrets
-from typing import Any, Callable, Mapping
+from typing import TYPE_CHECKING, Any, Callable, Mapping
 
-from dispatch_core.authentication import AuthenticationManager, AuthenticationResult
 from dispatch_core.browser_manager import (
     BrowserLeaseRequest,
     BrowserManager,
@@ -21,6 +20,9 @@ from dispatch_core.browser_manager import (
     ManagedLease,
 )
 from dispatch_core.paths import DispatchPaths
+
+if TYPE_CHECKING:
+    from dispatch_core.authentication import AuthenticationManager, AuthenticationResult
 
 from .queue import (
     _confirmed_publication_absence,

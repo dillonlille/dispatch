@@ -13,7 +13,6 @@ import signal
 import time
 from typing import Callable, Protocol
 
-from dispatch_core.authentication import AuthenticationManager
 from dispatch_core.browser_manager import BrowserManager
 from dispatch_core.paths import DispatchPaths
 
@@ -39,7 +38,12 @@ class ProductionManagerFactory:
         needs_browser = any(item.browser_realm is not None for item in self.registrations)
         needs_authentication = any(item.authentication_required for item in self.registrations)
         browser = BrowserManager(self.paths) if needs_browser else None
-        authentication = AuthenticationManager(self.paths) if needs_authentication else None
+        if needs_authentication:
+            from dispatch_core.authentication import AuthenticationManager
+
+            authentication = AuthenticationManager(self.paths)
+        else:
+            authentication = None
         manager = CollectionManager.production(
             self.paths,
             browser_manager=browser,

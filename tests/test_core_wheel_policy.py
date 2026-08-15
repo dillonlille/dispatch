@@ -5,6 +5,7 @@ import csv
 import hashlib
 import io
 import json
+import re
 import subprocess
 import sys
 import zipfile
@@ -51,6 +52,12 @@ def _make_wheel(
             *extra_requires_dist,
         )
     )
+    extras: set[str] = set()
+    for dependency in distribution["optional_requires_dist"]:
+        match = re.search(r'; extra == "([A-Za-z0-9_.-]+)"$', dependency)
+        if match is not None:
+            extras.add(match.group(1))
+    provides_extra = "".join(f"Provides-Extra: {extra}\n" for extra in sorted(extras))
     files.update(
         {
             f"{metadata_root}/METADATA": (
@@ -58,7 +65,7 @@ def _make_wheel(
                 f"Name: {distribution['name']}\n"
                 f"Version: {version}\n"
                 f"Requires-Python: {plan['python_requires']}\n"
-                "Provides-Extra: dev\n"
+                f"{provides_extra}"
                 f"{requires_dist}\n"
             ).encode(),
             f"{metadata_root}/WHEEL": (

@@ -83,21 +83,27 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
         )
 
     if action in {"browser-doctor", "health", "verify"}:
-        from dispatch_core.authentication import AuthenticationError, AuthenticationManager
         from dispatch_core.browser_manager import RealmRegistry
         from dispatch_core.browser_manager.runtime_authority import BrowserRuntimeAuthority
         from dispatch_core.collection_manager import CollectionManager, CollectionStoreError, CollectionTaskStore
 
         inspection = BrowserRuntimeAuthority.production().inspect(full_tree=True)
         authentication: dict[str, Any] | None = None
-        authentication_error: AuthenticationError | None = None
+        authentication_error: Any | None = None
+        authentication_dependency_installed = True
         collection_error: CollectionStoreError | None = None
         if action in {"health", "verify"}:
             try:
-                authentication = AuthenticationManager(paths).status()
-            except AuthenticationError as exc:
-                authentication_error = exc
-        authentication_ready = authentication_error is None
+                from dispatch_core.authentication import AuthenticationError, AuthenticationManager
+            except ImportError:
+                authentication_dependency_installed = False
+                authentication = {"configured": False, "dependency": "not_installed"}
+            else:
+                try:
+                    authentication = AuthenticationManager(paths).status()
+                except AuthenticationError as exc:
+                    authentication_error = exc
+        authentication_ready = authentication_dependency_installed and authentication_error is None
         collection = CollectionManager().status()
         if action in {"health", "verify"}:
             try:
@@ -113,25 +119,21 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
                     "overdue_workers": 0,
                 }
         durable_queue = collection.get("durable_queue", {"ready": True})
-        collection_ready = (
-            collection_error is None
-            and (
-                action not in {"health", "verify"}
-                or durable_queue.get("ready") is True
-            )
+        collection_ready = collection_error is None and (
+            action not in {"health", "verify"} or durable_queue.get("ready") is True
         )
         browser_ready = inspection["ready"] is True
-        ready = browser_ready and authentication_ready and collection_ready
+        setup_ready = browser_ready and authentication_ready
+        core_operational = collection_ready
         configured = inspection["configured"] is True
-        runtime_ready = inspection["runtime_integrity"] == "verified"
         planes = {name: "not_applicable" for name in PLANES}
         planes.update(
             {
                 "registration": "ready",
-                "runtime_integrity": "ready" if runtime_ready else "unavailable",
+                "runtime_integrity": "ready",
                 "configuration": "ready" if configured else "unavailable",
                 "browser": "ready" if browser_ready else "unavailable",
-                "overall": "ready" if ready else "degraded",
+                "overall": "ready" if setup_ready else "setup_incomplete",
             }
         )
         if action in {"health", "verify"}:
@@ -139,10 +141,10 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             planes["collector"] = "ready" if collection_ready else "unavailable"
             planes["authentication"] = "ready" if authentication_ready else "unavailable"
         data: dict[str, Any] = {
-            "installed": inspection["installed"],
+            "installed": True,
             "configured": configured,
-            "ready": ready,
-            "operational": False,
+            "ready": setup_ready,
+            "operational": browser_ready if action == "browser-doctor" else core_operational,
             "planes": planes,
             "browser_manager": {
                 **inspection,
@@ -155,34 +157,23 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
         if action == "verify":
             data["package"] = "dispatch-core"
             data["version"] = "1.0.0"
+
         error = None
-        if authentication_error is not None:
-            error = {
-                "code": authentication_error.code,
-                "message": str(authentication_error),
-            }
-        elif collection_error is not None:
-            error = {
-                "code": collection_error.code,
-                "message": str(collection_error),
-            }
+        if collection_error is not None:
+            error = {"code": collection_error.code, "message": str(collection_error)}
         elif not collection_ready:
             error = {
                 "code": "collection_worker_reconciliation_required",
                 "message": "one or more collection workers require reconciliation",
             }
-        elif not ready:
+        if action == "browser-doctor" and not browser_ready:
             error = {
                 "code": str(inspection["error_code"]),
                 "message": str(inspection["error_message"]),
             }
-        return envelope(
-            ok=ready,
-            action=action,
-            status="ready" if ready else "degraded",
-            data=data,
-            error=error,
-        )
+        ok = browser_ready if action == "browser-doctor" else core_operational
+        status = "ready" if setup_ready else ("setup_incomplete" if ok else "degraded")
+        return envelope(ok=ok, action=action, status=status, data=data, error=error)
 
     raise ValueError(f"unsupported health action: {action}")
 

@@ -51,7 +51,7 @@ jobs:
             dispatch-core/pyproject.toml
             installer/pyproject.toml
       - name: Install component test environments
-        run: python -m pip install "./dispatch-core[dev]" ./installer
+        run: python -m pip install "./dispatch-core[authentication,browser,dev]" ./installer
       - name: Verify repository and installer policies
         run: python -B -m pytest -q -p no:cacheprovider tests installer/tests
       - name: Verify Dispatch Core source
@@ -116,9 +116,22 @@ jobs:
           set -euo pipefail
           core_wheels=("$RUNNER_TEMP"/dist/core/dispatch_core-*.whl)
           python -m venv "$RUNNER_TEMP/core-smoke"
-          "$RUNNER_TEMP/core-smoke/bin/python" -m pip install "${core_wheels[0]}"
-          "$RUNNER_TEMP/core-smoke/bin/python" -c 'import dispatch_core, dispatch_core.authentication, dispatch_core.browser_manager, dispatch_core.collection_manager, dispatch_core.command_interface, dispatch_core.health, dispatch_core.paths'
+          "$RUNNER_TEMP/core-smoke/bin/python" -m pip install --no-deps "${core_wheels[0]}"
+          "$RUNNER_TEMP/core-smoke/bin/python" -c 'import dispatch_core, dispatch_core.browser_manager, dispatch_core.collection_manager, dispatch_core.command_interface, dispatch_core.health, dispatch_core.paths'
           "$RUNNER_TEMP/core-smoke/bin/dispatch-core" --help >/dev/null
+          mkdir -m 700 "$RUNNER_TEMP/core-home" "$RUNNER_TEMP/core-run" "$RUNNER_TEMP/core-config" "$RUNNER_TEMP/core-data" "$RUNNER_TEMP/core-state" "$RUNNER_TEMP/core-cache"
+          site_packages="$("$RUNNER_TEMP/core-smoke/bin/python" -c 'import site; print(site.getsitepackages()[0])')"
+          export HOME="$RUNNER_TEMP/core-home"
+          export XDG_RUNTIME_DIR="$RUNNER_TEMP/core-run"
+          export DISPATCH_HOME="$RUNNER_TEMP/core-home/.dispatch"
+          export DISPATCH_CODE_ROOT="$site_packages"
+          export DISPATCH_CONFIG_ROOT="$RUNNER_TEMP/core-config"
+          export DISPATCH_DATA_ROOT="$RUNNER_TEMP/core-data"
+          export DISPATCH_STATE_ROOT="$RUNNER_TEMP/core-state"
+          export DISPATCH_CACHE_ROOT="$RUNNER_TEMP/core-cache"
+          export DISPATCH_RUNTIME_ROOT="$RUNNER_TEMP/core-run/dispatch"
+          "$RUNNER_TEMP/core-smoke/bin/dispatch-core" health > "$RUNNER_TEMP/core-health.json"
+          "$RUNNER_TEMP/core-smoke/bin/python" -c 'import json, os; p=json.load(open(os.environ["RUNNER_TEMP"] + "/core-health.json")); assert p["ok"] is True and p["status"] == "setup_incomplete" and p["data"]["operational"] is True'
       - name: Clean-install installer and stage the actual Core wheel
         shell: bash
         run: |

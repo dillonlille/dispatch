@@ -57,7 +57,7 @@
         },
         {
           "path": "dispatch_core/collection_manager/__init__.py",
-          "sha256": "0a9735291f135d0272e1c1d6c49223d1954f861faccff769d796fef9f87dd17c",
+          "sha256": "e72ba3542af409e63b474ca0d24b34ac4e3916337c97641f31c668ecf7a4495a",
           "source": "dispatch-core/collection-manager/src/dispatch_core/collection_manager/__init__.py"
         },
         {
@@ -67,12 +67,12 @@
         },
         {
           "path": "dispatch_core/collection_manager/supervisor.py",
-          "sha256": "f489b36ce09435fc4978baac3a8d1e0257065a0c52740e77365d34655be18f36",
+          "sha256": "1782ba65fa62abb4b79e41e5a3e24c31aefc469beb0da51a38e4240743e92cf9",
           "source": "dispatch-core/collection-manager/src/dispatch_core/collection_manager/supervisor.py"
         },
         {
           "path": "dispatch_core/command_interface/__init__.py",
-          "sha256": "5808a256f6cbf584f7b14a889b5ed19e96d6ca64f3453dbfa68a0b4a64ba5e1f",
+          "sha256": "efd5af168cc606e2f30e7bfd157f1b0006c1d89f90693ca0072f517143ba3b27",
           "source": "dispatch-core/command-interface/src/dispatch_core/command_interface/__init__.py"
         },
         {
@@ -82,7 +82,7 @@
         },
         {
           "path": "dispatch_core/health/__init__.py",
-          "sha256": "63ef061bfe8ce08ae316efc78806dab870777da965b5fd2ccf0a065cf756c62d",
+          "sha256": "044b2a3911c9cf9c6f9a7967f676a7954521add5c64e4dbffa501daf048cb97f",
           "source": "dispatch-core/health/src/dispatch_core/health/__init__.py"
         },
         {
@@ -93,6 +93,8 @@
       ],
       "name": "dispatch-core",
       "optional_requires_dist": [
+        "cryptography==48.0.1; extra == \"authentication\"",
+        "playwright==1.62.0; extra == \"browser\"",
         "attrs==26.1.0; extra == \"dev\"",
         "iniconfig==2.3.0; extra == \"dev\"",
         "jsonschema==4.26.0; extra == \"dev\"",
@@ -107,10 +109,7 @@
         "typing_extensions==4.16.0; extra == \"dev\""
       ],
       "pyproject": "dispatch-core/pyproject.toml",
-      "requires_dist": [
-        "cryptography==48.0.1",
-        "playwright==1.62.0"
-      ],
+      "requires_dist": [],
       "source_roots": [
         "dispatch-core/src",
         "dispatch-core/paths/src",

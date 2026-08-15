@@ -6,7 +6,6 @@ import getpass
 import json
 from typing import Any, Sequence
 
-from dispatch_core.authentication import AuthenticationError, AuthenticationManager, DEFAULT_AUTH_REALMS
 from dispatch_core.collection_manager import CollectionStoreError, CollectionTaskStore
 from dispatch_core.collection_manager.queue import utc_now
 from dispatch_core.collection_manager.supervisor import (
@@ -15,6 +14,12 @@ from dispatch_core.collection_manager.supervisor import (
 )
 from dispatch_core.health import envelope, resolved
 from dispatch_core.paths import DispatchPaths, PathConfigError
+
+
+class CommandInterfaceError(RuntimeError):
+    def __init__(self, code: str, message: str) -> None:
+        super().__init__(message)
+        self.code = code
 
 
 def parser() -> argparse.ArgumentParser:
@@ -29,13 +34,13 @@ def parser() -> argparse.ArgumentParser:
     auth = subcommands.add_parser("auth", help="manage private Core authentication credentials")
     auth_actions = auth.add_subparsers(dest="auth_action", required=True)
     auth_status = auth_actions.add_parser("status", help="report bounded credential enrollment status")
-    auth_status.add_argument("--realm", choices=[item.id for item in DEFAULT_AUTH_REALMS])
+    auth_status.add_argument("--realm")
     auth_status.add_argument("--account", default="default")
     auth_enroll = auth_actions.add_parser("enroll", help="enroll credentials through hidden prompts")
-    auth_enroll.add_argument("realm", choices=[item.id for item in DEFAULT_AUTH_REALMS])
+    auth_enroll.add_argument("realm")
     auth_enroll.add_argument("--account", default="default")
     auth_remove = auth_actions.add_parser("remove", help="remove enrolled credentials")
-    auth_remove.add_argument("realm", choices=[item.id for item in DEFAULT_AUTH_REALMS])
+    auth_remove.add_argument("realm")
     auth_remove.add_argument("--account", default="default")
     auth_remove.add_argument("--yes", action="store_true", help="confirm credential removal")
 
@@ -52,24 +57,36 @@ def parser() -> argparse.ArgumentParser:
 
 
 def _auth_result(args: argparse.Namespace) -> dict[str, Any]:
-    paths = DispatchPaths.from_environment()
-    authentication = AuthenticationManager(paths)
-    action = f"auth-{args.auth_action}"
-    if args.auth_action == "status":
-        data = authentication.status(args.realm, args.account)
-    elif args.auth_action == "enroll":
-        policy = next(item for item in DEFAULT_AUTH_REALMS if item.id == args.realm)
-        try:
+    try:
+        from dispatch_core.authentication import AuthenticationError, AuthenticationManager, DEFAULT_AUTH_REALMS
+    except ImportError as exc:
+        raise CommandInterfaceError(
+            "authentication_dependency_missing",
+            "authentication capability dependencies are not installed; run dispatch setup",
+        ) from exc
+
+    try:
+        paths = DispatchPaths.from_environment()
+        authentication = AuthenticationManager(paths)
+        action = f"auth-{args.auth_action}"
+        if args.auth_action == "status":
+            data = authentication.status(args.realm, args.account)
+        elif args.auth_action == "enroll":
+            policy = next((item for item in DEFAULT_AUTH_REALMS if item.id == args.realm), None)
+            if policy is None:
+                raise AuthenticationError("authentication_realm_unknown", "authentication realm is not supported")
             values = {name: getpass.getpass(f"{name}: ") for name in policy.credential_fields}
-        except (EOFError, KeyboardInterrupt) as exc:
-            raise AuthenticationError("authentication_cancelled", "credential enrollment was cancelled") from exc
-        data = authentication.enroll(args.realm, args.account, values)
-    elif args.auth_action == "remove":
-        if not args.yes:
-            raise AuthenticationError("confirmation_required", "credential removal requires --yes")
-        data = authentication.remove(args.realm, args.account)
-    else:  # pragma: no cover - argparse owns this boundary
-        raise AuthenticationError("invalid_auth_request", "unsupported authentication action")
+            data = authentication.enroll(args.realm, args.account, values)
+        elif args.auth_action == "remove":
+            if not args.yes:
+                raise AuthenticationError("confirmation_required", "credential removal requires --yes")
+            data = authentication.remove(args.realm, args.account)
+        else:  # pragma: no cover - argparse owns this boundary
+            raise AuthenticationError("invalid_auth_request", "unsupported authentication action")
+    except (EOFError, KeyboardInterrupt) as exc:
+        raise CommandInterfaceError("authentication_cancelled", "credential enrollment was cancelled") from exc
+    except AuthenticationError as exc:
+        raise CommandInterfaceError(exc.code, str(exc)) from exc
     return envelope(ok=True, action=action, status="ready", data=data)
 
 
@@ -112,8 +129,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _collection_result(args)
         else:
             result = resolved(args.action, getattr(args, "owner", None))
-    except (AuthenticationError, CollectionStoreError, PathConfigError) as exc:
-        code = exc.code if isinstance(exc, (AuthenticationError, CollectionStoreError)) else "invalid_path_configuration"
+    except (CommandInterfaceError, CollectionStoreError, PathConfigError) as exc:
+        code = exc.code if isinstance(exc, (CommandInterfaceError, CollectionStoreError)) else "invalid_path_configuration"
         result = envelope(
             ok=False,
             action=(

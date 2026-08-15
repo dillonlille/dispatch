@@ -21,7 +21,9 @@ def test_runtime_package_plan_matches_pyproject_and_sources() -> None:
     assert distribution["version"] == project["version"]
     assert distribution["requires_dist"] == project["dependencies"]
     assert distribution["optional_requires_dist"] == [
-        f'{dependency}; extra == "dev"' for dependency in project["optional-dependencies"]["dev"]
+        f'{dependency}; extra == "{extra}"'
+        for extra, dependencies in project["optional-dependencies"].items()
+        for dependency in dependencies
     ]
     assert plan["python_requires"] == project["requires-python"]
     assert pyproject["tool"]["setuptools"]["packages"] == [
@@ -71,8 +73,9 @@ def test_browser_runtime_plan_is_pinned_but_not_an_installer_release_manifest() 
         (ROOT / "docs" / "schemas" / "dispatch-browser-runtime-evidence-v1.schema.json").read_text(encoding="utf-8")
     )
 
-    assert f"{plan['automation']['package']}=={plan['automation']['version']}" in (
-        package_plan["distributions"][0]["requires_dist"]
+    assert (
+        f"{plan['automation']['package']}=={plan['automation']['version']}; extra == \"browser\""
+        in package_plan["distributions"][0]["optional_requires_dist"]
     )
     assert plan["browser"]["family"] == "chromium"
     assert plan["download_policy"]["collection_downloads_allowed"] is False

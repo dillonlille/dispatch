@@ -12,11 +12,11 @@ def test_health_command_serializes_the_standard_envelope(monkeypatch, tmp_path, 
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
 
-    assert main(["health"]) == 1
+    assert main(["health"]) == 0
     payload = json.loads(capsys.readouterr().out)
     assert set(payload) == ENVELOPE
     assert payload["action"] == "health"
-    assert payload["status"] == "degraded"
+    assert payload["status"] == "setup_incomplete"
 
 
 def test_browser_doctor_is_bounded_and_does_not_launch_a_browser(monkeypatch, tmp_path, capsys) -> None:

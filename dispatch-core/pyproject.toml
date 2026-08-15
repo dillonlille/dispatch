@@ -7,12 +7,11 @@ name = "dispatch-core"
 version = "1.0.0"
 description = "Feature-oriented portable control plane for Dispatch"
 requires-python = ">=3.11,<3.14"
-dependencies = [
-  "cryptography==48.0.1",
-  "playwright==1.62.0",
-]
+dependencies = []
 
 [project.optional-dependencies]
+authentication = ["cryptography==48.0.1"]
+browser = ["playwright==1.62.0"]
 dev = [
   "attrs==26.1.0",
   "iniconfig==2.3.0",

@@ -54,7 +54,7 @@ def test_health_is_non_mutating_and_uses_standard_envelope() -> None:
         for path in ROOT.rglob("*")
         if path.is_file()
     }
-    assert completed.returncode == 1, completed.stdout + completed.stderr
+    assert completed.returncode == 0, completed.stdout + completed.stderr
     payload = json.loads(completed.stdout)
     assert set(payload) == {
         "ok",
@@ -66,7 +66,7 @@ def test_health_is_non_mutating_and_uses_standard_envelope() -> None:
         "error",
     }
     assert payload["action"] == "health"
-    assert payload["data"]["planes"]["overall"] == "degraded"
+    assert payload["data"]["planes"]["overall"] == "setup_incomplete"
     assert payload["data"]["browser_manager"]["ready"] is False
     assert before == after
 

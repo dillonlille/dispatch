@@ -8,12 +8,12 @@
     ".github/workflows/ci.yml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "68157233dc01696cac6220f3c7a332ef44791315369ed618e8e4c9238d1719a5"
+      "sha256": "e1016fa8dbc17ddef349d8545f5cc32e8e2253de60f0cdc48e9cdc229bee6894"
     },
     ".github/workflows/core-artifact.yml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "d5d1a62ee89ffa7f0024ad78cecb5e4fa149bf0234d452057976b10619ffc321"
+      "sha256": "c001cf40bed377e343acd8fea3bee377d0af0a9ffb74330500b3ec430bb8e57e"
     },
     ".gitignore": {
       "kind": "file",
@@ -28,7 +28,7 @@
     "README.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "0b40e766f00b1cda1c7e79eab3b1c7b56487bf1073368e5a6b9e7f67feb058c1"
+      "sha256": "4da8f627954de38edf376a64beb4725ebdef1f8a1e1df58c7411a32e390a9a8e"
     },
     "SECURITY.md": {
       "kind": "file",
@@ -148,7 +148,7 @@
     "dispatch-core/collection-manager/src/dispatch_core/collection_manager/__init__.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "0a9735291f135d0272e1c1d6c49223d1954f861faccff769d796fef9f87dd17c"
+      "sha256": "e72ba3542af409e63b474ca0d24b34ac4e3916337c97641f31c668ecf7a4495a"
     },
     "dispatch-core/collection-manager/src/dispatch_core/collection_manager/queue.py": {
       "kind": "file",
@@ -158,7 +158,7 @@
     "dispatch-core/collection-manager/src/dispatch_core/collection_manager/supervisor.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "f489b36ce09435fc4978baac3a8d1e0257065a0c52740e77365d34655be18f36"
+      "sha256": "1782ba65fa62abb4b79e41e5a3e24c31aefc469beb0da51a38e4240743e92cf9"
     },
     "dispatch-core/collection-manager/tests/test_collection_manager.py": {
       "kind": "file",
@@ -183,7 +183,7 @@
     "dispatch-core/command-interface/src/dispatch_core/command_interface/__init__.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "5808a256f6cbf584f7b14a889b5ed19e96d6ca64f3453dbfa68a0b4a64ba5e1f"
+      "sha256": "efd5af168cc606e2f30e7bfd157f1b0006c1d89f90693ca0072f517143ba3b27"
     },
     "dispatch-core/command-interface/src/dispatch_core/command_interface/__main__.py": {
       "kind": "file",
@@ -193,7 +193,7 @@
     "dispatch-core/command-interface/tests/test_command_interface.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "75dba2b322cc72419abfcd86a5e4fc3280c9f7bc983b0475f8a27edddd65db35"
+      "sha256": "3a8ed291c64d16919ed68f15e48e0d618ef0ee42fc5ccb42abc9fefe686305ea"
     },
     "dispatch-core/conftest.py": {
       "kind": "file",
@@ -213,12 +213,12 @@
     "dispatch-core/health/src/dispatch_core/health/__init__.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "63ef061bfe8ce08ae316efc78806dab870777da965b5fd2ccf0a065cf756c62d"
+      "sha256": "044b2a3911c9cf9c6f9a7967f676a7954521add5c64e4dbffa501daf048cb97f"
     },
     "dispatch-core/health/tests/test_health.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "33e901776a23bb7617d817d4e0379856e9f1d49ca1c52e2efe866b30f7c7a951"
+      "sha256": "da5aff054d0796321819c96e288d9d939bd96267e3a049e40e468e2351833e0e"
     },
     "dispatch-core/lifecycle/README.md": {
       "kind": "file",
@@ -233,7 +233,7 @@
     "dispatch-core/lifecycle/tests/test_lifecycle.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "7fa7919a1665230a278e9f3d0a6ab254c209ab68c128ca8f58aa4500a14661b2"
+      "sha256": "3bfafbba8f9486e902683be6e9f4da48935143b93fcf5f70af762675673913f4"
     },
     "dispatch-core/lifecycle/verify_component.py": {
       "kind": "file",
@@ -273,7 +273,7 @@
     "dispatch-core/pyproject.toml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "0cd86eed3821ecc40f4135cc507490897fe519edf6a5a55af2ff88bbc0423c60"
+      "sha256": "5818d8ec2a499bb356165913476a563da63f56fc5bb6807b749bb9579469cefd"
     },
     "dispatch-core/scripts/build": {
       "kind": "file",
@@ -308,7 +308,7 @@
     "docs/online-installation.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "3bdacabaf8e914cba58ddcdc795521dcded2b100e6b78870b746324663e2f738"
+      "sha256": "b8be5a713e88290e8a7ff91243490bbba9b71a3919f484515a8a5b8092dcd1b1"
     },
     "docs/path-configuration.md": {
       "kind": "file",
@@ -493,7 +493,7 @@
     "packaging/runtime-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "43837bebadfc2c1405d4935214642b28ef8609e286e377f8e8c7fef7dcea614d"
+      "sha256": "185a780dae50e8a51fca2eb5e39abef3bcc6b2fe91179195bdcba990e52380f4"
     },
     "plugins/handbook/README.md": {
       "kind": "file",
@@ -633,7 +633,7 @@
     "tests/test_core_wheel_policy.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "a3d4a66a26fcb551347e9022fbf7c269bd2260f359ad663330d98c6850dd8d67"
+      "sha256": "1c0ba303cea1acc02ab8e2ade1a4e014e3961e04a71b3326d78af8fb891826da"
     },
     "tests/test_installation_manifest.py": {
       "kind": "file",
@@ -648,7 +648,7 @@
     "tests/test_runtime_package_plan.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "3892a57cc8ca576ed9dc307bdae02f0c9c554c5f530a3b84083b0b345cf52cd7"
+      "sha256": "304f0d7f205225f858e71cd5a0de755e9638b6e62312e20d24ecddccc2cb525d"
     },
     "tests/test_verify_source_export.py": {
       "kind": "file",
