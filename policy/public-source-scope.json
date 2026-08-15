@@ -18,7 +18,7 @@
     ".github/workflows/release.yml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "5be70580f6a40712938ecbfcec0187235e919b16a44ea7edd9546301424e8662"
+      "sha256": "0eec28b1ca9d6a840f014035483a2515e7e61a703887dcf4edeb6ee4d12311b9"
     },
     ".gitignore": {
       "kind": "file",
