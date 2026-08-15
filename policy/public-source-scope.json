@@ -783,7 +783,7 @@
     "tests/test_release_version.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "1bd534e93e593aa0cc543221350625e85d855be63ae3163cfcf1d70a12c2e406"
+      "sha256": "f199aa56ca94f02132e43cbe60d767e8d634fbef423e191838c6134ccc5ae0e9"
     },
     "tests/test_repository_hygiene.py": {
       "kind": "file",

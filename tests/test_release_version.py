@@ -9,6 +9,22 @@ import sys
 ROOT = Path(__file__).resolve().parents[1]
 PREPARE = ROOT / "scripts" / "prepare-release"
 VERIFY = ROOT / "scripts" / "verify-release-readiness"
+ACCEPTANCE_CHECKS = {
+    "literal_staged_install",
+    "interrupted_install_recovery",
+    "same_release_repair",
+    "setup_incomplete_before_setup",
+    "setup_ready_after_setup",
+    "service_restart_persistence",
+    "reboot_persistence",
+    "corrupt_artifact_rejected",
+    "keep_data_uninstall",
+    "reinstall_preserved_data",
+    "confirmed_purge_data",
+    "path_command_ready",
+    "command_collision_rejected",
+    "command_uninstall_removed",
+}
 
 
 def _write(path: Path, content: str) -> None:
@@ -340,3 +356,65 @@ def test_release_phase_rejects_dirty_preparation_without_evidence(tmp_path: Path
     assert payload["status"] == "not_ready"
     assert "release readiness requires a clean worktree" in payload["data"]["issues"]
     assert "release readiness requires exact acceptance evidence" in payload["data"]["issues"]
+
+
+def test_core_manifest_only_change_requires_core_version_bump(tmp_path: Path) -> None:
+    root = _fixture(tmp_path, core_changed=False)
+    manifest_path = root / "dispatch-core/core-manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["features"] = ["new-contract"]
+    manifest_path.write_text(json.dumps(manifest) + "\n", encoding="utf-8")
+    _git(root, "add", str(manifest_path.relative_to(root)))
+    _git(root, "commit", "-m", "change Core compatibility manifest")
+
+    result = _invoke(
+        PREPARE,
+        root,
+        "--product-version",
+        "0.0.8",
+        "--installer-version",
+        "0.1.6",
+        "--core-version",
+        "1.0.0",
+    )
+
+    assert result.returncode == 1
+    assert "core changed and must be newer than 1.0.0" in json.loads(result.stdout)["error"]["message"]
+
+
+def test_release_phase_rejects_acceptance_for_another_commit(tmp_path: Path) -> None:
+    root = _fixture(tmp_path)
+    prepared = _invoke(
+        PREPARE,
+        root,
+        "--product-version",
+        "0.0.8",
+        "--installer-version",
+        "0.1.6",
+        "--core-version",
+        "1.0.1",
+        "--apply",
+    )
+    assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "prepare synthetic release")
+    evidence_path = tmp_path / "acceptance-evidence.json"
+    evidence_path.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "product_version": "0.0.8",
+                "source_commit": "0" * 40,
+                "host": "dispatch-testing",
+                "completed_at": "2026-08-15T00:00:00Z",
+                "checks": {name: True for name in ACCEPTANCE_CHECKS},
+                "contains_secrets": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    result = _invoke(VERIFY, root, "--phase", "release", "--acceptance-evidence", str(evidence_path))
+
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["error"]["code"] == "acceptance_invalid"
