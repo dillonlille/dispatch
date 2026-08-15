@@ -56,10 +56,13 @@ jobs:
           "$RUNNER_TEMP/core-smoke/bin/python" -m pip install --no-deps "${core_wheels[0]}"
           "$RUNNER_TEMP/core-smoke/bin/python" -c 'import dispatch_core, dispatch_core.browser_manager, dispatch_core.collection_manager, dispatch_core.command_interface, dispatch_core.health, dispatch_core.paths'
           "$RUNNER_TEMP/core-smoke/bin/dispatch-core" --help >/dev/null
-          python -m venv "$RUNNER_TEMP/installer-smoke"
-          "$RUNNER_TEMP/installer-smoke/bin/python" -m pip install "${installer_wheels[0]}"
-          "$RUNNER_TEMP/installer-smoke/bin/dispatch-installer" --help >/dev/null
-          "$RUNNER_TEMP/installer-smoke/bin/python" scripts/smoke-stage-core-wheel "${core_wheels[0]}" --work-root "$RUNNER_TEMP/staged-core"
+          application_root="$RUNNER_TEMP/application-smoke"
+          mkdir -p "$application_root/home/.dispatch"
+          chmod 700 "$application_root/home" "$application_root/home/.dispatch"
+          python -m venv "$application_root/home/.dispatch/installer-venv"
+          "$application_root/home/.dispatch/installer-venv/bin/python" -m pip install --no-deps "${installer_wheels[0]}"
+          "$application_root/home/.dispatch/installer-venv/bin/dispatch-installer" --help >/dev/null
+          "$application_root/home/.dispatch/installer-venv/bin/python" scripts/smoke-install-core-application "${core_wheels[0]}" --runtime-plan packaging/runtime-package-plan.json --work-root "$application_root"
           (cd "$RUNNER_TEMP/reviewed" && sha256sum -- *.whl > SHA256SUMS)
       - name: Upload short-lived reviewed artifacts
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

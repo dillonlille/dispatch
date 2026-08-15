@@ -8,12 +8,12 @@
     ".github/workflows/ci.yml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "e1016fa8dbc17ddef349d8545f5cc32e8e2253de60f0cdc48e9cdc229bee6894"
+      "sha256": "775d8363f2adbbec4ab4c642355c08b3b68437af5f6768278d4db23049c2b006"
     },
     ".github/workflows/core-artifact.yml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "c001cf40bed377e343acd8fea3bee377d0af0a9ffb74330500b3ec430bb8e57e"
+      "sha256": "9e4783e43806ce278fd74c9d2eeb8461f2a57488e40dd79ddbf8bbe85e8eccb6"
     },
     ".gitignore": {
       "kind": "file",
@@ -395,6 +395,11 @@
       "origin": "generated_public",
       "sha256": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d"
     },
+    "installer/src/dispatch_installer/application.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "08edc8dbac9940cba1abad5c920dec68ed7bf0e47c892ee3070f93f830bab7d3"
+    },
     "installer/src/dispatch_installer/browser_runtime.py": {
       "kind": "file",
       "origin": "generated_public",
@@ -419,6 +424,11 @@
       "kind": "file",
       "origin": "generated_public",
       "sha256": "aa0b368cabff7f2c16eec599613cc1ddf2963c3877b2ffcc9142e8d5b04b4299"
+    },
+    "installer/src/dispatch_installer/launcher.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "a5b27a7a3940a67b247cf64f1d0986ad57b8fe5d5b2d86fbf2f7adca5c66d4e3"
     },
     "installer/src/dispatch_installer/layout.py": {
       "kind": "file",
@@ -448,7 +458,7 @@
     "installer/tests/test_core_release.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "ed0978afe7b9c6453863d7c0376955f612dbeffa2989be76407a712028e79c75"
+      "sha256": "2ae105e1bfd19589b94f20c68fc7aac7308fa022664571f015d3d964e1f76e3c"
     },
     "installer/tests/test_download.py": {
       "kind": "file",
@@ -488,7 +498,7 @@
     "packaging/installer-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "8e2d848eccba7e453e2de61409e30c77de767dab99f33047d1e3f4037355d4b8"
+      "sha256": "536f9a71314607fcda10f3791012818580be2347e02f0da55eb5723a31528431"
     },
     "packaging/runtime-package-plan.json": {
       "kind": "file",
@@ -609,6 +619,11 @@
       "kind": "file",
       "origin": "generated_public",
       "sha256": "760c5e90f4a98baafb4b635c56ec40dec91c73e774d1aa4e66c4dac5843f2968"
+    },
+    "scripts/smoke-install-core-application": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "d93830233072f5665867794a23b1e2aadd66c03038d39795fcd08d809888a878"
     },
     "scripts/smoke-stage-core-wheel": {
       "kind": "file",

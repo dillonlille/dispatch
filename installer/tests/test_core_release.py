@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 
 import dispatch_installer.doctor as doctor_module
+from dispatch_installer.application import install_core_application
 from dispatch_installer.core_release import (
     activate_core_release,
     sha256_file,
@@ -399,3 +400,31 @@ def test_failed_replacement_does_not_change_active_selector(tmp_path: Path) -> N
         stage_core_wheel(layout, damaged, expected_sha256=sha256_file(damaged), expected_version="1.0.0")
 
     assert layout.active_release_selector.read_bytes() == original
+
+
+def test_core_application_install_publishes_launcher_and_activates_release(tmp_path: Path) -> None:
+    layout = layout_for(tmp_path)
+    python = layout.dispatch_home / "installer-venv" / "bin" / "python"
+    python.parent.mkdir(parents=True, mode=0o700)
+    python.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    python.chmod(0o700)
+    wheel = make_wheel(tmp_path / "dispatch_core-1.0.0-py3-none-any.whl")
+    with zipfile.ZipFile(wheel) as archive:
+        package_digest = hashlib.sha256(archive.read("dispatch_core/__init__.py")).hexdigest()
+
+    installed = install_core_application(
+        layout,
+        wheel,
+        expected_sha256=sha256_file(wheel),
+        expected_version="1.0.0",
+        expected_package_files={"dispatch_core/__init__.py": package_digest},
+        expected_requires_dist={"cryptography==48.0.1", "playwright==1.62.0"},
+        launcher_python=python,
+    )
+
+    launcher = layout.bin / "dispatch"
+    assert installed["status"] == "installed"
+    assert installed["setup_required"] is True
+    assert stat.S_IMODE(launcher.stat().st_mode) == 0o700
+    assert str(python) in launcher.read_text(encoding="utf-8")
+    assert inspect_installation(layout)["checks"]["core"]["status"] == "ready"

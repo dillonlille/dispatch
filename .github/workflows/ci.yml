@@ -140,7 +140,10 @@ jobs:
           installer_wheels=("$RUNNER_TEMP"/dist/installer/dispatch_installer-*.whl)
           test "${#core_wheels[@]}" -eq 1
           test "${#installer_wheels[@]}" -eq 1
-          python -m venv "$RUNNER_TEMP/installer-smoke"
-          "$RUNNER_TEMP/installer-smoke/bin/python" -m pip install "${installer_wheels[0]}"
-          "$RUNNER_TEMP/installer-smoke/bin/dispatch-installer" --help >/dev/null
-          "$RUNNER_TEMP/installer-smoke/bin/python" scripts/smoke-stage-core-wheel "${core_wheels[0]}" --work-root "$RUNNER_TEMP/staged-core"
+          application_root="$RUNNER_TEMP/application-smoke"
+          mkdir -p "$application_root/home/.dispatch"
+          chmod 700 "$application_root/home" "$application_root/home/.dispatch"
+          python -m venv "$application_root/home/.dispatch/installer-venv"
+          "$application_root/home/.dispatch/installer-venv/bin/python" -m pip install --no-deps "${installer_wheels[0]}"
+          "$application_root/home/.dispatch/installer-venv/bin/dispatch-installer" --help >/dev/null
+          "$application_root/home/.dispatch/installer-venv/bin/python" scripts/smoke-install-core-application "${core_wheels[0]}" --runtime-plan packaging/runtime-package-plan.json --work-root "$application_root"
