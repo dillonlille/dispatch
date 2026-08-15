@@ -36,7 +36,10 @@ def _success(_context: CollectionContext) -> CollectionReceipt:
     return CollectionReceipt(CollectionDisposition.PUBLISHED, "supervised-1", 1, True)
 
 
-def _sleep(_context: CollectionContext) -> CollectionReceipt:
+def _sleep(context: CollectionContext) -> CollectionReceipt:
+    started_file = context.parameters.get("started-file")
+    if isinstance(started_file, str):
+        Path(started_file).write_text("started", encoding="utf-8")
     time.sleep(5)
     return CollectionReceipt(CollectionDisposition.PUBLISHED, "late-1", 1, True)
 
@@ -288,12 +291,13 @@ def test_keyboard_interrupt_still_cleans_and_reconciles_worker(tmp_path: Path) -
 
 def test_heartbeats_do_not_prevent_hard_stop_request(tmp_path: Path) -> None:
     store = _store(tmp_path)
-    task_id = _enqueue(store)
+    started_file = tmp_path / "execution-started"
+    task_id = _enqueue(store, {"started-file": str(started_file)})
     execution_seen_at: float | None = None
 
     def stop_after_execution() -> bool:
         nonlocal execution_seen_at
-        if store.get(task_id).execution_started and execution_seen_at is None:
+        if started_file.is_file() and execution_seen_at is None:
             execution_seen_at = time.monotonic()
         return execution_seen_at is not None and time.monotonic() - execution_seen_at >= 0.2
 

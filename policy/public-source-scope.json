@@ -173,7 +173,7 @@
     "dispatch-core/collection-manager/tests/test_supervisor.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "3322526f63d66fad7b2d45d5a42ba77618acdb8d03eedf344e3ce62f3fafe453"
+      "sha256": "ed93df516f16177cbf8a524de1580ef0dab472402865b778e43af164f848bfd2"
     },
     "dispatch-core/command-interface/README.md": {
       "kind": "file",
