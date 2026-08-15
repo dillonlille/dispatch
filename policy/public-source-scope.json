@@ -393,7 +393,7 @@
     "installer/deploy/cloudflare/install.sh.in": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "31269282cd8595b1fdbc022ad50079ff82aaa0f2bfe15e75b7f4597a27889042"
+      "sha256": "30910c33bcf0fca2e5e8eaad92317d2ce1d0576c5ec953b49a4c725e7f828c63"
     },
     "installer/deploy/cloudflare/public/_headers": {
       "kind": "file",
@@ -723,7 +723,7 @@
     "tests/test_bootstrap_template.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "480b4f8790a68ef0b6f15aadbff6d153f780d4b9dd39fea7e90dac9aa5de2147"
+      "sha256": "7781b3128738b582750636921edf14e95c2f80262c17d63686593db118960e52"
     },
     "tests/test_core_wheel_policy.py": {
       "kind": "file",

@@ -66,7 +66,7 @@ PY
 python3 -m venv "$installer_stage"
 "$installer_stage/bin/python" -m pip install --disable-pip-version-check --no-deps "$installer_wheel" >/dev/null
 plan="$work/plan.json"
-if ! "$installer_stage/bin/dispatch-installer" plan --manifest "$manifest" --manifest-sha256 "$MANIFEST_SHA256" >"$plan"; then
+if ! "$installer_stage/bin/python" -m dispatch_installer plan --manifest "$manifest" --manifest-sha256 "$MANIFEST_SHA256" >"$plan"; then
     fail 'product release is not ready'
 fi
 installer_version="$(PLAN="$plan" python3 -c 'import json,os; print(json.load(open(os.environ["PLAN"]))["data"]["manifest"]["installer_version"])')"
@@ -108,13 +108,13 @@ PY
 else
     mv "$installer_stage" "$installer_environment"
 fi
-"$installer_environment/bin/dispatch-installer" install \
+"$installer_environment/bin/python" -m dispatch_installer install \
     --manifest "$manifest" \
     --manifest-sha256 "$MANIFEST_SHA256" \
     --core-wheel "$core_wheel" \
     --yes
 "$DISPATCH_HOME/bin/dispatch" health >/dev/null || fail 'Core health verification failed'
-"$installer_environment/bin/dispatch-installer" verify >/dev/null || fail 'installation verification failed'
+"$installer_environment/bin/python" -m dispatch_installer verify >/dev/null || fail 'installation verification failed'
 install_complete=1
 
 printf '\nDispatch %s is installed.\n' "$PRODUCT_VERSION"

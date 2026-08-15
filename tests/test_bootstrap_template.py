@@ -28,6 +28,8 @@ def test_bootstrap_template_is_fail_closed_and_shell_valid(tmp_path: Path) -> No
     assert "--max-redirs 0" in rendered
     assert "1. Start Setup" in rendered
     assert "2. Skip for Now" in rendered
+    assert '"$installer_environment/bin/python" -m dispatch_installer install' in rendered
+    assert "/bin/dispatch-installer" not in rendered
     assert "| sh" not in rendered and "| bash" not in rendered
 
 
