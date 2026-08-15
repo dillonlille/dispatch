@@ -20,7 +20,7 @@ Browser Manager is the Core-owned boundary for temporary browser processes and p
 - retained in-process ownership and automatic close retry when durable state temporarily fails;
 - deadline-bounded context/driver cleanup followed by identity-checked process-tree termination;
 - safe status data reporting process **tracking** state, without claiming liveness or disclosing PID, endpoint, or profile;
-- a non-launching `dispatch-core browser-doctor` that validates the active installer selector, installation receipt, executable, complete tree manifest, dependency and sandbox assertions, and install-time probe result.
+- a non-launching `dispatch-core browser-doctor` that validates the active installer selector, installation receipt, executable, complete tree manifest including each member's bound mode, dependency and sandbox assertions, and install-time probe result.
 
 ## Runtime dependency
 

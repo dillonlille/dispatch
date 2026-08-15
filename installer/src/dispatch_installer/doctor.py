@@ -6,6 +6,7 @@ import re
 import stat
 from pathlib import Path
 
+from .browser_runtime import inspect_browser_runtime
 from .core_release import verify_core_release
 from .layout import InstallLayout, InstallerError
 
@@ -72,12 +73,7 @@ def inspect_installation(layout: InstallLayout) -> dict:
             core = {"status": "unsafe", "selector": str(selector), "release_id": None, "error": str(exc)[:512]}
     checks["core"] = core
 
-    browser = layout.browser_selector
-    checks["browser_authority"] = {
-        "status": "present_unverified" if browser.is_file() and not browser.is_symlink() else "missing",
-        "selector": str(browser),
-        "generation_root": str(layout.browser_generations),
-    }
+    checks["browser_authority"] = inspect_browser_runtime(layout)
     unsafe = any(check.get("status") == "unsafe" for check in checks.values())
     ready = (
         not unsafe

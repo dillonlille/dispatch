@@ -68,7 +68,7 @@ _RECEIPT_KEYS = frozenset(
     }
 )
 _TREE_KEYS = frozenset({"schema_version", "files"})
-_TREE_FILE_KEYS = frozenset({"size", "sha256"})
+_TREE_FILE_KEYS = frozenset({"size", "sha256", "mode"})
 
 
 @dataclass(frozen=True)
@@ -547,13 +547,16 @@ class BrowserRuntimeAuthority:
                 raise BrowserManagerError("browser_tree_invalid", "browser tree member declaration is invalid")
             size = entry.get("size")
             digest = entry.get("sha256")
+            mode = entry.get("mode")
             if not isinstance(size, int) or isinstance(size, bool) or size < 0:
                 raise BrowserManagerError("browser_tree_invalid", "browser tree member size is invalid")
             if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
                 raise BrowserManagerError("browser_tree_invalid", "browser tree member digest is invalid")
+            if mode not in {"0444", "0555", "0644", "0755"}:
+                raise BrowserManagerError("browser_tree_invalid", "browser tree member mode is invalid")
             member = generation_root / relative
             details = _secure_file(member, generation_root, self.__policy.owner_uid, "browser tree member")
-            if details.st_size != size or _sha256(member) != digest:
+            if details.st_size != size or _sha256(member) != digest or stat.S_IMODE(details.st_mode) != int(mode, 8):
                 raise BrowserManagerError("browser_tree_mismatch", "browser tree member does not match manifest")
             expected_paths.add(relative.as_posix())
 

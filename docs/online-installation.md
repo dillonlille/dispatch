@@ -44,7 +44,7 @@ Production Chromium must run with its sandbox enabled. On Linux hosts that restr
 
 `packaging/browser-runtime-plan.json` records the current development pin and executable proof. It remains explicitly incomplete until approved per-platform artifact URLs, archive sizes, SHA-256 digests, signature policy, and operating-system dependency receipts exist.
 
-After all checks pass, the installer writes the generation's `tree-manifest.json` and `installation-receipt.json`, then atomically publishes `/etc/dispatch/browser-runtime-active.json`. Browser Manager only reads and validates those root-owned files. It never downloads, extracts, activates, repairs, rolls back, or uninstalls browser assets and never executes from Hermes's or Playwright's shared cache.
+After all checks pass, the installer binds the separately generated local `installation-evidence.json` into the generation's mode-aware `tree-manifest.json`, writes `installation-receipt.json`, retains the prior verified selector when present, and then atomically publishes `/etc/dispatch/browser-runtime-active.json`. Browser Manager only reads and validates those root-owned files. It never downloads, extracts, activates, repairs, rolls back, or uninstalls browser assets and never executes from Hermes's or Playwright's shared cache.
 
 ## Download phases
 

@@ -64,6 +64,12 @@ def test_runtime_package_plan_matches_pyproject_and_sources() -> None:
 def test_browser_runtime_plan_is_pinned_but_not_an_installer_release_manifest() -> None:
     plan = json.loads((ROOT / "packaging" / "browser-runtime-plan.json").read_text(encoding="utf-8"))
     package_plan = json.loads((ROOT / "packaging" / "runtime-package-plan.json").read_text(encoding="utf-8"))
+    generation_schema = json.loads(
+        (ROOT / "docs" / "schemas" / "dispatch-browser-runtime-generation-v1.schema.json").read_text(encoding="utf-8")
+    )
+    evidence_schema = json.loads(
+        (ROOT / "docs" / "schemas" / "dispatch-browser-runtime-evidence-v1.schema.json").read_text(encoding="utf-8")
+    )
 
     assert f"{plan['automation']['package']}=={plan['automation']['version']}" in (
         package_plan["distributions"][0]["requires_dist"]
@@ -72,4 +78,37 @@ def test_browser_runtime_plan_is_pinned_but_not_an_installer_release_manifest() 
     assert plan["download_policy"]["collection_downloads_allowed"] is False
     assert plan["sandbox"]["production_required"] is True
     assert plan["sandbox"]["silent_no_sandbox_fallback_allowed"] is False
+    assert plan["installer_foundation"] == {
+        "local_evidence_schema": "docs/schemas/dispatch-browser-runtime-evidence-v1.schema.json",
+        "generation_manifest_schema": "docs/schemas/dispatch-browser-runtime-generation-v1.schema.json",
+        "implemented_operations": [
+            "validate_digest_bound_generation_manifest",
+            "stage_exact_immutable_generation",
+            "verify_complete_generation_tree",
+            "activate_atomic_selector",
+            "retain_previous_selector",
+            "rollback_selector",
+        ],
+        "privileged_helper_ready": False,
+        "production_artifacts_available": False,
+        "synthetic_path_tests_only": True,
+    }
+    assert (ROOT / plan["installer_foundation"]["generation_manifest_schema"]).is_file()
+    assert (ROOT / plan["installer_foundation"]["local_evidence_schema"]).is_file()
+    assert generation_schema["additionalProperties"] is False
+    assert set(generation_schema["required"]) == {
+        "schema_version",
+        "generation",
+        "installer_release",
+        "platform",
+        "playwright",
+        "browser",
+        "sandbox",
+        "files",
+    }
+    assert evidence_schema["additionalProperties"] is False
+    assert evidence_schema["properties"]["os_dependencies"]["properties"]["verified"]["const"] is True
+    assert evidence_schema["properties"]["sandbox"]["properties"]["verified"]["const"] is True
+    assert evidence_schema["properties"]["launch_probe"]["properties"]["passed"]["const"] is True
+    assert plan["runtime_consumer_contract"]["tree_manifest_binds_member_modes"] is True
     assert plan["release_artifact_manifest"]["ready"] is False

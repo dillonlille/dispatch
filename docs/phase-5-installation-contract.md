@@ -44,6 +44,10 @@ The `dispatch-installer==0.1.0` component provides:
 13. receipt-driven, non-mutating uninstall planning;
 14. explicitly confirmed keep-data removal and purge, with lifecycle locking, secret-free journals, idempotence, and interruption recovery;
 15. release-manifest declarations for the implemented user-scope uninstaller and the still-incomplete privileged browser remover.
+16. a closed, digest-bound browser-generation manifest contract plus a separately digest-bound local installation-evidence contract for Ubuntu 24.04 x86-64;
+17. exact synthetic-path browser tree staging with owner, link, type, mode, size, digest, member-set, and expanded-size enforcement;
+18. immutable generation receipts and complete tree manifests consumed by Browser Manager, including member-mode binding and a generation-bound copy of local dependency, sandbox, and launch-probe evidence;
+19. atomic active and previous browser selectors with candidate verification before activation and reversible selector rollback.
 
 The selected user home, `DISPATCH_HOME` parent, and transient runtime parent must already exist, belong to the invoking user, and not be group- or world-writable. Core artifacts must be absolute, unaliased, singly linked, user-owned regular files without group/world write permission. Persistent and transient primary roots must not overlap.
 
@@ -69,7 +73,7 @@ The installer must not collect credentials, account identifiers, provider config
 
 ## Current fail-closed boundary
 
-`packaging/installation-release-manifest.json` intentionally remains `ready: false`, and schema version 1 rejects every `ready: true` declaration. Approved online URLs, artifact sizes/hashes, signature authority, complete Playwright/Chromium generation payload, Ubuntu dependency receipt, AppArmor/sandbox receipt, privileged browser install/uninstall helper, launcher, service shutdown integration, and final bootstrap are outstanding. Therefore the installer does not expose a production `install` command and doctor cannot report the overall installation as ready.
+`packaging/installation-release-manifest.json` intentionally remains `ready: false`, and schema version 1 rejects every `ready: true` declaration. The browser-generation transaction foundation currently accepts only an already assembled, exact manifest-bound source tree plus separately generated, digest-bound local installation evidence, and is exercised only beneath isolated synthetic authority paths. Approved online URLs, artifact sizes/hashes, archive extraction, signature authority, the real Playwright/Chromium generation payload, Ubuntu dependency and AppArmor probe producers, a production privileged helper, browser quiescence/service integration, privileged removal, launcher, and final bootstrap are outstanding. Therefore the installer does not expose a production `install` command and doctor cannot report the overall installation as ready.
 
 The implemented user-scope uninstaller preserves configuration and durable data by default and requires `--purge --yes` to remove them. It preserves Hermes and shared operating-system packages in every mode. It fails closed before mutation when root-owned browser authority, non-quiescent runtime state, invalid receipts, invalid releases, symlinks, hard links, ownership changes, or mount-boundary crossings are present. The exact contract is documented in [`uninstallation.md`](uninstallation.md).
 

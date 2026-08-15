@@ -47,7 +47,7 @@
         },
         {
           "path": "dispatch_core/browser_manager/runtime_authority.py",
-          "sha256": "c11cf8ca56589bfb0c88e202eb150426b9752032c40b22a92225989d895a4363",
+          "sha256": "77ea2a57289a2c7909d85f915f66b90c60ac5d5d9f7a098ca83b2f021c3f0bd5",
           "source": "dispatch-core/browser-manager/src/dispatch_core/browser_manager/runtime_authority.py"
         },
         {
@@ -92,11 +92,6 @@
         }
       ],
       "name": "dispatch-core",
-      "pyproject": "dispatch-core/pyproject.toml",
-      "requires_dist": [
-        "cryptography==48.0.1",
-        "playwright==1.62.0"
-      ],
       "optional_requires_dist": [
         "attrs==26.1.0; extra == \"dev\"",
         "iniconfig==2.3.0; extra == \"dev\"",
@@ -110,6 +105,11 @@
         "referencing==0.37.0; extra == \"dev\"",
         "rpds-py==2026.6.3; extra == \"dev\"",
         "typing_extensions==4.16.0; extra == \"dev\""
+      ],
+      "pyproject": "dispatch-core/pyproject.toml",
+      "requires_dist": [
+        "cryptography==48.0.1",
+        "playwright==1.62.0"
       ],
       "source_roots": [
         "dispatch-core/src",

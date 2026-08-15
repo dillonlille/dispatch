@@ -30,6 +30,21 @@
     "collection_downloads_allowed": false,
     "online_required": true
   },
+  "installer_foundation": {
+    "local_evidence_schema": "docs/schemas/dispatch-browser-runtime-evidence-v1.schema.json",
+    "generation_manifest_schema": "docs/schemas/dispatch-browser-runtime-generation-v1.schema.json",
+    "implemented_operations": [
+      "validate_digest_bound_generation_manifest",
+      "stage_exact_immutable_generation",
+      "verify_complete_generation_tree",
+      "activate_atomic_selector",
+      "retain_previous_selector",
+      "rollback_selector"
+    ],
+    "privileged_helper_ready": false,
+    "production_artifacts_available": false,
+    "synthetic_path_tests_only": true
+  },
   "release_artifact_manifest": {
     "ready": false,
     "required_before_installer_acceptance": [
@@ -57,6 +72,7 @@
       "uninstall"
     ],
     "playwright_control_files_are_generation_members": true,
+    "tree_manifest_binds_member_modes": true,
     "quiesce_core_before_generation_mutation_or_removal": true,
     "receipt_schema_version": 1,
     "sandbox_policy_id": "dispatch-chromium-apparmor-v1"

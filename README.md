@@ -40,6 +40,7 @@ The GitHub workflows under `.github/workflows/` build only explicit project root
 - Dispatch Plugin Standard v1, schema, and public plugin-development guidance;
 - a standard-library installer foundation using `${HOME}/.dispatch` for per-user Dispatch code and mutable roots;
 - digest-pinned installation-manifest, approved-GitHub download, transactional Core release, doctor, verification, and receipt-bound user-scope uninstall primitives;
+- a closed, digest-bound browser-generation manifest plus synthetic-path immutable staging, full-tree verification, atomic active/previous selectors, and reversible selector rollback primitives owned by the installer;
 - a pinned Core and browser runtime package plan for the future production install orchestration;
 - independently packaged, deferred Handbook plugin source and one explicitly declared fictional demo fixture;
 - fail-closed source-scope, provenance, path, fixture, configuration, and secret checks;
@@ -49,7 +50,7 @@ No domain collectors, Companion Bridge, Slack delivery, enabled schedules, produ
 
 ## Current readiness
 
-The current scope supports the `${HOME}/.dispatch` per-user layout, feature-oriented Core source tests, deterministic Core source builds, encrypted Authentication storage, bounded Amazon/Paycom login orchestration, Browser Manager lifecycle infrastructure, durable Collection Manager orchestration with bounded worker-process supervision, plugin conformance checks, exact Core-wheel closure verification, and source privacy verification. Hermes is assumed to be preinstalled and is not inspected, configured, or removed. Setup is deferred to a future `dispatch setup` flow. The source does **not** yet provide a published GitHub bootstrap, complete release artifacts, authenticated private-release retrieval, authorized live-account Authentication acceptance, privileged browser generation installation/removal, persistent OS service registration, upgrade or rollback control, or clean-machine acceptance.
+The current scope supports the `${HOME}/.dispatch` per-user layout, feature-oriented Core source tests, deterministic Core source builds, encrypted Authentication storage, bounded Amazon/Paycom login orchestration, Browser Manager lifecycle infrastructure, durable Collection Manager orchestration with bounded worker-process supervision, plugin conformance checks, exact Core-wheel closure verification, source privacy verification, and the non-deploying browser-generation transaction foundation described above. Hermes is assumed to be preinstalled and is not inspected, configured, or removed. Setup is deferred to a future `dispatch setup` flow. The source does **not** yet provide a published GitHub bootstrap, complete release artifacts, authenticated private-release retrieval, authorized live-account Authentication acceptance, the production privileged browser helper and real sandbox/dependency probes, persistent OS service registration, complete product upgrade/rollback orchestration, or clean-machine acceptance.
 
 ## Source, data, and privacy boundaries
 

@@ -108,22 +108,27 @@ def install_fixture(tmp_path: Path) -> tuple[BrowserRuntimeAuthority, dict[str, 
             "chrome-linux64/chrome": {
                 "size": executable.stat().st_size,
                 "sha256": digest(executable),
+                "mode": "0755",
             },
             "chrome-linux64/resources.pak": {
                 "size": resource.stat().st_size,
                 "sha256": digest(resource),
+                "mode": "0644",
             },
             "python/playwright/__init__.py": {
                 "size": playwright_module.stat().st_size,
                 "sha256": digest(playwright_module),
+                "mode": "0644",
             },
             "python/playwright/driver/node": {
                 "size": driver_executable.stat().st_size,
                 "sha256": digest(driver_executable),
+                "mode": "0755",
             },
             "python/playwright/driver/package/cli.js": {
                 "size": driver_cli.stat().st_size,
                 "sha256": digest(driver_cli),
+                "mode": "0644",
             },
         },
     }
