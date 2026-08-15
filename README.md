@@ -1,6 +1,6 @@
 # Dispatch
 
-Dispatch is a clean-installable, per-user Linux product. This public product-source repository contains Dispatch Core, the installer, and independently packaged Dispatch-owned built-in plugin source. External plugins live in separate repositories. The current Core-only product release is `0.0.6`.
+Dispatch is a clean-installable, per-user Linux product. This public product-source repository contains Dispatch Core, the installer, and independently packaged Dispatch-owned built-in plugin source. External plugins live in separate repositories. The current Core-only product release is `0.0.7`.
 
 The repository uses GitHub-hosted source verification. Product installation and lifecycle acceptance run on a separate clean test system; browser and authorized-account acceptance remain future capability gates.
 
@@ -46,11 +46,11 @@ The GitHub workflows under `.github/workflows/` build only explicit project root
 - fail-closed source-scope, provenance, path, fixture, configuration, and secret checks;
 - focused source, lifecycle, Authentication, Browser Manager, and Collection Manager tests.
 
-No domain collectors, Companion Bridge, Slack delivery, enabled schedules, production documents, or private Handbook content are included. Collection Manager can durably queue, schedule, and supervise registered collectors, but there are currently zero registered collectors and zero configured schedules. The `0.0.6` release catalog is intentionally Core-only; Handbook proves the generic discovery contract in source and installed-wheel tests but is not offered until production index onboarding exists. Authorized live-account acceptance remains pending.
+No domain collectors, Companion Bridge, Slack delivery, enabled schedules, production documents, or private Handbook content are included. Collection Manager can durably queue, schedule, and supervise registered collectors, but there are currently zero registered collectors and zero configured schedules. The `0.0.7` release catalog is intentionally Core-only; Handbook proves the generic discovery contract in source and installed-wheel tests but is not offered until production index onboarding exists. Authorized live-account acceptance remains pending.
 
 ## Current readiness
 
-The `0.0.6` release provides the `${HOME}/.dispatch` per-user layout, digest-pinned Core and installer artifacts, an internal stable launcher, a receipt-owned `dispatch` command on the ordinary user path, user-level service registration, durable install receipts, resumable installation, Core-only setup, exact wheel-closure verification, clean-machine lifecycle acceptance, and the public installation bootstrap. The installer refuses to overwrite an unrelated `dispatch` command and removes the public command only when its receipt and exact bytes verify. Hermes is assumed to be preinstalled and is not inspected, configured, or removed. Authorized live-account Authentication acceptance, browser-capable release composition, optional production plugins, and general cross-version rollback are not part of this Core-only release.
+The `0.0.7` release provides the `${HOME}/.dispatch` per-user layout, digest-pinned Core and installer artifacts, an internal stable launcher, a receipt-owned `dispatch` command on the ordinary user path, user-level service registration, durable install receipts, resumable installation, Core-only setup, exact wheel-closure verification, clean-machine lifecycle acceptance, and the public installation bootstrap. The installer refuses to overwrite an unrelated `dispatch` command and removes the public command only when its receipt and exact bytes verify. Hermes is assumed to be preinstalled and is not inspected, configured, or removed. Authorized live-account Authentication acceptance, browser-capable release composition, optional production plugins, and general cross-version rollback are not part of this Core-only release.
 
 ## Source, data, and privacy boundaries
 

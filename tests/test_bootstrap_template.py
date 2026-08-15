@@ -12,10 +12,10 @@ PUBLIC = ROOT / "installer" / "deploy" / "cloudflare" / "public" / "install.sh"
 def test_bootstrap_template_is_fail_closed_and_shell_valid(tmp_path: Path) -> None:
     content = TEMPLATE.read_text(encoding="utf-8")
     rendered = (
-        content.replace("@PRODUCT_VERSION@", "0.0.6")
-        .replace("@MANIFEST_URL@", "https://dispatch.dillonlille.com/releases/0.0.6/installation-release-manifest.json")
+        content.replace("@PRODUCT_VERSION@", "0.0.7")
+        .replace("@MANIFEST_URL@", "https://dispatch.dillonlille.com/releases/0.0.7/installation-release-manifest.json")
         .replace("@MANIFEST_SHA256@", "0" * 64)
-        .replace("@INSTALLER_URL@", "https://dispatch.dillonlille.com/releases/0.0.6/dispatch_installer-0.1.5-py3-none-any.whl")
+        .replace("@INSTALLER_URL@", "https://dispatch.dillonlille.com/releases/0.0.7/dispatch_installer-0.1.5-py3-none-any.whl")
         .replace("@INSTALLER_SIZE@", "1")
         .replace("@INSTALLER_SHA256@", "1" * 64)
     )

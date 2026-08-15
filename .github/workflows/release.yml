@@ -87,7 +87,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP"/release/* \
+          gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/release/install.sh" \
             --repo "$GITHUB_REPOSITORY" \
             --verify-tag \
             --title "Dispatch $GITHUB_REF_NAME" \
