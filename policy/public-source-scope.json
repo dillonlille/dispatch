@@ -18,7 +18,7 @@
     ".github/workflows/release.yml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "f6ebc34ba5921bd5122a612487735a52d869a23891726bb291640dbf7d50d995"
+      "sha256": "0ca03a9ce48af39642c33e64f93065aa4354d66e36f99dacaa4fc3eb1aab9f8e"
     },
     ".gitignore": {
       "kind": "file",
@@ -553,7 +553,7 @@
     "packaging/installer-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "b23531b98be74c084b0ed947ae0ef76a0cc93d2d32e14a9c570b7093b19eeeb8"
+      "sha256": "829ac3d0b5e9fb34fa6fcaf7a4a90cf209ca100f6159c377e826a0d8843cb684"
     },
     "packaging/runtime-package-plan.json": {
       "kind": "file",
@@ -683,7 +683,7 @@
     "scripts/finalize-installation-release": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "528bb6f91f0363f67b3462ae0b28601e4b120b90ce2940eb9368eafdeec0a59c"
+      "sha256": "987d193557ea2da127ffc9cb4378788da18a5e263f98b12b221f6f2ea2d7cd8e"
     },
     "scripts/render-bootstrap": {
       "kind": "file",
@@ -738,7 +738,7 @@
     "tests/test_installer_package_plan.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "acc9ef4ec50f6c6077f457595134e9e19ef8110d48731acf10d857da900a1823"
+      "sha256": "6ba13d4fb84276914c109b9db659f01837c2697dfbbabc8185d1f6ae7b76beb1"
     },
     "tests/test_runtime_package_plan.py": {
       "kind": "file",

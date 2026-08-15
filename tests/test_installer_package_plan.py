@@ -15,7 +15,7 @@ def test_installer_package_plan_matches_source_and_metadata() -> None:
 
     assert plan["schema_version"] == 1
     assert plan["online_only"] is True
-    assert plan["production_install_ready"] is False
+    assert plan["production_install_ready"] is True
     assert plan["distribution"]["name"] == project["name"]
     assert plan["distribution"]["version"] == project["version"]
     assert plan["distribution"]["python_requires"] == project["requires-python"]

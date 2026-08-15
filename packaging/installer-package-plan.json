@@ -90,6 +90,6 @@
     }
   ],
   "online_only": true,
-  "production_install_ready": false,
+  "production_install_ready": true,
   "schema_version": 1
 }
