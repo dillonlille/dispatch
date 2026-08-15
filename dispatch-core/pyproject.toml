@@ -10,7 +10,7 @@ requires-python = ">=3.11,<3.14"
 dependencies = []
 
 [project.optional-dependencies]
-authentication = ["cryptography==48.0.1"]
+authentication = ["cryptography==50.0.0"]
 browser = ["playwright==1.62.0"]
 dev = [
   "attrs==26.1.0",
