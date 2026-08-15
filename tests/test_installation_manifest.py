@@ -15,7 +15,9 @@ def test_installation_release_manifest_matches_schema_and_is_fail_closed() -> No
 
     jsonschema.Draft202012Validator(schema).validate(manifest)
     assert manifest["ready"] is False
-    assert manifest["product"] == {"name": "dispatch", "version": "0.0.7"}
+    assert manifest["product"]["name"] == "dispatch"
+    assert len(manifest["product"]["version"].split(".")) == 3
+    assert all(part.isdigit() for part in manifest["product"]["version"].split("."))
     assert manifest["installer"]["artifact"] == {"url": None, "size": None, "sha256": None}
     assert manifest["core"]["artifact"] == {"url": None, "size": None, "sha256": None}
     assert manifest["builtin_plugins"] == []
@@ -62,5 +64,7 @@ def test_product_manifest_versions_match_component_sources() -> None:
 def test_release_publishes_only_the_install_script() -> None:
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
+    assert "fetch-depth: 0" in workflow
+    assert "scripts/verify-release-readiness --require-clean --json" in workflow
     assert 'gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/release/install.sh" \\' in workflow
     assert '"$RUNNER_TEMP"/release/*' not in workflow

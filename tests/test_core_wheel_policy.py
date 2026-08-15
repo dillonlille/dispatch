@@ -14,6 +14,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 PLAN = ROOT / "packaging" / "runtime-package-plan.json"
 VERIFIER = ROOT / "scripts" / "verify-core-wheel"
+CORE_VERSION = json.loads(PLAN.read_text(encoding="utf-8"))["distributions"][0]["version"]
+CORE_WHEEL = f"dispatch_core-{CORE_VERSION}-py3-none-any.whl"
+CORE_DIST_INFO = f"dispatch_core-{CORE_VERSION}.dist-info"
 
 
 def _record(files: dict[str, bytes], record_name: str) -> bytes:
@@ -106,7 +109,7 @@ def _verify(wheel: Path) -> subprocess.CompletedProcess[str]:
 
 
 def test_exact_core_wheel_closure_is_accepted(tmp_path: Path) -> None:
-    wheel = _make_wheel(tmp_path / "dispatch_core-1.0.0-py3-none-any.whl")
+    wheel = _make_wheel(tmp_path / CORE_WHEEL)
     result = _verify(wheel)
     assert result.returncode == 0, result.stdout + result.stderr
     assert json.loads(result.stdout)["status"] == "verified_core_only"
@@ -114,7 +117,7 @@ def test_exact_core_wheel_closure_is_accepted(tmp_path: Path) -> None:
 
 def test_plugin_bytes_inside_core_namespace_are_rejected(tmp_path: Path) -> None:
     wheel = _make_wheel(
-        tmp_path / "dispatch_core-1.0.0-py3-none-any.whl",
+        tmp_path / CORE_WHEEL,
         extra={"dispatch_core/plugins/handbook.py": b"PLUGIN = True\n"},
     )
     result = _verify(wheel)
@@ -124,8 +127,8 @@ def test_plugin_bytes_inside_core_namespace_are_rejected(tmp_path: Path) -> None
 
 def test_unplanned_dist_info_and_mutated_core_bytes_are_rejected(tmp_path: Path) -> None:
     extra_wheel = _make_wheel(
-        tmp_path / "extra" / "dispatch_core-1.0.0-py3-none-any.whl",
-        extra={"dispatch_core-1.0.0.dist-info/plugin-manifest.json": b"{}\n"},
+        tmp_path / "extra" / CORE_WHEEL,
+        extra={f"{CORE_DIST_INFO}/plugin-manifest.json": b"{}\n"},
     )
     extra_result = _verify(extra_wheel)
     assert extra_result.returncode == 1
@@ -134,7 +137,7 @@ def test_unplanned_dist_info_and_mutated_core_bytes_are_rejected(tmp_path: Path)
     plan = json.loads(PLAN.read_text(encoding="utf-8"))
     planned_name = plan["distributions"][0]["files"][0]["path"]
     mutated_wheel = _make_wheel(
-        tmp_path / "mutated" / "dispatch_core-1.0.0-py3-none-any.whl",
+        tmp_path / "mutated" / CORE_WHEEL,
         mutate=planned_name,
     )
     mutated_result = _verify(mutated_wheel)
@@ -144,7 +147,7 @@ def test_unplanned_dist_info_and_mutated_core_bytes_are_rejected(tmp_path: Path)
 
 def test_active_dependency_cannot_hide_behind_extra_marker(tmp_path: Path) -> None:
     wheel = _make_wheel(
-        tmp_path / "dispatch_core-1.0.0-py3-none-any.whl",
+        tmp_path / CORE_WHEEL,
         extra_requires_dist=(
             'dispatch-local-handbook==0.1.0; extra == "dev" or python_version >= "3.11"',
         ),

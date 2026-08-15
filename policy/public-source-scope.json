@@ -18,12 +18,12 @@
     ".github/workflows/release.yml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "e3a53a781f13b961384ffbb200ed8e4e79b8d9c1b2d2611852f83fddaa50bf3c"
+      "sha256": "c75d9c5b4f7382f1a1986701112e6f54463dae5106c2d3e188eadde085403f72"
     },
     ".gitignore": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "ac49b94a92b3a8ec9dbb23e44deb9596f3a681d7645222e11ea021e716c4f8a7"
+      "sha256": "7161f9801058540b6dd21bf5aec2600f0f1b1ee889786a141db71f7d12fad2d4"
     },
     "CONTRIBUTING.md": {
       "kind": "file",
@@ -38,7 +38,7 @@
     "README.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "98f8b0d6447a0e56ef2da1afc897f7a31316a9ccb09db0bb6aaf41303dcd67c0"
+      "sha256": "e698f6914e9607cff2b0b9f05565f0371a4df2bf0965bcd098aece5ea86b1fce"
     },
     "SECURITY.md": {
       "kind": "file",
@@ -228,7 +228,7 @@
     "dispatch-core/health/src/dispatch_core/health/__init__.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "827767fc37d0be7a1ae54c5e8bb93beeef4bee2bdb006711ff01ba302a88e91e"
+      "sha256": "09df9b453a835ed423d9b14def15e02fe3571f276882499732ec6a0d4e1cbe3f"
     },
     "dispatch-core/health/tests/test_health.py": {
       "kind": "file",
@@ -253,7 +253,7 @@
     "dispatch-core/lifecycle/verify_component.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "520de0adcccc869c71ddaf6ee0265e433bf15d169ff86ec2b7534aac6af5dcf6"
+      "sha256": "4cf4a3183b8608644ee9f2da2ab6dc55c7ba7e96b4c94aa8945212809df663a7"
     },
     "dispatch-core/paths/README.md": {
       "kind": "file",
@@ -354,6 +354,11 @@
       "kind": "file",
       "origin": "generated_public",
       "sha256": "2ba092baa2a1ed801d47466e829fbc602ed7dfeadbef29c5686c2ef91b710e1b"
+    },
+    "docs/releasing.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "f399f6ea1f9c757f133385d3feae1a4693a73d48d32b801801d302829ee58563"
     },
     "docs/schemas/dispatch-browser-runtime-evidence-v1.schema.json": {
       "kind": "file",
@@ -528,7 +533,7 @@
     "installer/tests/test_manifest_cli.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "fda9bc4a7cf5aa45c8adc818aac0e11d9e4c520976e16b12a5d9a23547f5746b"
+      "sha256": "3fa910b5986b1506283338b16a5e5e880273333140abdc8811cefde0b8d8271f"
     },
     "installer/tests/test_output.py": {
       "kind": "file",
@@ -543,7 +548,7 @@
     "installer/tests/test_setup.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "5d6a108540d5a542b7d0579aba894b1e944792ae32642cab95ad798a44650b3a"
+      "sha256": "daa831b477cdb00d3f6e88192fec31d8f45d4c5040f4bf97c6a2a4db8a59674d"
     },
     "installer/tests/test_uninstall.py": {
       "kind": "file",
@@ -568,17 +573,17 @@
     "packaging/installation-release-manifest.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "2a9b051990b216957f96674b3b0b3bfa2d7c82358ad9b2881eb03316f18e95f2"
+      "sha256": "2aec490add52da14af22757237f9e8e225bbc1f9cf033f243f0a9db88d80c458"
     },
     "packaging/installer-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "2f01224d9277e36d5c8ad309c961dd5f6dca56ea34f3c7871d232b05f5fc5254"
+      "sha256": "e22b6e3e4b17898d04f5a356912a5fd14d387444dd841b201e4c1ea9f4bd5103"
     },
     "packaging/runtime-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "884618b1b699802ec4b42c91b3790fcc274104dc872b4385b7191a5c60f1b42c"
+      "sha256": "9990a8c9d3eed3f10ec4021ee796302bc2b747da1f7e4d8236551bbdf2e95561"
     },
     "plugins/handbook/LICENSE": {
       "kind": "file",
@@ -703,7 +708,17 @@
     "scripts/finalize-installation-release": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "00e12cbf742d66af12f67891d111e32c96b2bada55456daf699c3cd12c4c13d8"
+      "sha256": "60e9cdc8ce11fb4f8435925b9cd294f44e16e511feaa376a0378be363fa029bc"
+    },
+    "scripts/prepare-release": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "377b6f1d1cee640141d2bea904596c6a27972409458dba72a7f1d50aad1e561b"
+    },
+    "scripts/release_version.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "2d6613eea1576cb1ace01453ba373ab657c58f90b77e4a4576ecc755a0fdd288"
     },
     "scripts/render-bootstrap": {
       "kind": "file",
@@ -730,6 +745,11 @@
       "origin": "generated_public",
       "sha256": "c0a5c0ae2968e4edb05c4afa65f314e99bb71ec965a7e08881c515b387dfcb5b"
     },
+    "scripts/verify-release-readiness": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "21d9b04eca78fa3389e90fd390c701b0e41812061f12447687a7ec9b27dcf14f"
+    },
     "scripts/verify-source-export": {
       "kind": "file",
       "origin": "generated_public",
@@ -748,17 +768,27 @@
     "tests/test_core_wheel_policy.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "3aa936c1943ec46fb6cbbe2893dd6c3c09a72e4346fa4c5db3c82c49bbd944c3"
+      "sha256": "d35815b8be8aac24e311fd9678b3a8f84c419bc0af5fa8631363cce0a336466f"
     },
     "tests/test_installation_manifest.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "cbaba192afdeff0f784eac6a40b10858a44c1d2f90112fda379121bfc92236d9"
+      "sha256": "ece401b7c74bf16aec5d13cd77804ab7690141dce39d2d72eedb975d24e6df27"
     },
     "tests/test_installer_package_plan.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "6ba13d4fb84276914c109b9db659f01837c2697dfbbabc8185d1f6ae7b76beb1"
+      "sha256": "6c0182dd4b6e7bee2088e9fdd4b151dbb34a72ab2348b1814a3a5f131ed7ca3c"
+    },
+    "tests/test_release_version.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "3ca5ef845de0a263ba5b4d8dac1f7d4d878ce767abb8dc9323aaf7f479331ecf"
+    },
+    "tests/test_repository_hygiene.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "a4a6b1c609368b66f535744bdca78f8052a8accc913d7b8a02f7da7e6db5c7a4"
     },
     "tests/test_runtime_package_plan.py": {
       "kind": "file",

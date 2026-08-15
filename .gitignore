@@ -29,6 +29,11 @@ SKILLS/
 node_modules/
 .venv/
 venv/
+.direnv/
+.tox/
+.nox/
+.cache/
+.uv-cache/
 
 # Language and test byproducts
 __pycache__/
@@ -38,11 +43,41 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
+.hypothesis/
 .mypy_cache/
 .ruff_cache/
+.pyright/
+.pyre/
+.pytype/
+.dmypy.json
 coverage.xml
 .coverage
+.coverage.*
 htmlcov/
+junit.xml
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Local build, acceptance, and release outputs
+/.worktrees/
+/candidate/
+/release/
+/reviewed/
+/wheelhouse/
+.wrangler/
+acceptance-evidence*.json
+release-evidence*.json
+SHA256SUMS*
+*.sha256
+*.tar.gz
+*.tgz
 
 # Operational files
 *.sqlite
@@ -51,4 +86,12 @@ htmlcov/
 *.db-wal
 *.db-shm
 *.log
+*.pid
+*.sock
 .hermes-tmp.*
+
+# Local credentials and signing material
+*.key
+*.pem
+*.p12
+*.pfx

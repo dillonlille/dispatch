@@ -54,7 +54,10 @@ def verify_layout() -> dict:
     payload = json.loads(manifest_path.read_text(encoding="utf-8"))
     if set(payload) != {"schema_version", "id", "version", "features"}:
         raise RuntimeError("core_manifest_shape")
-    if payload["schema_version"] != 1 or payload["id"] != "dispatch-core" or payload["version"] != "1.0.0":
+    if payload["schema_version"] != 1 or payload["id"] != "dispatch-core":
+        raise RuntimeError("core_manifest_identity")
+    version = payload["version"]
+    if not isinstance(version, str):
         raise RuntimeError("core_manifest_identity")
     if not isinstance(payload["features"], list):
         raise RuntimeError("core_manifest_features")
@@ -82,7 +85,7 @@ def verify_layout() -> dict:
 
     project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     metadata = project.get("project", {})
-    if metadata.get("name") != "dispatch-core" or metadata.get("version") != "1.0.0":
+    if metadata.get("name") != "dispatch-core" or metadata.get("version") != version:
         raise RuntimeError("core_project_identity")
     scripts = metadata.get("scripts", {})
     if scripts.get("dispatch-core") != "dispatch_core.command_interface:main":
