@@ -540,7 +540,7 @@ def test_purge_rechecks_root_identity_after_final_plan_before_apply(tmp_path: Pa
         uninstall(layout, purge=True)
 
     assert resume_plans == 2
-    assert failure.value.code == "uninstall_journal_invalid"
+    assert failure.value.code == "uninstall_root_changed"
     assert replacement_marker is not None and replacement_marker.read_text(encoding="utf-8") == "preserve"
     assert not layout.state.exists()
     assert displaced.is_dir()

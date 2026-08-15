@@ -428,7 +428,7 @@
     "installer/tests/test_uninstall.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "d0e47b03fbaa3703484e6d3114a5373ab389722e0eb69b1d41fd756d84d401a8"
+      "sha256": "34ea85c0a4610fcf29593056b373f1ff9b29ab5e66f86e05055ea919ef1187ce"
     },
     "packaging/browser-runtime-plan.json": {
       "kind": "file",
