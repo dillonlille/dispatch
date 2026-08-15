@@ -1,0 +1,134 @@
+{
+  "distributions": [
+    {
+      "console_scripts": {
+        "dispatch-core": "dispatch_core.command_interface:main"
+      },
+      "files": [
+        {
+          "path": "dispatch_core/__init__.py",
+          "sha256": "d76e4b6d0d0a9926e128130588b25e2f4b75a7852877049faa6938618493ae34",
+          "source": "dispatch-core/src/dispatch_core/__init__.py"
+        },
+        {
+          "path": "dispatch_core/authentication/__init__.py",
+          "sha256": "8904bfa96ad69ff1d7585a692db9bad41d36af61c2345a8326731a2929d3ebfa",
+          "source": "dispatch-core/authentication/src/dispatch_core/authentication/__init__.py"
+        },
+        {
+          "path": "dispatch_core/authentication/workflow.py",
+          "sha256": "17bbf3eda7842a09d82dcee5aff2615f72929f4645c2257d90ff58199b72bdc5",
+          "source": "dispatch-core/authentication/src/dispatch_core/authentication/workflow.py"
+        },
+        {
+          "path": "dispatch_core/browser_manager/__init__.py",
+          "sha256": "343f2316c2475f1e19de5ce75a87e24b3cb1e1802fe72ac7060211d53d40073a",
+          "source": "dispatch-core/browser-manager/src/dispatch_core/browser_manager/__init__.py"
+        },
+        {
+          "path": "dispatch_core/browser_manager/manager.py",
+          "sha256": "4a7af653575c79ee0c452a32a2cb0b3f83be03c921d449472e436474094dc7c9",
+          "source": "dispatch-core/browser-manager/src/dispatch_core/browser_manager/manager.py"
+        },
+        {
+          "path": "dispatch_core/browser_manager/models.py",
+          "sha256": "82143c2c3f3594cdcd874a46608a7f267e47fb490bbd1c3ccb01c058cc1d95d8",
+          "source": "dispatch-core/browser-manager/src/dispatch_core/browser_manager/models.py"
+        },
+        {
+          "path": "dispatch_core/browser_manager/policy.py",
+          "sha256": "5af803255fbf5b9e8fad5364a227de068d0e3584ad22cd14f802fa1e4265152a",
+          "source": "dispatch-core/browser-manager/src/dispatch_core/browser_manager/policy.py"
+        },
+        {
+          "path": "dispatch_core/browser_manager/runtime.py",
+          "sha256": "9f5b88489832f89722be329fcb3b3348b0ebe5998100e36586854415d1e5e425",
+          "source": "dispatch-core/browser-manager/src/dispatch_core/browser_manager/runtime.py"
+        },
+        {
+          "path": "dispatch_core/browser_manager/runtime_authority.py",
+          "sha256": "c11cf8ca56589bfb0c88e202eb150426b9752032c40b22a92225989d895a4363",
+          "source": "dispatch-core/browser-manager/src/dispatch_core/browser_manager/runtime_authority.py"
+        },
+        {
+          "path": "dispatch_core/browser_manager/store.py",
+          "sha256": "d372d7aecccab71e8a23790658c3ef33bcb0d861f9812e2bbc9476d11028105e",
+          "source": "dispatch-core/browser-manager/src/dispatch_core/browser_manager/store.py"
+        },
+        {
+          "path": "dispatch_core/collection_manager/__init__.py",
+          "sha256": "0a9735291f135d0272e1c1d6c49223d1954f861faccff769d796fef9f87dd17c",
+          "source": "dispatch-core/collection-manager/src/dispatch_core/collection_manager/__init__.py"
+        },
+        {
+          "path": "dispatch_core/collection_manager/queue.py",
+          "sha256": "c114a1fdeead4213ee62166c2f8e6492fff7e9c348873042abcfa4eb6d7d2e5e",
+          "source": "dispatch-core/collection-manager/src/dispatch_core/collection_manager/queue.py"
+        },
+        {
+          "path": "dispatch_core/collection_manager/supervisor.py",
+          "sha256": "4cb70ae88eb2e560383a281ec88e3bc4ae019d1e491bb04a91d4a2c0df04ac75",
+          "source": "dispatch-core/collection-manager/src/dispatch_core/collection_manager/supervisor.py"
+        },
+        {
+          "path": "dispatch_core/command_interface/__init__.py",
+          "sha256": "5808a256f6cbf584f7b14a889b5ed19e96d6ca64f3453dbfa68a0b4a64ba5e1f",
+          "source": "dispatch-core/command-interface/src/dispatch_core/command_interface/__init__.py"
+        },
+        {
+          "path": "dispatch_core/command_interface/__main__.py",
+          "sha256": "0472e2ffee01c7582c667fb3eb1ef01023e7d584f175cef8cb475e45e6bd1736",
+          "source": "dispatch-core/command-interface/src/dispatch_core/command_interface/__main__.py"
+        },
+        {
+          "path": "dispatch_core/health/__init__.py",
+          "sha256": "63ef061bfe8ce08ae316efc78806dab870777da965b5fd2ccf0a065cf756c62d",
+          "source": "dispatch-core/health/src/dispatch_core/health/__init__.py"
+        },
+        {
+          "path": "dispatch_core/paths/__init__.py",
+          "sha256": "1f3f6f6b6e5d86900a0d4d350c5e94fb5f8d66eb0c3b7c41b9a40de6670851ff",
+          "source": "dispatch-core/paths/src/dispatch_core/paths/__init__.py"
+        }
+      ],
+      "name": "dispatch-core",
+      "pyproject": "dispatch-core/pyproject.toml",
+      "requires_dist": [
+        "cryptography==48.0.1",
+        "playwright==1.62.0"
+      ],
+      "optional_requires_dist": [
+        "attrs==26.1.0; extra == \"dev\"",
+        "iniconfig==2.3.0; extra == \"dev\"",
+        "jsonschema==4.26.0; extra == \"dev\"",
+        "jsonschema-specifications==2025.9.1; extra == \"dev\"",
+        "packaging==26.3; extra == \"dev\"",
+        "pluggy==1.6.0; extra == \"dev\"",
+        "Pygments==2.20.0; extra == \"dev\"",
+        "pytest==9.1.1; extra == \"dev\"",
+        "PyYAML==6.0.3; extra == \"dev\"",
+        "referencing==0.37.0; extra == \"dev\"",
+        "rpds-py==2026.6.3; extra == \"dev\"",
+        "typing_extensions==4.16.0; extra == \"dev\""
+      ],
+      "source_roots": [
+        "dispatch-core/src",
+        "dispatch-core/paths/src",
+        "dispatch-core/health/src",
+        "dispatch-core/command-interface/src",
+        "dispatch-core/collection-manager/src",
+        "dispatch-core/authentication/src",
+        "dispatch-core/browser-manager/src"
+      ],
+      "summary": "Feature-oriented portable control plane for Dispatch",
+      "top_level": [
+        "dispatch_core"
+      ],
+      "version": "1.0.0"
+    }
+  ],
+  "installation_mode": "online-only",
+  "python_requires": ">=3.11,<3.14",
+  "runtime_downloads_allowed": false,
+  "schema_version": 3
+}

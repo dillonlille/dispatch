@@ -1,0 +1,54 @@
+# Source hygiene
+.env
+.env.*
+*.env
+!.env.example
+!*.env.example
+
+# Private and generated Dispatch material
+.dispatch/
+artifacts/
+db/
+safety-data/
+SKILLS/
+**/runtime/
+**/releases/
+**/state/
+**/staging/
+**/receipts/
+**/logs/
+**/locks/
+**/backups/
+**/archive/
+**/downloads/
+**/browser-state/
+**/chrome-profile/
+**/dependencies/
+
+# Dependencies and local environments
+node_modules/
+.venv/
+venv/
+
+# Language and test byproducts
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.whl
+build/
+dist/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+coverage.xml
+.coverage
+htmlcov/
+
+# Operational files
+*.sqlite
+*.sqlite3
+*.db
+*.db-wal
+*.db-shm
+*.log
+.hermes-tmp.*

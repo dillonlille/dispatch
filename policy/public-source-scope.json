@@ -1,0 +1,620 @@
+{
+  "files": {
+    ".env.example": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "05de7b4e541f4dabc7964e35daef080c88ec5b00bffbc71f658e237b6da154d7"
+    },
+    ".github/workflows/ci.yml": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "8dad4446321cc9abd9afcf0dab78c52f0b81200a2b8649b579b9fd61f98dafcf"
+    },
+    ".github/workflows/core-artifact.yml": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "d5d1a62ee89ffa7f0024ad78cecb5e4fa149bf0234d452057976b10619ffc321"
+    },
+    ".gitignore": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "ac49b94a92b3a8ec9dbb23e44deb9596f3a681d7645222e11ea021e716c4f8a7"
+    },
+    "CONTRIBUTING.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "4816d4096f362f9afd13413521c039c9b00b88ab0a54d1a97ce8d3cf702dc66b"
+    },
+    "README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "f1daa1d136538377ba0dcf1426b39bee66375a96efc5aaec4e24b10e9e7add7e"
+    },
+    "SECURITY.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "a40fb85b598340e424ffe0a0a39971ff4822f9265a02a2d25d2ab543dcef04ee"
+    },
+    "SKILL/dispatch-plugin-development/SKILL.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "274116ca295cd96df24834785fcec8d57b0fbdabf531cbfeee9498c02924f002"
+    },
+    "SKILL/dispatch-plugin-development/references/component-design.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "cdfc15421f3345d63a8b845005716f4f878458528e4973fb9d3499ad739d97c9"
+    },
+    "SKILL/dispatch-plugin-development/references/release-and-verification.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "454500fb171c95f541cf8d633886e48019aebc4f03eafeb877a0afa189004c1d"
+    },
+    "SKILL/dispatch-plugin-development/references/standard-v1.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "5b91e832ba488760d789092589a9e70cba02185470a8e33963ee9fae6cb6a1c0"
+    },
+    "SKILL/dispatch-plugin-development/templates/dispatch-plugin.yaml": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "35d82ada69f06207522a48ba18bd7d96647c5f0f4372b55c023eb74d9209bdda"
+    },
+    "dispatch-core/README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "c4e1759c9c64b201a8b1b07359fcf2b176a7c6eab249467dc5d3de33810a8b33"
+    },
+    "dispatch-core/authentication/README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "9845878d4f949800d4a08de4f0459194f805e0acf5ff7ff68204c0167fbcf1ae"
+    },
+    "dispatch-core/authentication/src/dispatch_core/authentication/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "8904bfa96ad69ff1d7585a692db9bad41d36af61c2345a8326731a2929d3ebfa"
+    },
+    "dispatch-core/authentication/src/dispatch_core/authentication/workflow.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "17bbf3eda7842a09d82dcee5aff2615f72929f4645c2257d90ff58199b72bdc5"
+    },
+    "dispatch-core/authentication/tests/test_authentication.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "18cf8040454c83dc4dbbb4500af62f8034180a85c0c89255a741dc3e8df1d7ed"
+    },
+    "dispatch-core/authentication/tests/test_workflow.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "23bbffe1beac2a9f64a68f695e2424b68700ceb1d55b84022c6dacd1a71152b0"
+    },
+    "dispatch-core/browser-manager/README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "e9e814eb036a96c939a84db5fbd08198138db7305cad07b119fb02d2a4bd8415"
+    },
+    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "343f2316c2475f1e19de5ce75a87e24b3cb1e1802fe72ac7060211d53d40073a"
+    },
+    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/manager.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "4a7af653575c79ee0c452a32a2cb0b3f83be03c921d449472e436474094dc7c9"
+    },
+    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/models.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "82143c2c3f3594cdcd874a46608a7f267e47fb490bbd1c3ccb01c058cc1d95d8"
+    },
+    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/policy.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "5af803255fbf5b9e8fad5364a227de068d0e3584ad22cd14f802fa1e4265152a"
+    },
+    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/runtime.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "9f5b88489832f89722be329fcb3b3348b0ebe5998100e36586854415d1e5e425"
+    },
+    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/runtime_authority.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "c11cf8ca56589bfb0c88e202eb150426b9752032c40b22a92225989d895a4363"
+    },
+    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/store.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "d372d7aecccab71e8a23790658c3ef33bcb0d861f9812e2bbc9476d11028105e"
+    },
+    "dispatch-core/browser-manager/tests/test_browser_manager.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "573671d6f30d2fc9caee11f26f7205eb97f780bfbc0ab43acf0c85184375e9b8"
+    },
+    "dispatch-core/browser-manager/tests/test_runtime_authority.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "f187b04079b5d0f181ed048bddb458bbad35bc56941638ce509847211b9ea259"
+    },
+    "dispatch-core/collection-manager/README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "30bb34c40dfe8dab4e8927e4e260d6c5e01b29c9feb45a618b43c07dc7da4614"
+    },
+    "dispatch-core/collection-manager/src/dispatch_core/collection_manager/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "0a9735291f135d0272e1c1d6c49223d1954f861faccff769d796fef9f87dd17c"
+    },
+    "dispatch-core/collection-manager/src/dispatch_core/collection_manager/queue.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "c114a1fdeead4213ee62166c2f8e6492fff7e9c348873042abcfa4eb6d7d2e5e"
+    },
+    "dispatch-core/collection-manager/src/dispatch_core/collection_manager/supervisor.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "4cb70ae88eb2e560383a281ec88e3bc4ae019d1e491bb04a91d4a2c0df04ac75"
+    },
+    "dispatch-core/collection-manager/tests/test_collection_manager.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "c20c0606de130eb0ac7c3b6af2f6c93cf39f019c5ce239fb52ade0d47446338b"
+    },
+    "dispatch-core/collection-manager/tests/test_queue.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "6aff6cf63cb6649b9a3baf81da0311219f41cf57219b65ed6ed3c6c89ea90a4f"
+    },
+    "dispatch-core/collection-manager/tests/test_supervisor.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "3322526f63d66fad7b2d45d5a42ba77618acdb8d03eedf344e3ce62f3fafe453"
+    },
+    "dispatch-core/command-interface/README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "6aab414c1c2e24ee5917a5c8c0f4edf3cc83b1e2f6c89e772d62616dc6664c16"
+    },
+    "dispatch-core/command-interface/src/dispatch_core/command_interface/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "5808a256f6cbf584f7b14a889b5ed19e96d6ca64f3453dbfa68a0b4a64ba5e1f"
+    },
+    "dispatch-core/command-interface/src/dispatch_core/command_interface/__main__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "0472e2ffee01c7582c667fb3eb1ef01023e7d584f175cef8cb475e45e6bd1736"
+    },
+    "dispatch-core/command-interface/tests/test_command_interface.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "75dba2b322cc72419abfcd86a5e4fc3280c9f7bc983b0475f8a27edddd65db35"
+    },
+    "dispatch-core/conftest.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "9d9bdde3818c81c38760975314c7dff770fb7c85f7a96f2ac1624f57fbe16f9f"
+    },
+    "dispatch-core/core-manifest.json": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "0af16cabc8e92e78fa11e4c1eff935e270872091ef2529d0ae7f0bea59595b31"
+    },
+    "dispatch-core/health/README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "baa765ec45f5685c32f1ed86afc4911a6de0e6a5331cbdf8b5740175e19ad4d8"
+    },
+    "dispatch-core/health/src/dispatch_core/health/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "63ef061bfe8ce08ae316efc78806dab870777da965b5fd2ccf0a065cf756c62d"
+    },
+    "dispatch-core/health/tests/test_health.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "33e901776a23bb7617d817d4e0379856e9f1d49ca1c52e2efe866b30f7c7a951"
+    },
+    "dispatch-core/lifecycle/README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "5a97c221d79836507ed7f3f177bc5f7b08c327f2c217d48a1cd13a9a46068866"
+    },
+    "dispatch-core/lifecycle/build_component.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "abbcf96739fdb44b5243cba1de3e2041838c4dd84d00242723528071ea79b207"
+    },
+    "dispatch-core/lifecycle/tests/test_lifecycle.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "7fa7919a1665230a278e9f3d0a6ab254c209ab68c128ca8f58aa4500a14661b2"
+    },
+    "dispatch-core/lifecycle/verify_component.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "6591fefc5eb0f7addd28df21930aeb11dff887d05432ca40b5474f3943ff4df4"
+    },
+    "dispatch-core/paths/README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "9085f750e6afc5f3983205a121aa786b54364e3eaa6f0ef2c47f947ff74473be"
+    },
+    "dispatch-core/paths/src/dispatch_core/paths/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "1f3f6f6b6e5d86900a0d4d350c5e94fb5f8d66eb0c3b7c41b9a40de6670851ff"
+    },
+    "dispatch-core/paths/tests/test_paths.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "38a3b78a574c70927252e5667870c1280f229ca35a565590861e08ac286ffea1"
+    },
+    "dispatch-core/plugin-policy/README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "43f52b9a4fbf4a9af972283dd67075b51690677d27965171e2eda0b1e54f0380"
+    },
+    "dispatch-core/plugin-policy/plugin_conformance.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "a4352468378fcbd10a2b3870697183c3995ba86c792e7245c014ee06aded4cb6"
+    },
+    "dispatch-core/plugin-policy/tests/test_plugin_conformance.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "5d66926dd0778671b9a6092711f1d39e6c0faabf625c8d5f503055b18d986f27"
+    },
+    "dispatch-core/pyproject.toml": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "0cd86eed3821ecc40f4135cc507490897fe519edf6a5a55af2ff88bbc0423c60"
+    },
+    "dispatch-core/scripts/build": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "828d876a5328c5c667ed4ec336d3792a3e94139109d1a8a45f96000a1fa8c879"
+    },
+    "dispatch-core/scripts/health": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "c0cb321bc55eb97348bfd8d612dfcc4edfb775806a24ec4b94881abdb6afc8ec"
+    },
+    "dispatch-core/scripts/test": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "d6fc2d4d394652220d5a0d77a66f9e9907b1a87dbff2bac017f53169c1376b27"
+    },
+    "dispatch-core/scripts/verify": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "181cd6c9df128b98cc5180fd71a83ea758de1ee6d285010a57d65e3f537e369a"
+    },
+    "dispatch-core/src/dispatch_core/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "d76e4b6d0d0a9926e128130588b25e2f4b75a7852877049faa6938618493ae34"
+    },
+    "docs/dispatch-plugin-standard-v1.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "5b91e832ba488760d789092589a9e70cba02185470a8e33963ee9fae6cb6a1c0"
+    },
+    "docs/online-installation.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "a9313e32b6b7ad876b9d03745a639e0b23e906ff188f8e0ee12e191abfa553f1"
+    },
+    "docs/path-configuration.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "5ee02602973ddede1d656afab74ab12550a025adccaa14af1e0b0b37f4fba99f"
+    },
+    "docs/phase-5-installation-contract.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "24d7a452bb7b6fbddfbe9bc2428fab54d6f2018d452a59a7250dc097a8054791"
+    },
+    "docs/private-github-setup.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "c217a233db3422a5e7767a8a37fa14b62bfb41d74a738fed349087e96055a1f2"
+    },
+    "docs/public-source-boundary.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "d74f9fd3a431528abe0b10c0f3305a63ef447fdb9409d52d36ba87ef9afa6e48"
+    },
+    "docs/schemas/dispatch-installation-release-v1.schema.json": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "249fc9020fd693c4ac1058c266256b321824878ec2fae87da7bebf094f462118"
+    },
+    "docs/schemas/dispatch-plugin-v1.schema.json": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "019f0f48f0b8e9d42c14a23521050ccd806f534f54c7d6c7f4206f3f9e50092b"
+    },
+    "docs/uninstallation.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "225ce3df3f58a2faf07967df13da1e3d3cd8475682f0d1b79465147fa7c60834"
+    },
+    "installer/README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "eab5df103bc64b3ba09f2d6fa8a236eb2976334c01f06d0e8d434e2815c16ed5"
+    },
+    "installer/pyproject.toml": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "51625b35a1160c70fdb4316d68b4e2b066a100b9184a04686134af719daa8960"
+    },
+    "installer/src/dispatch_installer/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "5444541fdc1e0a3aba326a1fdddc42eea88d8feccbdb2dc89563f1686f011880"
+    },
+    "installer/src/dispatch_installer/__main__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d"
+    },
+    "installer/src/dispatch_installer/cli.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "7ddc7e5144332ad54473f6fad65679133e4dfbc2bba52232de8a4135b08584dc"
+    },
+    "installer/src/dispatch_installer/core_release.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "67f3ba304cfd9898ad76dbb76d6c05bd7512593ece61e7dc6e44b4fb4cb32b10"
+    },
+    "installer/src/dispatch_installer/doctor.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "a6a7b7cf36f2892534343e90a44fbe98fe4d2aad1add28b9bc9b41d0ee1f0c09"
+    },
+    "installer/src/dispatch_installer/download.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "aa0b368cabff7f2c16eec599613cc1ddf2963c3877b2ffcc9142e8d5b04b4299"
+    },
+    "installer/src/dispatch_installer/layout.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "abc52215f3277ea9dd80e3889325f399ce7f93884298e511184d2d56949f88e5"
+    },
+    "installer/src/dispatch_installer/manifest.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "a37b6c45b050569999a92e1e37f4123e4fdb9b92ccacf9d1877a418b77498fcd"
+    },
+    "installer/src/dispatch_installer/uninstall.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "8782af11c11ae3d82c0963971e78d48d256d7037bac2e88101315c97feca9626"
+    },
+    "installer/tests/conftest.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "e95f92e0716c9e833bd51d80830c95fe83125edfbecb45ecbf7f42ad1c2888f0"
+    },
+    "installer/tests/test_core_release.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "89e46d646473aaca0e296f002538000389d22a2d95b2f9d6ba21cfcbfecf862f"
+    },
+    "installer/tests/test_download.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "1f8965ac5325d674eab13c3a76b3b03096ff560aafc43e6b40d89101e29b7f30"
+    },
+    "installer/tests/test_layout.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "063bc05bafe2b72670ff22da81485636f449e8fa3731b567c06f9000c3cdbe4a"
+    },
+    "installer/tests/test_manifest_cli.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "6534342ee1c151b3183ce497353f0b05ca862aba9002c2b29dec1bc74d58237b"
+    },
+    "installer/tests/test_uninstall.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "84719b27f4150787c511c49a2b8c65a50b1330203f682ef5c0613d53eb45e7ac"
+    },
+    "packaging/browser-runtime-plan.json": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "acad0e97826e4726bf605c7a51126d7f0588012c58810809d764b2a58dbca4da"
+    },
+    "packaging/development-dependencies.json": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "b479665819ff5daed00ca23823a8c2385ab8f46437edbb8d095d61dc0bf0e6ff"
+    },
+    "packaging/installation-release-manifest.json": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "18c88bdd18b2fcbb9f885d2b75aa2f296c8c96303d2fe309d4e5e680be2af530"
+    },
+    "packaging/installer-package-plan.json": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "9d85cf812e2ed48d937af1900edb5a8af652d6d35867b39d994241f2a9d58f58"
+    },
+    "packaging/runtime-package-plan.json": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "3e5aa050da0b16c1106b51c1df126578c191e9738656accfd135a4b41ad9ff52"
+    },
+    "plugins/handbook/README.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "b2533bb4a62d006e536120f9ea2d165d3b62220b7d2e9e5093f8bf18daa75f01"
+    },
+    "plugins/handbook/SKILL.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "f349fd66592f7a6dd096a21b2248b869bd9961480e98992ca938f0896eea3307"
+    },
+    "plugins/handbook/dispatch-plugin.yaml": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "7093c3c6069be21d2d119a2d4ff6a3bb3adb799e7d9cbb1062a7fbbecab24c86"
+    },
+    "plugins/handbook/examples/synthetic-handbook.json": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "3914a4dbb7753a12c91b446230ee2650953205b2f1ca87ed206db0673fe196b1"
+    },
+    "plugins/handbook/integration/hermes-plugins/dispatch_handbook/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "f74cd083c9366766e304c1d347b406046a9e255ac7ba7a9f88727b2f1df162d4"
+    },
+    "plugins/handbook/integration/hermes-plugins/dispatch_handbook/plugin.yaml": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "7bc1fe53a20792c2121ff7b87f37caaaa077f80b93b55be8c9ac48f5e6513981"
+    },
+    "plugins/handbook/pyproject.toml": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "98607c2ecaf8a453c2541c702e81b55b382a9aab3ff66fb0508bf2221fdeefd3"
+    },
+    "plugins/handbook/scripts/build": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "733206c7dd73e82aa9ce9f5510b5abad774433028a9a3a6efbfb9e24946aceff"
+    },
+    "plugins/handbook/scripts/build_component.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "01735dc398faa619ebe555f8e780955d31ce3d6bf15a5d1b0df09e58384b0460"
+    },
+    "plugins/handbook/scripts/build_release.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "e37e50370352bdbbc2eb3ddcf1b3d60a27fba2dde6689fe688945ed75bb01248"
+    },
+    "plugins/handbook/scripts/health": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "bcd6e53721109df31dd8c8431c0148f9b7e155e15037f609e163556dadd2b60d"
+    },
+    "plugins/handbook/scripts/health_component.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "439e3303e87dd957aa20161e7ab14e616591ba19979a8b11521767d9d99fe9ea"
+    },
+    "plugins/handbook/scripts/test": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "755760f07b6a9ffb280325f444a01f86853686c9fa41f006f036efea2339e14d"
+    },
+    "plugins/handbook/scripts/verify": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "1796aa66b0f1c8726fa6ea1bb8f48e16fe234b1ca04ef0df4c462f7e4ffa2498"
+    },
+    "plugins/handbook/scripts/verify_component.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "4b7986589000d0fe9d7094b1b50907411048cee3d9732b7a0376f6e852c1f448"
+    },
+    "plugins/handbook/src/dispatch_handbook/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "35f7a794dbc7aa843cd4e1f3976e83522072930bde10bce97141ef74bd296264"
+    },
+    "plugins/handbook/src/dispatch_handbook/chunking.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "f04bd398ea465f6a7e1ca6a287b2fe6f06bebf7c5a51015ab68079eaf775a9ce"
+    },
+    "plugins/handbook/src/dispatch_handbook/cli.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "751a3a78309d94dff1117025eb7b2cdbd1c42d0282d2e06f61243ebb697155eb"
+    },
+    "plugins/handbook/src/dispatch_handbook/demo.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "2674124d7d4641e94fc22ed79dbd38a48df136257244d22c56ca5b5f3c9c362f"
+    },
+    "plugins/handbook/src/dispatch_handbook/index.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "299149200f2ca736a321fe519337f22bd7340b420512e8554b35e433a0887b18"
+    },
+    "plugins/handbook/src/dispatch_handbook/service.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "690cc947c2d5beb8418ba2c9ce7424c55185d4accbb8424e57686947ec29a6db"
+    },
+    "plugins/handbook/tests/conftest.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "c01ba4ee9d9fb62b3fbbe38bf7e151940e42c692710297090dc69c93c536a984"
+    },
+    "plugins/handbook/tests/test_public_handbook.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "760c5e90f4a98baafb4b635c56ec40dec91c73e774d1aa4e66c4dac5843f2968"
+    },
+    "scripts/smoke-stage-core-wheel": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "aafb18f0e4fa07b700cbab6928f8a16e4c3a1209491a9385b28a91e662007a89"
+    },
+    "scripts/verify-core-wheel": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "cb87ddee3f41a3e69b949eb9cecac8358ac57cf6b5af99df572640a4d4743ac4"
+    },
+    "scripts/verify-source-export": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "46d88d833b461f2dab8fd0984ae087ca540aad7075142c28371299a92e99dc08"
+    },
+    "synthetic-data.json": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "50d5c7f8c3dcb0bc9e68757a5f78955f406e2c93156632b10af5280018e926c4"
+    },
+    "tests/test_core_wheel_policy.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "a3d4a66a26fcb551347e9022fbf7c269bd2260f359ad663330d98c6850dd8d67"
+    },
+    "tests/test_installation_manifest.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "dee857aa3897237c3d9f4d7faa7587d5b409a7bc122fdda0a9883f0054a7af82"
+    },
+    "tests/test_installer_package_plan.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "6b4433509b260eba1be7ddb89c5fb9d0edc33b9494573441e1e2b17b890dbb3d"
+    },
+    "tests/test_runtime_package_plan.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "e5d9a2983c18daa5ba4d0e5cf01a28b124e0baa1f293a1759c7df33158dce0c2"
+    },
+    "tests/test_verify_source_export.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "3726982dfb8d4cb01e6ab23ef194ff8bd691a3ba433acd9a3092420eebfbb144"
+    }
+  },
+  "schema_version": 1
+}

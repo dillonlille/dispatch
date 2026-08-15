@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://dispatch.invalid/schemas/dispatch-installation-release-v1.schema.json",
+  "title": "Dispatch installation release planning manifest v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "ready", "core", "browser_runtime", "post_install", "uninstall"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "ready": {"const": false},
+    "core": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "artifact"],
+      "properties": {
+        "name": {"const": "dispatch-core"},
+        "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
+        "artifact": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["url", "size", "sha256"],
+          "properties": {
+            "url": {"const": null},
+            "size": {"const": null},
+            "sha256": {"const": null}
+          }
+        }
+      }
+    },
+    "browser_runtime": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["ready", "selector", "generation_root"],
+      "properties": {
+        "ready": {"const": false},
+        "selector": {"const": "/etc/dispatch/browser-runtime-active.json"},
+        "generation_root": {"const": "/opt/dispatch/browser-runtimes"}
+      }
+    },
+    "post_install": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["setup_implemented", "setup_command", "choices"],
+      "properties": {
+        "setup_implemented": {"const": false},
+        "setup_command": {"const": "dispatch setup"},
+        "choices": {
+          "const": ["start_setup", "skip_for_now"]
+        }
+      }
+    },
+    "uninstall": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "user_scope_implemented",
+        "administrative_command",
+        "future_user_command",
+        "default_mode",
+        "purge_requires_confirmation",
+        "privileged_browser_removal_implemented"
+      ],
+      "properties": {
+        "user_scope_implemented": {"const": true},
+        "administrative_command": {"const": "dispatch-installer uninstall"},
+        "future_user_command": {"const": "dispatch uninstall"},
+        "default_mode": {"const": "keep-data"},
+        "purge_requires_confirmation": {"const": true},
+        "privileged_browser_removal_implemented": {"const": false}
+      }
+    }
+  }
+}

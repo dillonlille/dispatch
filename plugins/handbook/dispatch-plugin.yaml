@@ -1,0 +1,65 @@
+schema_version: 1
+id: handbook
+display_name: Dispatch Local Handbook
+version: 0.1.0
+summary: Portable read-only local handbook retrieval with an explicit synthetic demo import.
+owner:
+  data: handbook
+  team: Dispatch Maintainers
+paths:
+  source: src
+  tests: tests
+  databases:
+    handbook: db/handbook
+  state: plugins/handbook/state
+  staging: plugins/handbook/staging
+  locks: plugins/handbook/locks
+  receipts: plugins/handbook/receipts
+commands:
+  test: ./scripts/test
+  build: ./scripts/build
+  verify: ./scripts/verify
+  health: ./scripts/health
+components:
+  - id: handbook-tool
+    kind: hermes-tool
+    source: integration/hermes-plugins/dispatch_handbook
+    capabilities:
+      read_local_data: true
+      mutate_data: false
+      collect: false
+      network: false
+      authentication: false
+      direct_delivery: false
+      long_running: false
+    hermes:
+      package: dispatch_handbook
+      manifest: integration/hermes-plugins/dispatch_handbook/plugin.yaml
+      adapter: integration/hermes-plugins/dispatch_handbook/__init__.py
+      tool: dispatch_handbook
+      toolset: dispatch_handbook
+    runtime:
+      releases: runtime/releases
+      current_pointer: runtime/current
+      activation_record: config/activation.json
+      launcher_manifest: integration/hermes-plugins/dispatch_handbook/launcher-manifest.json
+    actions:
+      - {name: lookup, privilege: read}
+      - {name: overview, privilege: read}
+      - {name: contents, privilege: read}
+      - {name: health, privilege: health}
+  - id: synthetic-demo-import
+    kind: library
+    source: src/dispatch_handbook/demo.py
+    capabilities:
+      read_local_data: true
+      mutate_data: true
+      collect: false
+      network: false
+      authentication: false
+      direct_delivery: false
+      long_running: false
+retention:
+  keep_current: true
+  keep_rollback: 1
+  preserve_pinned: true

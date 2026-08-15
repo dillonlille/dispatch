@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "ready": false,
+  "core": {
+    "name": "dispatch-core",
+    "version": "1.0.0",
+    "artifact": {
+      "url": null,
+      "size": null,
+      "sha256": null
+    }
+  },
+  "browser_runtime": {
+    "ready": false,
+    "selector": "/etc/dispatch/browser-runtime-active.json",
+    "generation_root": "/opt/dispatch/browser-runtimes"
+  },
+  "post_install": {
+    "setup_implemented": false,
+    "setup_command": "dispatch setup",
+    "choices": [
+      "start_setup",
+      "skip_for_now"
+    ]
+  },
+  "uninstall": {
+    "user_scope_implemented": true,
+    "administrative_command": "dispatch-installer uninstall",
+    "future_user_command": "dispatch uninstall",
+    "default_mode": "keep-data",
+    "purge_requires_confirmation": true,
+    "privileged_browser_removal_implemented": false
+  }
+}

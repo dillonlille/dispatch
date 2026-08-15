@@ -1,0 +1,247 @@
+#!/usr/bin/env python3
+"""Verify that a built Dispatch Core wheel exactly matches the reviewed runtime plan."""
+
+from __future__ import annotations
+
+import argparse
+import base64
+import configparser
+import csv
+import hashlib
+import io
+import json
+import re
+import stat
+import sys
+import zipfile
+from email.parser import BytesParser
+from pathlib import Path, PurePosixPath
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PLAN = ROOT / "packaging" / "runtime-package-plan.json"
+MAX_MEMBER_SIZE = 8 * 1024 * 1024
+MAX_WHEEL_SIZE = 32 * 1024 * 1024
+
+
+class WheelPolicyError(RuntimeError):
+    pass
+
+
+def _sha256(data: bytes) -> str:
+    return hashlib.sha256(data).hexdigest()
+
+
+def _safe_member(name: str) -> None:
+    path = PurePosixPath(name)
+    if (
+        not name
+        or "\\" in name
+        or path.is_absolute()
+        or name != path.as_posix()
+        or any(part in {"", ".", ".."} for part in path.parts)
+    ):
+        raise WheelPolicyError("wheel_member_path_invalid")
+
+
+def _load_plan(path: Path) -> dict[str, object]:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise WheelPolicyError("runtime_plan_unavailable") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 3
+        or set(payload) != {
+            "distributions",
+            "installation_mode",
+            "python_requires",
+            "runtime_downloads_allowed",
+            "schema_version",
+        }
+        or payload.get("installation_mode") != "online-only"
+        or payload.get("runtime_downloads_allowed") is not False
+    ):
+        raise WheelPolicyError("runtime_plan_invalid")
+    distributions = payload.get("distributions")
+    if not isinstance(distributions, list) or len(distributions) != 1:
+        raise WheelPolicyError("runtime_plan_distribution_invalid")
+    distribution = distributions[0]
+    if not isinstance(distribution, dict) or distribution.get("name") != "dispatch-core":
+        raise WheelPolicyError("runtime_plan_distribution_invalid")
+    return payload
+
+
+def _read_members(archive: zipfile.ZipFile) -> tuple[dict[str, bytes], dict[str, zipfile.ZipInfo]]:
+    members: dict[str, bytes] = {}
+    infos: dict[str, zipfile.ZipInfo] = {}
+    for info in archive.infolist():
+        _safe_member(info.filename)
+        if info.filename in infos:
+            raise WheelPolicyError("wheel_member_duplicate")
+        infos[info.filename] = info
+        if info.is_dir():
+            raise WheelPolicyError("wheel_directory_member_unexpected")
+        mode = info.external_attr >> 16
+        if stat.S_ISLNK(mode):
+            raise WheelPolicyError("wheel_symlink_forbidden")
+        if info.flag_bits & 0x1:
+            raise WheelPolicyError("wheel_encryption_forbidden")
+        if info.file_size < 0 or info.file_size > MAX_MEMBER_SIZE:
+            raise WheelPolicyError("wheel_member_size_invalid")
+        members[info.filename] = archive.read(info)
+    return members, infos
+
+
+def _verify_record(members: dict[str, bytes], metadata_root: str) -> None:
+    record_name = f"{metadata_root}/RECORD"
+    try:
+        rows = list(csv.reader(io.StringIO(members[record_name].decode("utf-8"))))
+    except (KeyError, UnicodeDecodeError, csv.Error) as exc:
+        raise WheelPolicyError("wheel_record_invalid") from exc
+    if len(rows) != len(members):
+        raise WheelPolicyError("wheel_record_membership_mismatch")
+    listed: set[str] = set()
+    for row in rows:
+        if len(row) != 3:
+            raise WheelPolicyError("wheel_record_invalid")
+        name, digest, size = row
+        _safe_member(name)
+        if name in listed or name not in members:
+            raise WheelPolicyError("wheel_record_membership_mismatch")
+        listed.add(name)
+        if name == record_name:
+            if digest or size:
+                raise WheelPolicyError("wheel_record_invalid")
+            continue
+        expected = base64.urlsafe_b64encode(hashlib.sha256(members[name]).digest()).rstrip(b"=").decode("ascii")
+        if digest != f"sha256={expected}" or size != str(len(members[name])):
+            raise WheelPolicyError("wheel_record_digest_mismatch")
+    if listed != set(members):
+        raise WheelPolicyError("wheel_record_membership_mismatch")
+
+
+def verify_core_wheel(wheel: Path, plan_path: Path = DEFAULT_PLAN) -> dict[str, object]:
+    if wheel.is_symlink() or not wheel.is_file() or wheel.stat().st_size > MAX_WHEEL_SIZE:
+        raise WheelPolicyError("wheel_file_invalid")
+    plan = _load_plan(plan_path)
+    distribution = plan["distributions"][0]  # type: ignore[index]
+    version = distribution.get("version")  # type: ignore[union-attr]
+    if not isinstance(version, str) or re.fullmatch(r"[0-9]+\.[0-9]+\.[0-9]+", version) is None:
+        raise WheelPolicyError("runtime_plan_version_invalid")
+    expected_filename = f"dispatch_core-{version}-py3-none-any.whl"
+    if wheel.name != expected_filename:
+        raise WheelPolicyError("wheel_filename_invalid")
+
+    expected_files: dict[str, str] = {}
+    files = distribution.get("files")  # type: ignore[union-attr]
+    if not isinstance(files, list) or not files:
+        raise WheelPolicyError("runtime_plan_files_invalid")
+    for entry in files:
+        if not isinstance(entry, dict) or set(entry) != {"path", "sha256", "source"}:
+            raise WheelPolicyError("runtime_plan_files_invalid")
+        name = entry.get("path")
+        digest = entry.get("sha256")
+        if (
+            not isinstance(name, str)
+            or not name.startswith("dispatch_core/")
+            or not isinstance(digest, str)
+            or re.fullmatch(r"[0-9a-f]{64}", digest) is None
+            or name in expected_files
+        ):
+            raise WheelPolicyError("runtime_plan_files_invalid")
+        _safe_member(name)
+        expected_files[name] = digest
+
+    metadata_root = f"dispatch_core-{version}.dist-info"
+    metadata_members = {
+        f"{metadata_root}/METADATA",
+        f"{metadata_root}/WHEEL",
+        f"{metadata_root}/entry_points.txt",
+        f"{metadata_root}/top_level.txt",
+        f"{metadata_root}/RECORD",
+    }
+    with zipfile.ZipFile(wheel) as archive:
+        members, _infos = _read_members(archive)
+
+    package_members = {name for name in members if not name.startswith(f"{metadata_root}/")}
+    if package_members != set(expected_files) or set(members) != set(expected_files) | metadata_members:
+        raise WheelPolicyError("wheel_member_closure_mismatch")
+    for name, digest in expected_files.items():
+        if _sha256(members[name]) != digest:
+            raise WheelPolicyError("wheel_package_digest_mismatch")
+
+    metadata = BytesParser().parsebytes(members[f"{metadata_root}/METADATA"])
+    declared_dependencies = metadata.get_all("Requires-Dist", [])
+    expected_dependencies = set(distribution.get("requires_dist", [])) | set(
+        distribution.get("optional_requires_dist", [])
+    )
+    expected_extras = sorted(
+        {
+            match.group(1)
+            for dependency in expected_dependencies
+            if (match := re.search(r";\s*extra == [\"']([A-Za-z0-9_.-]+)[\"']$", dependency)) is not None
+        }
+    )
+    if (
+        metadata.get("Name") != distribution.get("name")  # type: ignore[union-attr]
+        or metadata.get("Version") != version
+        or {part.strip() for part in metadata.get("Requires-Python", "").split(",")}
+        != {part.strip() for part in str(plan["python_requires"]).split(",")}
+        or len(declared_dependencies) != len(set(declared_dependencies))
+        or set(declared_dependencies) != expected_dependencies
+        or metadata.get_all("Provides-Extra", []) != expected_extras
+    ):
+        raise WheelPolicyError("wheel_metadata_mismatch")
+
+    wheel_metadata = BytesParser().parsebytes(members[f"{metadata_root}/WHEEL"])
+    if (
+        wheel_metadata.get("Root-Is-Purelib", "").lower() != "true"
+        or wheel_metadata.get_all("Tag", []) != ["py3-none-any"]
+    ):
+        raise WheelPolicyError("wheel_tag_mismatch")
+
+    parser = configparser.ConfigParser()
+    try:
+        parser.read_string(members[f"{metadata_root}/entry_points.txt"].decode("utf-8"))
+    except (UnicodeDecodeError, configparser.Error) as exc:
+        raise WheelPolicyError("wheel_entry_points_invalid") from exc
+    expected_scripts = distribution.get("console_scripts")  # type: ignore[union-attr]
+    if not isinstance(expected_scripts, dict) or dict(parser.items("console_scripts")) != expected_scripts:
+        raise WheelPolicyError("wheel_entry_points_mismatch")
+    try:
+        top_level = [line for line in members[f"{metadata_root}/top_level.txt"].decode("utf-8").splitlines() if line]
+    except UnicodeDecodeError as exc:
+        raise WheelPolicyError("wheel_top_level_invalid") from exc
+    if top_level != distribution.get("top_level"):  # type: ignore[union-attr]
+        raise WheelPolicyError("wheel_top_level_mismatch")
+
+    _verify_record(members, metadata_root)
+    return {
+        "artifact": wheel.name,
+        "member_count": len(members),
+        "package_member_count": len(expected_files),
+        "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+        "status": "verified_core_only",
+        "version": version,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("wheel", type=Path)
+    parser.add_argument("--plan", type=Path, default=DEFAULT_PLAN)
+    parser.add_argument("--json", action="store_true")
+    arguments = parser.parse_args(argv)
+    try:
+        result = verify_core_wheel(arguments.wheel, arguments.plan)
+    except (WheelPolicyError, OSError, zipfile.BadZipFile) as exc:
+        code = str(exc) if isinstance(exc, WheelPolicyError) else "wheel_unavailable"
+        payload = {"error": {"code": code}, "status": "rejected"}
+        print(json.dumps(payload, sort_keys=True) if arguments.json else f"rejected: {code}")
+        return 1
+    print(json.dumps(result, sort_keys=True) if arguments.json else f"verified: {result['artifact']}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,73 @@
+name: Prepare reviewed Core artifacts
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: prepare-core-artifacts
+  cancel-in-progress: false
+
+env:
+  PIP_DISABLE_PIP_VERSION_CHECK: "1"
+  PYTHONDONTWRITEBYTECODE: "1"
+
+jobs:
+  prepare:
+    name: Build verification artifacts only
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    environment: core-artifact-review
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - name: Configure Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            dispatch-core/pyproject.toml
+            installer/pyproject.toml
+      - name: Verify source policy
+        run: python3 -B scripts/verify-source-export . --json
+      - name: Build explicit project roots
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/reviewed"
+          python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/reviewed" ./dispatch-core
+          python -m pip wheel --no-deps --wheel-dir "$RUNNER_TEMP/reviewed" ./installer
+          test "$(find "$RUNNER_TEMP/reviewed" -maxdepth 1 -type f -name '*.whl' | wc -l)" -eq 2
+      - name: Verify Core-only closure and installed wheels
+        shell: bash
+        run: |
+          set -euo pipefail
+          core_wheels=("$RUNNER_TEMP"/reviewed/dispatch_core-*.whl)
+          installer_wheels=("$RUNNER_TEMP"/reviewed/dispatch_installer-*.whl)
+          test "${#core_wheels[@]}" -eq 1
+          test "${#installer_wheels[@]}" -eq 1
+          python -B scripts/verify-core-wheel "${core_wheels[0]}" --json
+          python -m venv "$RUNNER_TEMP/core-smoke"
+          "$RUNNER_TEMP/core-smoke/bin/python" -m pip install "${core_wheels[0]}"
+          "$RUNNER_TEMP/core-smoke/bin/python" -c 'import dispatch_core, dispatch_core.authentication, dispatch_core.browser_manager, dispatch_core.collection_manager, dispatch_core.command_interface, dispatch_core.health, dispatch_core.paths'
+          "$RUNNER_TEMP/core-smoke/bin/dispatch-core" --help >/dev/null
+          python -m venv "$RUNNER_TEMP/installer-smoke"
+          "$RUNNER_TEMP/installer-smoke/bin/python" -m pip install "${installer_wheels[0]}"
+          "$RUNNER_TEMP/installer-smoke/bin/dispatch-installer" --help >/dev/null
+          "$RUNNER_TEMP/installer-smoke/bin/python" scripts/smoke-stage-core-wheel "${core_wheels[0]}" --work-root "$RUNNER_TEMP/staged-core"
+          (cd "$RUNNER_TEMP/reviewed" && sha256sum -- *.whl > SHA256SUMS)
+      - name: Upload short-lived reviewed artifacts
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: dispatch-core-review-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/reviewed/dispatch_core-*.whl
+            ${{ runner.temp }}/reviewed/dispatch_installer-*.whl
+            ${{ runner.temp }}/reviewed/SHA256SUMS
+          if-no-files-found: error
+          retention-days: 3

@@ -1,0 +1,10 @@
+{
+  "files": {
+    "plugins/handbook/examples/synthetic-handbook.json": {
+      "provenance": "created-for-public-tests",
+      "sha256": "3914a4dbb7753a12c91b446230ee2650953205b2f1ca87ed206db0673fe196b1",
+      "synthetic": true
+    }
+  },
+  "schema_version": 1
+}

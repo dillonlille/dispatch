@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools==79.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dispatch-installer"
+version = "0.1.0"
+description = "Online installation and verification boundary for Dispatch"
+requires-python = ">=3.11,<3.14"
+dependencies = []
+
+[project.scripts]
+dispatch-installer = "dispatch_installer.cli:main"
+
+[tool.setuptools]
+packages = ["dispatch_installer"]
+
+[tool.setuptools.package-dir]
+dispatch_installer = "src/dispatch_installer"
+
+[tool.pytest.ini_options]
+addopts = "-q -p no:cacheprovider"
+testpaths = ["tests"]

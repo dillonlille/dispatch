@@ -1,0 +1,78 @@
+{
+  "automation": {
+    "installer_generation_members": [
+      "verified Python Playwright package",
+      "verified Playwright Node executable",
+      "verified Playwright driver CLI"
+    ],
+    "package": "playwright",
+    "version": "1.62.0",
+    "wheel_and_transitive_lock_required": true
+  },
+  "browser": {
+    "browser_version": "151.0.7922.34",
+    "family": "chromium",
+    "playwright_revision": "1234"
+  },
+  "development_verification": {
+    "linux_x86_64_executable": {
+      "sha256": "0b20b130e7edd9dd51873be867761295fe0cfad490c2b9a64f95bd3cfc08fa71",
+      "size": 290614600
+    },
+    "sandbox_note": "This host requires installer-managed AppArmor or Chromium sandbox provisioning. The explicit real-browser test proves a test wrapper adding --no-sandbox is rejected; it is not successful production sandbox evidence."
+  },
+  "download_policy": {
+    "allowed_phases": [
+      "install",
+      "upgrade",
+      "repair"
+    ],
+    "collection_downloads_allowed": false,
+    "online_required": true
+  },
+  "release_artifact_manifest": {
+    "ready": false,
+    "required_before_installer_acceptance": [
+      "approved artifact URLs and hosts",
+      "per-platform archive sizes and SHA-256 digests",
+      "approved Playwright and transitive Python wheel URLs, sizes, and SHA-256 digests",
+      "Playwright Python module, Node executable, and driver CLI generation paths and digests",
+      "signature verification policy where supported",
+      "sandbox and operating-system dependency receipts"
+    ]
+  },
+  "runtime_consumer_contract": {
+    "active_selector": "/etc/dispatch/browser-runtime-active.json",
+    "browser_manager_mutations_allowed": false,
+    "generation_immutable_while_core_may_use_it": true,
+    "generation_root": "/opt/dispatch/browser-runtimes",
+    "installer_owned_operations": [
+      "download",
+      "verify_artifact",
+      "extract",
+      "activate",
+      "upgrade",
+      "repair",
+      "rollback",
+      "uninstall"
+    ],
+    "playwright_control_files_are_generation_members": true,
+    "quiesce_core_before_generation_mutation_or_removal": true,
+    "receipt_schema_version": 1,
+    "sandbox_policy_id": "dispatch-chromium-apparmor-v1"
+  },
+  "sandbox": {
+    "forbidden_runtime_flags": [
+      "--disable-gpu-sandbox",
+      "--disable-namespace-sandbox",
+      "--disable-seccomp-filter-sandbox",
+      "--disable-setuid-sandbox",
+      "--no-sandbox",
+      "--no-zygote",
+      "--single-process"
+    ],
+    "production_required": true,
+    "silent_no_sandbox_fallback_allowed": false
+  },
+  "schema_version": 1
+}

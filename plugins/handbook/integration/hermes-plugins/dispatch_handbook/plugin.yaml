@@ -1,0 +1,10 @@
+name: dispatch_handbook
+version: 0.1.0
+description: "Portable read-only local handbook lookup, overview, contents, and health."
+author: Dispatch Maintainers
+kind: backend
+provides_tools:
+  - dispatch_handbook
+requires_env:
+  - DISPATCH_HANDBOOK_DATA_ROOT
+  - DISPATCH_HANDBOOK_INDEX

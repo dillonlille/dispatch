@@ -1,0 +1,65 @@
+[build-system]
+requires = ["setuptools==79.0.1"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dispatch-core"
+version = "1.0.0"
+description = "Feature-oriented portable control plane for Dispatch"
+requires-python = ">=3.11,<3.14"
+dependencies = [
+  "cryptography==48.0.1",
+  "playwright==1.62.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "attrs==26.1.0",
+  "iniconfig==2.3.0",
+  "jsonschema==4.26.0",
+  "jsonschema-specifications==2025.9.1",
+  "packaging==26.3",
+  "pluggy==1.6.0",
+  "Pygments==2.20.0",
+  "pytest==9.1.1",
+  "PyYAML==6.0.3",
+  "referencing==0.37.0",
+  "rpds-py==2026.6.3",
+  "typing_extensions==4.16.0",
+]
+
+[project.scripts]
+dispatch-core = "dispatch_core.command_interface:main"
+
+[tool.setuptools]
+packages = [
+  "dispatch_core",
+  "dispatch_core.paths",
+  "dispatch_core.health",
+  "dispatch_core.command_interface",
+  "dispatch_core.collection_manager",
+  "dispatch_core.authentication",
+  "dispatch_core.browser_manager",
+]
+
+[tool.setuptools.package-dir]
+dispatch_core = "src/dispatch_core"
+"dispatch_core.paths" = "paths/src/dispatch_core/paths"
+"dispatch_core.health" = "health/src/dispatch_core/health"
+"dispatch_core.command_interface" = "command-interface/src/dispatch_core/command_interface"
+"dispatch_core.collection_manager" = "collection-manager/src/dispatch_core/collection_manager"
+"dispatch_core.authentication" = "authentication/src/dispatch_core/authentication"
+"dispatch_core.browser_manager" = "browser-manager/src/dispatch_core/browser_manager"
+
+[tool.pytest.ini_options]
+addopts = "-q -p no:cacheprovider"
+testpaths = [
+  "paths/tests",
+  "health/tests",
+  "command-interface/tests",
+  "collection-manager/tests",
+  "authentication/tests",
+  "browser-manager/tests",
+  "plugin-policy/tests",
+  "lifecycle/tests",
+]

@@ -1,0 +1,64 @@
+{
+  "distribution": {
+    "dependencies": [],
+    "name": "dispatch-installer",
+    "pyproject": "installer/pyproject.toml",
+    "python_requires": ">=3.11,<3.14",
+    "version": "0.1.0"
+  },
+  "files": [
+    {
+      "path": "installer/pyproject.toml",
+      "sha256": "51625b35a1160c70fdb4316d68b4e2b066a100b9184a04686134af719daa8960",
+      "size": 556
+    },
+    {
+      "path": "installer/src/dispatch_installer/__init__.py",
+      "sha256": "5444541fdc1e0a3aba326a1fdddc42eea88d8feccbdb2dc89563f1686f011880",
+      "size": 540
+    },
+    {
+      "path": "installer/src/dispatch_installer/__main__.py",
+      "sha256": "935a1c1166b0c1ea35a82256345000bf2c73ded718d77773bc27a71ecce28f7d",
+      "size": 48
+    },
+    {
+      "path": "installer/src/dispatch_installer/cli.py",
+      "sha256": "7ddc7e5144332ad54473f6fad65679133e4dfbc2bba52232de8a4135b08584dc",
+      "size": 4589
+    },
+    {
+      "path": "installer/src/dispatch_installer/core_release.py",
+      "sha256": "67f3ba304cfd9898ad76dbb76d6c05bd7512593ece61e7dc6e44b4fb4cb32b10",
+      "size": 25187
+    },
+    {
+      "path": "installer/src/dispatch_installer/doctor.py",
+      "sha256": "a6a7b7cf36f2892534343e90a44fbe98fe4d2aad1add28b9bc9b41d0ee1f0c09",
+      "size": 4247
+    },
+    {
+      "path": "installer/src/dispatch_installer/download.py",
+      "sha256": "aa0b368cabff7f2c16eec599613cc1ddf2963c3877b2ffcc9142e8d5b04b4299",
+      "size": 9386
+    },
+    {
+      "path": "installer/src/dispatch_installer/layout.py",
+      "sha256": "abc52215f3277ea9dd80e3889325f399ce7f93884298e511184d2d56949f88e5",
+      "size": 18042
+    },
+    {
+      "path": "installer/src/dispatch_installer/manifest.py",
+      "sha256": "a37b6c45b050569999a92e1e37f4123e4fdb9b92ccacf9d1877a418b77498fcd",
+      "size": 6817
+    },
+    {
+      "path": "installer/src/dispatch_installer/uninstall.py",
+      "sha256": "8782af11c11ae3d82c0963971e78d48d256d7037bac2e88101315c97feca9626",
+      "size": 53012
+    }
+  ],
+  "online_only": true,
+  "production_install_ready": false,
+  "schema_version": 1
+}

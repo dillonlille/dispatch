@@ -1,0 +1,25 @@
+{
+  "schema_version": 1,
+  "synthetic": true,
+  "provenance": "Wholly invented for public automated tests; not derived from any private source.",
+  "document_id": "synthetic-aster-lantern-v1",
+  "title": "Aster Lantern Guide — Synthetic Test Fixture",
+  "version": "Fixture 1.0",
+  "sections": [
+    {
+      "id": "lantern-colors",
+      "title": "Lantern Color Index",
+      "text": "Violet lantern cards pair with square paper stars. Amber lantern cards pair with crescent paper stars. Teal lantern cards pair with spiral paper stars. These invented objects exist only in this automated test fixture."
+    },
+    {
+      "id": "paper-star-returns",
+      "title": "Paper Star Returns",
+      "text": "A paper star with a curled corner goes into the blue return tray. A paper star with a faded center goes into the silver return tray. Flat, bright paper stars remain beside their matching lantern card."
+    },
+    {
+      "id": "moon-tiles",
+      "title": "Moon Tile Catalog",
+      "text": "Round moon tiles use the code MT-R. Hexagonal moon tiles use the code MT-H. Each imaginary tile is counted once beside a matching illustrated lantern before the catalog closes."
+    }
+  ]
+}
