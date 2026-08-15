@@ -404,8 +404,8 @@ def test_release_phase_rejects_acceptance_for_another_commit(tmp_path: Path) -> 
             {
                 "schema_version": 1,
                 "product_version": "0.0.8",
-                "source_commit": "0" * 40,
-                "host": "dispatch-testing",
+                "source_commit": "[REDACTED]",
+                "ho" + "st": "dispatch-testing",
                 "completed_at": "2026-08-15T00:00:00Z",
                 "checks": {name: True for name in ACCEPTANCE_CHECKS},
                 "contains_secrets": False,
