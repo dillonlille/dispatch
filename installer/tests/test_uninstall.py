@@ -49,7 +49,7 @@ def make_wheel(path: Path) -> Path:
             b"Metadata-Version: 2.1\nName: dispatch-core\nVersion: 1.0.0\n"
             b"License-Expression: Apache-2.0\n"
             b"Requires-Python: <3.14,>=3.11\n"
-            b"Requires-Dist: cryptography==48.0.1\nRequires-Dist: playwright==1.62.0\n\n"
+            b"Requires-Dist: cryptography==50.0.0\nRequires-Dist: playwright==1.62.0\n\n"
         ),
         "dispatch_core-1.0.0.dist-info/WHEEL": (
             b"Wheel-Version: 1.0\nGenerator: dispatch-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n"
@@ -84,7 +84,7 @@ def stage_core_wheel(layout: InstallLayout, wheel: Path, **kwargs):
         layout,
         wheel,
         expected_package_files={"dispatch_core/__init__.py": hashlib.sha256(package).hexdigest()},
-        expected_requires_dist={"cryptography==48.0.1", "playwright==1.62.0"},
+        expected_requires_dist={"cryptography==50.0.0", "playwright==1.62.0"},
         **kwargs,
     )
 

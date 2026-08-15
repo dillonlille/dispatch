@@ -33,7 +33,7 @@ Chromium 151.0.7922.34 (Playwright revision 1234)
 Authentication adds the setup-time `authentication` capability extra:
 
 ```text
-cryptography==48.0.1
+cryptography==50.0.0
 ```
 
 The future production release manifest must identify every approved direct and transitive dependency artifact by immutable authority, size, and digest. Index resolution, dependency discovery, and repository-wide downloads are not an acceptable production closure.

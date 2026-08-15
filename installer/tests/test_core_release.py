@@ -49,7 +49,7 @@ def make_wheel(
             b"Metadata-Version: 2.1\nName: dispatch-core\nVersion: 1.0.0\n"
             b"License-Expression: Apache-2.0\n"
             b"Requires-Python: <3.14,>=3.11\n"
-            b"Requires-Dist: cryptography==48.0.1\nRequires-Dist: playwright==1.62.0\n\n"
+            b"Requires-Dist: cryptography==50.0.0\nRequires-Dist: playwright==1.62.0\n\n"
         ),
         "dispatch_core-1.0.0.dist-info/WHEEL": b"Wheel-Version: 1.0\nGenerator: dispatch-test\nRoot-Is-Purelib: true\nTag: py3-none-any\n",
         "dispatch_core-1.0.0.dist-info/entry_points.txt": (
@@ -94,7 +94,7 @@ def test_core_wheel_requires_exact_apache_license(tmp_path: Path) -> None:
             expected_package_files={
                 "dispatch_core/__init__.py": hashlib.sha256(b'__version__ = "1.0.0"\n').hexdigest()
             },
-            expected_requires_dist=("cryptography==48.0.1", "playwright==1.62.0"),
+            expected_requires_dist=("cryptography==50.0.0", "playwright==1.62.0"),
         )
 
     assert error.value.code == "wheel_license"
@@ -107,7 +107,7 @@ def stage_core_wheel(layout: InstallLayout, wheel: Path, **kwargs):
         layout,
         wheel,
         expected_package_files={"dispatch_core/__init__.py": hashlib.sha256(package).hexdigest()},
-        expected_requires_dist={"cryptography==48.0.1", "playwright==1.62.0"},
+        expected_requires_dist={"cryptography==50.0.0", "playwright==1.62.0"},
         **kwargs,
     )
 
@@ -274,7 +274,7 @@ def test_plugin_bytes_inside_core_namespace_are_rejected_before_layout_mutation(
                 "dispatch_core/__init__.py": core_digest,
                 "dispatch_core/plugins/handbook.py": plugin_digest,
             },
-            expected_requires_dist={"cryptography==48.0.1", "playwright==1.62.0"},
+            expected_requires_dist={"cryptography==50.0.0", "playwright==1.62.0"},
         )
     assert policy_error.value.code == "wheel_package_policy"
     assert not layout.dispatch_home.exists()
@@ -286,7 +286,7 @@ def test_active_dependency_cannot_hide_behind_extra_marker(tmp_path: Path) -> No
         b"Metadata-Version: 2.1\nName: dispatch-core\nVersion: 1.0.0\n"
         b"License-Expression: Apache-2.0\n"
         b"Requires-Python: <3.14,>=3.11\n"
-        b"Requires-Dist: cryptography==48.0.1\n"
+        b"Requires-Dist: cryptography==50.0.0\n"
         b"Requires-Dist: playwright==1.62.0\n"
         b'Requires-Dist: dispatch-local-handbook==0.1.0; extra == "dev" or python_version >= "3.11"\n\n'
     )
@@ -313,7 +313,7 @@ def test_approved_package_digest_is_required_before_layout_mutation(tmp_path: Pa
             expected_sha256=sha256_file(wheel),
             expected_version="1.0.0",
             expected_package_files={"dispatch_core/__init__.py": "0" * 64},
-            expected_requires_dist={"cryptography==48.0.1", "playwright==1.62.0"},
+            expected_requires_dist={"cryptography==50.0.0", "playwright==1.62.0"},
         )
 
     assert error.value.code == "wheel_package_digest"
@@ -445,7 +445,7 @@ def test_core_application_install_publishes_launcher_and_activates_release(tmp_p
         expected_sha256=sha256_file(wheel),
         expected_version="1.0.0",
         expected_package_files={"dispatch_core/__init__.py": package_digest},
-        expected_requires_dist={"cryptography==48.0.1", "playwright==1.62.0"},
+        expected_requires_dist={"cryptography==50.0.0", "playwright==1.62.0"},
         launcher_python=python,
     )
 

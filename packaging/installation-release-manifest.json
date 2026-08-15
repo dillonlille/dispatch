@@ -100,7 +100,7 @@
       }
     ],
     "requires_dist": [
-      "cryptography==48.0.1; extra == \"authentication\"",
+      "cryptography==50.0.0; extra == \"authentication\"",
       "playwright==1.62.0; extra == \"browser\"",
       "attrs==26.1.0; extra == \"dev\"",
       "iniconfig==2.3.0; extra == \"dev\"",

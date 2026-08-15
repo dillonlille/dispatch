@@ -283,7 +283,7 @@
     "dispatch-core/pyproject.toml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "b6efc15d753445fc60806b616d9902e397d8451e49d2ffa23b0b280533160201"
+      "sha256": "112a15e2a8ab1221d59c9e53953a482d259698aac84c69f16921f440bd3b464a"
     },
     "dispatch-core/scripts/build": {
       "kind": "file",
@@ -318,7 +318,7 @@
     "docs/online-installation.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "d176bb4c2f1e152ee46b035f93f3d64deca306f10ee889f7f1a3af681bda6f3f"
+      "sha256": "f28fd7aad1295bf2eaf5b41f8e40da349c44229067f0a32fb3c9b2202aa5f6b7"
     },
     "docs/path-configuration.md": {
       "kind": "file",
@@ -403,7 +403,7 @@
     "installer/pyproject.toml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "b53ec5f9bb02b1000e4a739d1ebbd66ab3c197d1f3cccc76ee78acf82ed0a43c"
+      "sha256": "caea3cdca0edd850df88dbffb23941ed6ca4761c8afa79d20d9e7026af96d15c"
     },
     "installer/src/dispatch_installer/__init__.py": {
       "kind": "file",
@@ -488,7 +488,7 @@
     "installer/tests/test_core_release.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "bb8c3125a5298243277e69db9fd455afa8280fe106fe82851fd14761b75783b4"
+      "sha256": "839e4be16511a2c17eef2db395f432a03096ec264c2bb2a4539ccd5eab349b02"
     },
     "installer/tests/test_download.py": {
       "kind": "file",
@@ -518,7 +518,7 @@
     "installer/tests/test_uninstall.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "209dcb283d247882c629eadc9a1d6200e65b3565be15c22970c4190e2f5220fe"
+      "sha256": "1b10e8aefa10389e20f0e63a824ffaeb3185555732a2ef36340931a43540e94c"
     },
     "packaging/browser-runtime-plan.json": {
       "kind": "file",
@@ -528,22 +528,22 @@
     "packaging/development-dependencies.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "b479665819ff5daed00ca23823a8c2385ab8f46437edbb8d095d61dc0bf0e6ff"
+      "sha256": "05e24b790ee7d9288b99eb86b5cb097236a7908bc15f60b77ebfcbffccdce39d"
     },
     "packaging/installation-release-manifest.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "1aca1b3185d4a6ef9d14d78e5123a6bc18de673444684775557167567022efec"
+      "sha256": "ac73d7896724e8cc4d89e15569ed9eb236f369b0d2766e7fb28ca4a4fd2ade2e"
     },
     "packaging/installer-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "f3116e22fce77bd1f9f5e43fb03ac437b97e0809cd77edc381da5b5756c39117"
+      "sha256": "98a9e672fb717113eda7597359f1be5d63a2bee52da51ded87e497b15eefcd71"
     },
     "packaging/runtime-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "df0b87dca4be0a0c70de1ba90330d6a6ad95fe1d2041a5942b232ed9324ae4a9"
+      "sha256": "0437932bed694217106f3d157e42ba72a3e8cfbe5a46321f1d6250919f43f446"
     },
     "plugins/handbook/LICENSE": {
       "kind": "file",
@@ -583,7 +583,7 @@
     "plugins/handbook/pyproject.toml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "7a9064bcd73d1328575f475d53c8a34b04eb4efcf910e99a84c57ce9594756a7"
+      "sha256": "c1a01303b00131f75bd7bfcb53d39aee8d09372353f85884539a58796a1114f9"
     },
     "plugins/handbook/scripts/build": {
       "kind": "file",
