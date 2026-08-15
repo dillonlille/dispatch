@@ -83,14 +83,16 @@ def test_browser_runtime_plan_is_pinned_but_not_an_installer_release_manifest() 
         "generation_manifest_schema": "docs/schemas/dispatch-browser-runtime-generation-v1.schema.json",
         "implemented_operations": [
             "validate_digest_bound_generation_manifest",
+            "validate_fixed_authority_evidence_receipts",
             "stage_exact_immutable_generation",
             "verify_complete_generation_tree",
             "activate_atomic_selector",
-            "retain_previous_selector",
-            "rollback_selector",
+            "explicit_target_rollback",
         ],
+        "launch_composition_ready": False,
         "privileged_helper_ready": False,
         "production_artifacts_available": False,
+        "trusted_evidence_producers_ready": False,
         "synthetic_path_tests_only": True,
     }
     assert (ROOT / plan["installer_foundation"]["generation_manifest_schema"]).is_file()
@@ -110,5 +112,12 @@ def test_browser_runtime_plan_is_pinned_but_not_an_installer_release_manifest() 
     assert evidence_schema["properties"]["os_dependencies"]["properties"]["verified"]["const"] is True
     assert evidence_schema["properties"]["sandbox"]["properties"]["verified"]["const"] is True
     assert evidence_schema["properties"]["launch_probe"]["properties"]["passed"]["const"] is True
+    assert "receipt_sha256" in evidence_schema["properties"]["launch_probe"]["required"]
     assert plan["runtime_consumer_contract"]["tree_manifest_binds_member_modes"] is True
+    assert plan["runtime_consumer_contract"]["rollback_requires_explicit_verified_generation"] is True
+    assert plan["runtime_consumer_contract"]["evidence_receipts"] == [
+        "os-dependencies.json",
+        "sandbox.json",
+        "launch-probe.json",
+    ]
     assert plan["release_artifact_manifest"]["ready"] is False

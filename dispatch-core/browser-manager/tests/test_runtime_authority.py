@@ -82,25 +82,22 @@ def install_fixture(tmp_path: Path) -> tuple[BrowserRuntimeAuthority, dict[str, 
     for directory in (runtime_root, generation_root, executable.parent, config_root):
         directory.chmod(0o755)
     executable.write_bytes(b"#!/bin/sh\nexit 0\n")
-    executable.chmod(0o755)
+    executable.chmod(0o555)
     resource = executable.parent / "resources.pak"
     resource.write_bytes(b"trusted resource")
-    resource.chmod(0o644)
+    resource.chmod(0o444)
     playwright_module = generation_root / "python" / "playwright" / "__init__.py"
     driver_executable = generation_root / "python" / "playwright" / "driver" / "node"
     driver_cli = generation_root / "python" / "playwright" / "driver" / "package" / "cli.js"
     playwright_module.parent.mkdir(parents=True)
     playwright_module.write_text("# verified Playwright fixture\n", encoding="utf-8")
-    playwright_module.chmod(0o644)
+    playwright_module.chmod(0o444)
     driver_executable.parent.mkdir(parents=True)
     driver_executable.write_bytes(b"verified node fixture\n")
-    driver_executable.chmod(0o755)
+    driver_executable.chmod(0o555)
     driver_cli.parent.mkdir(parents=True)
     driver_cli.write_text("// verified driver fixture\n", encoding="utf-8")
-    driver_cli.chmod(0o644)
-    for directory in generation_root.rglob("*"):
-        if directory.is_dir():
-            directory.chmod(0o755)
+    driver_cli.chmod(0o444)
 
     tree = {
         "schema_version": 1,
@@ -108,33 +105,33 @@ def install_fixture(tmp_path: Path) -> tuple[BrowserRuntimeAuthority, dict[str, 
             "chrome-linux64/chrome": {
                 "size": executable.stat().st_size,
                 "sha256": digest(executable),
-                "mode": "0755",
+                "mode": "0555",
             },
             "chrome-linux64/resources.pak": {
                 "size": resource.stat().st_size,
                 "sha256": digest(resource),
-                "mode": "0644",
+                "mode": "0444",
             },
             "python/playwright/__init__.py": {
                 "size": playwright_module.stat().st_size,
                 "sha256": digest(playwright_module),
-                "mode": "0644",
+                "mode": "0444",
             },
             "python/playwright/driver/node": {
                 "size": driver_executable.stat().st_size,
                 "sha256": digest(driver_executable),
-                "mode": "0755",
+                "mode": "0555",
             },
             "python/playwright/driver/package/cli.js": {
                 "size": driver_cli.stat().st_size,
                 "sha256": digest(driver_cli),
-                "mode": "0644",
+                "mode": "0444",
             },
         },
     }
     tree_path = generation_root / "tree-manifest.json"
     tree_path.write_bytes(encoded(tree))
-    tree_path.chmod(0o644)
+    tree_path.chmod(0o444)
 
     receipt: dict[str, object] = {
         "schema_version": 1,
@@ -163,6 +160,7 @@ def install_fixture(tmp_path: Path) -> tuple[BrowserRuntimeAuthority, dict[str, 
         "executable_sha256": digest(executable),
         "tree_manifest_relative_path": tree_path.name,
         "tree_manifest_sha256": digest(tree_path),
+        "source_manifest_sha256": "a" * 64,
         "os_dependencies_verified": True,
         "sandbox_verified": True,
         "sandbox_policy_id": "dispatch-chromium-apparmor-v1",
@@ -170,7 +168,9 @@ def install_fixture(tmp_path: Path) -> tuple[BrowserRuntimeAuthority, dict[str, 
     }
     receipt_path = generation_root / "installation-receipt.json"
     receipt_path.write_bytes(encoded(receipt))
-    receipt_path.chmod(0o644)
+    receipt_path.chmod(0o444)
+    for directory in (generation_root, *[path for path in generation_root.rglob("*") if path.is_dir()]):
+        directory.chmod(0o555)
     selector = {
         "schema_version": 1,
         "generation": generation,
@@ -178,7 +178,7 @@ def install_fixture(tmp_path: Path) -> tuple[BrowserRuntimeAuthority, dict[str, 
     }
     selector_path = config_root / "browser-runtime-active.json"
     selector_path.write_bytes(encoded(selector))
-    selector_path.chmod(0o644)
+    selector_path.chmod(0o444)
 
     policy = BrowserRuntimePolicy(
         selector=selector_path,
@@ -199,9 +199,13 @@ def refresh_receipt(authority: BrowserRuntimeAuthority, receipt: dict[str, objec
     selector_path = policy.selector
     selector = json.loads(selector_path.read_text(encoding="utf-8"))
     receipt_path = policy.runtime_root / str(selector["generation"]) / "installation-receipt.json"
+    receipt_path.chmod(0o644)
     receipt_path.write_bytes(encoded(receipt))
+    receipt_path.chmod(0o444)
     selector["receipt_sha256"] = digest(receipt_path)
+    selector_path.chmod(0o644)
     selector_path.write_bytes(encoded(selector))
+    selector_path.chmod(0o444)
 
 
 def test_valid_installer_receipt_and_tree_are_consumed_read_only(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -220,8 +224,9 @@ def test_playwright_control_files_and_loaded_module_location_are_bound(tmp_path:
     authority, _, executable = install_fixture(tmp_path)
     generation_root = executable.parents[1]
     control = generation_root / "python" / "playwright" / "driver" / "node"
-    control.write_bytes(b"tampered node fixture\n")
     control.chmod(0o755)
+    control.write_bytes(b"tampered node fixture\n")
+    control.chmod(0o555)
 
     with pytest.raises(BrowserManagerError) as tampered:
         authority.load()
@@ -240,7 +245,9 @@ def test_playwright_control_files_and_loaded_module_location_are_bound(tmp_path:
 
 def test_executable_tampering_fails_closed(tmp_path: Path) -> None:
     authority, _, executable = install_fixture(tmp_path)
+    executable.chmod(0o755)
     executable.write_bytes(b"#!/bin/sh\nexit 7\n")
+    executable.chmod(0o555)
 
     with pytest.raises(BrowserManagerError) as rejected:
         authority.load()
@@ -260,8 +267,9 @@ def test_runtime_rechecks_the_complete_tree_immediately_before_launch(tmp_path: 
         installation.identity.executable,
     )
     resource = executable.parent / "resources.pak"
-    resource.write_bytes(b"tampered resource")
     resource.chmod(0o644)
+    resource.write_bytes(b"tampered resource")
+    resource.chmod(0o444)
 
     with pytest.raises(BrowserManagerError) as rejected:
         runtime._verified_for_launch()
@@ -293,8 +301,10 @@ def test_receipt_version_mismatch_fails_even_when_installer_files_are_well_forme
 def test_unlisted_tree_member_fails_full_integrity_check(tmp_path: Path) -> None:
     authority, _, executable = install_fixture(tmp_path)
     unexpected = executable.parent / "unexpected-library.so"
+    executable.parent.chmod(0o755)
     unexpected.write_bytes(b"unexpected")
-    unexpected.chmod(0o644)
+    unexpected.chmod(0o444)
+    executable.parent.chmod(0o555)
 
     with pytest.raises(BrowserManagerError) as rejected:
         authority.load(full_tree=True)
@@ -344,6 +354,41 @@ def test_wrong_playwright_package_version_fails_before_runtime_selection(tmp_pat
         mismatched.load()
 
     assert rejected.value.code == "playwright_version_mismatch"
+
+
+def test_malformed_boolean_and_duplicate_key_receipts_fail_closed(tmp_path: Path) -> None:
+    authority, receipt, _ = install_fixture(tmp_path)
+    receipt["launch_probe_passed"] = 1
+    refresh_receipt(authority, receipt)
+    with pytest.raises(BrowserManagerError) as boolean_receipt:
+        authority.load()
+    assert boolean_receipt.value.code == "browser_receipt_incomplete"
+
+    authority, _, _ = install_fixture(tmp_path / "duplicate")
+    selector = authority_policy(authority).selector
+    selector.chmod(0o644)
+    selector.write_text(
+        '{"schema_version":1,"schema_version":1,"generation":"chromium-151.0.7922.34-r1234",'
+        f'"receipt_sha256":"{json.loads(selector.read_text())["receipt_sha256"]}"}}\n',
+        encoding="utf-8",
+    )
+    selector.chmod(0o444)
+    with pytest.raises(BrowserManagerError) as duplicate:
+        authority.load()
+    assert duplicate.value.code == "browser_runtime_selector_invalid"
+
+
+def test_boolean_selector_schema_version_fails_closed(tmp_path: Path) -> None:
+    authority, _, _ = install_fixture(tmp_path)
+    selector = authority_policy(authority).selector
+    payload = json.loads(selector.read_text())
+    payload["schema_version"] = True
+    selector.chmod(0o644)
+    selector.write_bytes(encoded(payload))
+    selector.chmod(0o444)
+    with pytest.raises(BrowserManagerError) as rejected:
+        authority.load()
+    assert rejected.value.code == "browser_runtime_selector_invalid"
 
 
 def test_public_manager_constructor_has_no_runtime_or_realm_override() -> None:

@@ -68,14 +68,14 @@ playwright_driver_cli_relative_path, playwright_driver_cli_size,
 playwright_driver_cli_sha256,
 browser_family, browser_version, playwright_revision,
 executable_relative_path, executable_size, executable_sha256,
-tree_manifest_relative_path, tree_manifest_sha256,
+tree_manifest_relative_path, tree_manifest_sha256, source_manifest_sha256,
 os_dependencies_verified, sandbox_verified, sandbox_policy_id,
 launch_probe_passed
 ```
 
 The initial accepted platform is Linux/Ubuntu/24.04/x86_64; `installer_release` must begin with `dispatch-installer-`; all three verification booleans must be `true`; and `sandbox_policy_id` must be `dispatch-chromium-apparmor-v1`. Unknown or missing fields are rejected.
 
-The tree manifest contains exactly `schema_version` and a non-empty `files` object. Every key is a safe relative regular-file path and every value contains exactly `size` and `sha256`. Constructor, launch, health, doctor, and verify checks compare every declared digest and reject undeclared files, symlinks, hard links, unsafe ownership, and unsafe permissions. The receipt and tree manifest themselves are excluded from the tree member list because the receipt binds the manifest and the selector binds the receipt.
+The tree manifest contains exactly `schema_version` and a non-empty `files` object. Every key is a safe relative regular-file path and every value contains exactly `size`, `sha256`, and `mode`; accepted sealed modes are exactly `0444` for data and `0555` for executables. Every generation directory is exactly `0555`. Constructor, launch, health, doctor, and verify checks compare every declared digest and reject undeclared files, duplicate JSON keys, boolean schema versions, symlinks, hard links, unsafe ownership, and writable or mismatched permissions. The receipt and tree manifest themselves are excluded from the tree member list because the receipt binds the manifest and the selector binds the receipt.
 
 The generation is immutable while Core may use it. The installer must start Core with the selected generation's verified Python root ahead of any other Playwright installation, so Python distribution metadata and the loaded `playwright` module resolve to the receipt-bound files. Installer activation selects a new complete generation atomically; upgrade, rollback, repair, and uninstall must quiesce and restart Core before changing the selected Playwright generation or mutating/removing any generation that a running Browser Manager may have loaded.
 

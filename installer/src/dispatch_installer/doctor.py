@@ -11,6 +11,10 @@ from .core_release import verify_core_release
 from .layout import InstallLayout, InstallerError
 
 
+_PRODUCTION_INSTALL_READY = False
+_BROWSER_LAUNCH_COMPOSITION_READY = False
+
+
 def _check_private_directory(path: Path) -> dict[str, str | bool | None]:
     if not path.exists():
         return {"status": "missing", "path": str(path), "mode": None}
@@ -74,9 +78,23 @@ def inspect_installation(layout: InstallLayout) -> dict:
     checks["core"] = core
 
     checks["browser_authority"] = inspect_browser_runtime(layout)
+    checks["production_release"] = {
+        "status": "ready" if _PRODUCTION_INSTALL_READY else "blocked",
+        "ready": _PRODUCTION_INSTALL_READY,
+        "reason": None if _PRODUCTION_INSTALL_READY else "production release manifest is intentionally not ready",
+    }
+    checks["browser_launch_composition"] = {
+        "status": "ready" if _BROWSER_LAUNCH_COMPOSITION_READY else "blocked",
+        "ready": _BROWSER_LAUNCH_COMPOSITION_READY,
+        "reason": None
+        if _BROWSER_LAUNCH_COMPOSITION_READY
+        else "selected-generation Playwright bootstrap is not implemented",
+    }
     unsafe = any(check.get("status") == "unsafe" for check in checks.values())
     ready = (
         not unsafe
+        and _PRODUCTION_INSTALL_READY
+        and _BROWSER_LAUNCH_COMPOSITION_READY
         and checks["core"]["status"] == "ready"
         and checks["browser_authority"]["status"] == "verified"
     )

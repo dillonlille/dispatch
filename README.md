@@ -40,7 +40,7 @@ The GitHub workflows under `.github/workflows/` build only explicit project root
 - Dispatch Plugin Standard v1, schema, and public plugin-development guidance;
 - a standard-library installer foundation using `${HOME}/.dispatch` for per-user Dispatch code and mutable roots;
 - digest-pinned installation-manifest, approved-GitHub download, transactional Core release, doctor, verification, and receipt-bound user-scope uninstall primitives;
-- a closed, digest-bound browser-generation manifest plus synthetic-path immutable staging, full-tree verification, atomic active/previous selectors, and reversible selector rollback primitives owned by the installer;
+- a closed, digest-bound browser-generation manifest plus fixed-authority evidence receipts, synthetic-path immutable staging, full-tree verification, one atomic active selector, and explicit-target rollback primitives owned by the installer;
 - a pinned Core and browser runtime package plan for the future production install orchestration;
 - independently packaged, deferred Handbook plugin source and one explicitly declared fictional demo fixture;
 - fail-closed source-scope, provenance, path, fixture, configuration, and secret checks;

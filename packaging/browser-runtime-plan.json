@@ -35,14 +35,16 @@
     "generation_manifest_schema": "docs/schemas/dispatch-browser-runtime-generation-v1.schema.json",
     "implemented_operations": [
       "validate_digest_bound_generation_manifest",
+      "validate_fixed_authority_evidence_receipts",
       "stage_exact_immutable_generation",
       "verify_complete_generation_tree",
       "activate_atomic_selector",
-      "retain_previous_selector",
-      "rollback_selector"
+      "explicit_target_rollback"
     ],
+    "launch_composition_ready": false,
     "privileged_helper_ready": false,
     "production_artifacts_available": false,
+    "trusted_evidence_producers_ready": false,
     "synthetic_path_tests_only": true
   },
   "release_artifact_manifest": {
@@ -58,6 +60,13 @@
   },
   "runtime_consumer_contract": {
     "active_selector": "/etc/dispatch/browser-runtime-active.json",
+    "evidence_receipt_root": "/etc/dispatch/browser-runtime-evidence/<generation>",
+    "evidence_receipts": [
+      "os-dependencies.json",
+      "sandbox.json",
+      "launch-probe.json"
+    ],
+    "rollback_requires_explicit_verified_generation": true,
     "browser_manager_mutations_allowed": false,
     "generation_immutable_while_core_may_use_it": true,
     "generation_root": "/opt/dispatch/browser-runtimes",

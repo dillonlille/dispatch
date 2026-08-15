@@ -61,6 +61,7 @@ _RECEIPT_KEYS = frozenset(
         "executable_sha256",
         "tree_manifest_relative_path",
         "tree_manifest_sha256",
+        "source_manifest_sha256",
         "os_dependencies_verified",
         "sandbox_verified",
         "sandbox_policy_id",
@@ -171,12 +172,21 @@ def installed_playwright_module() -> Path:
     return Path(os.path.abspath(distribution.locate_file("playwright/__init__.py")))
 
 
+def _object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
+    payload: dict[str, object] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate JSON key: {key}")
+        payload[key] = value
+    return payload
+
+
 def _json_object(path: Path, error_code: str, label: str) -> dict[str, object]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
+        payload = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_object_pairs)
     except FileNotFoundError as exc:
         raise BrowserManagerError(error_code, f"{label} is missing") from exc
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise BrowserManagerError(error_code, f"{label} is invalid") from exc
     if not isinstance(payload, dict):
         raise BrowserManagerError(error_code, f"{label} must be a JSON object")
@@ -209,6 +219,11 @@ def _secure_directory(path: Path, boundary: Path, owner_uid: int, label: str) ->
             raise BrowserManagerError("browser_runtime_unsafe", f"{label} contains an unsafe directory")
         if details.st_uid != owner_uid or details.st_mode & 0o022:
             raise BrowserManagerError("browser_runtime_unsafe", f"{label} has unsafe ownership or permissions")
+
+
+def _schema_is_current(payload: dict[str, object]) -> bool:
+    value = payload.get("schema_version")
+    return type(value) is int and value == _SCHEMA_VERSION
 
 
 def _secure_file(path: Path, boundary: Path, owner_uid: int, label: str) -> os.stat_result:
@@ -253,6 +268,9 @@ def _verified_receipt_file(
     expected_digest = _string(receipt, digest_key, _SHA256, "browser_receipt_invalid")
     if _sha256(path) != expected_digest:
         raise BrowserManagerError("browser_runtime_mismatch", f"{label} digest does not match receipt")
+    expected_mode = 0o555 if executable else 0o444
+    if stat.S_IMODE(details.st_mode) != expected_mode:
+        raise BrowserManagerError("browser_runtime_unsafe", f"{label} mode is invalid")
     if executable and not details.st_mode & stat.S_IXUSR:
         raise BrowserManagerError("browser_runtime_unsafe", f"{label} is not executable by its owner")
     return path, expected_digest
@@ -373,7 +391,14 @@ class BrowserRuntimeAuthority:
 
         selector_boundary = self.__policy.selector.parent
         try:
-            _secure_file(self.__policy.selector, selector_boundary, self.__policy.owner_uid, "browser runtime selector")
+            selector_details = _secure_file(
+                self.__policy.selector,
+                selector_boundary,
+                self.__policy.owner_uid,
+                "browser runtime selector",
+            )
+            if stat.S_IMODE(selector_details.st_mode) != 0o444:
+                raise BrowserManagerError("browser_runtime_selector_invalid", "browser runtime selector mode is invalid")
         except BrowserManagerError as exc:
             if exc.code == "browser_runtime_missing":
                 raise BrowserManagerError("browser_runtime_selector_missing", "browser runtime selector is missing") from exc
@@ -383,7 +408,7 @@ class BrowserRuntimeAuthority:
             "browser_runtime_selector_invalid",
             "browser runtime selector",
         )
-        if frozenset(selector) != _SELECTOR_KEYS or selector.get("schema_version") != _SCHEMA_VERSION:
+        if frozenset(selector) != _SELECTOR_KEYS or not _schema_is_current(selector):
             raise BrowserManagerError("browser_runtime_selector_invalid", "browser runtime selector schema is invalid")
         generation = _string(selector, "generation", _GENERATION, "browser_runtime_selector_invalid")
         expected_receipt_sha256 = _string(
@@ -395,9 +420,18 @@ class BrowserRuntimeAuthority:
 
         generation_root = self.__policy.runtime_root / generation
         _secure_directory(generation_root, self.__policy.runtime_root, self.__policy.owner_uid, "browser runtime generation")
+        if stat.S_IMODE(generation_root.stat(follow_symlinks=False).st_mode) != 0o555:
+            raise BrowserManagerError("browser_runtime_unsafe", "browser runtime generation mode is invalid")
         receipt_path = generation_root / "installation-receipt.json"
         try:
-            _secure_file(receipt_path, generation_root, self.__policy.owner_uid, "browser installation receipt")
+            receipt_details = _secure_file(
+                receipt_path,
+                generation_root,
+                self.__policy.owner_uid,
+                "browser installation receipt",
+            )
+            if stat.S_IMODE(receipt_details.st_mode) != 0o444:
+                raise BrowserManagerError("browser_receipt_invalid", "browser installation receipt mode is invalid")
         except BrowserManagerError as exc:
             if exc.code == "browser_runtime_missing":
                 raise BrowserManagerError("browser_receipt_missing", "browser installation receipt is missing") from exc
@@ -406,7 +440,7 @@ class BrowserRuntimeAuthority:
         if actual_receipt_sha256 != expected_receipt_sha256:
             raise BrowserManagerError("browser_receipt_mismatch", "browser installation receipt digest does not match selector")
         receipt = _json_object(receipt_path, "browser_receipt_invalid", "browser installation receipt")
-        if frozenset(receipt) != _RECEIPT_KEYS or receipt.get("schema_version") != _SCHEMA_VERSION:
+        if frozenset(receipt) != _RECEIPT_KEYS or not _schema_is_current(receipt):
             raise BrowserManagerError("browser_receipt_invalid", "browser installation receipt schema is invalid")
         receipt_generation = _string(receipt, "generation", _GENERATION, "browser_receipt_invalid")
         if receipt_generation != generation:
@@ -494,13 +528,18 @@ class BrowserRuntimeAuthority:
         executable_sha256 = _string(receipt, "executable_sha256", _SHA256, "browser_receipt_invalid")
         if _sha256(executable) != executable_sha256:
             raise BrowserManagerError("browser_executable_mismatch", "Chromium executable digest does not match receipt")
+        if stat.S_IMODE(executable_details.st_mode) != 0o555:
+            raise BrowserManagerError("browser_runtime_unsafe", "Chromium executable mode is invalid")
         if not executable_details.st_mode & stat.S_IXUSR:
             raise BrowserManagerError("browser_runtime_unsafe", "Chromium executable is not executable by its owner")
 
         tree_relative = _relative_path(receipt.get("tree_manifest_relative_path"), "tree_manifest_relative_path")
         tree_manifest = generation_root / tree_relative
-        _secure_file(tree_manifest, generation_root, self.__policy.owner_uid, "browser tree manifest")
+        tree_details = _secure_file(tree_manifest, generation_root, self.__policy.owner_uid, "browser tree manifest")
+        if stat.S_IMODE(tree_details.st_mode) != 0o444:
+            raise BrowserManagerError("browser_tree_invalid", "browser tree manifest mode is invalid")
         tree_manifest_sha256 = _string(receipt, "tree_manifest_sha256", _SHA256, "browser_receipt_invalid")
+        _string(receipt, "source_manifest_sha256", _SHA256, "browser_receipt_invalid")
         if _sha256(tree_manifest) != tree_manifest_sha256:
             raise BrowserManagerError("browser_tree_mismatch", "browser tree manifest digest does not match receipt")
 
@@ -535,7 +574,7 @@ class BrowserRuntimeAuthority:
 
     def _verify_tree(self, generation_root: Path, tree_manifest: Path, receipt_path: Path) -> None:
         payload = _json_object(tree_manifest, "browser_tree_invalid", "browser tree manifest")
-        if frozenset(payload) != _TREE_KEYS or payload.get("schema_version") != _SCHEMA_VERSION:
+        if frozenset(payload) != _TREE_KEYS or not _schema_is_current(payload):
             raise BrowserManagerError("browser_tree_invalid", "browser tree manifest schema is invalid")
         files = payload.get("files")
         if not isinstance(files, dict) or not files:
@@ -552,7 +591,7 @@ class BrowserRuntimeAuthority:
                 raise BrowserManagerError("browser_tree_invalid", "browser tree member size is invalid")
             if not isinstance(digest, str) or not _SHA256.fullmatch(digest):
                 raise BrowserManagerError("browser_tree_invalid", "browser tree member digest is invalid")
-            if mode not in {"0444", "0555", "0644", "0755"}:
+            if mode not in {"0444", "0555"}:
                 raise BrowserManagerError("browser_tree_invalid", "browser tree member mode is invalid")
             member = generation_root / relative
             details = _secure_file(member, generation_root, self.__policy.owner_uid, "browser tree member")
@@ -568,6 +607,8 @@ class BrowserRuntimeAuthority:
         for directory, directories, filenames in os.walk(generation_root, followlinks=False):
             directory_path = Path(directory)
             _secure_directory(directory_path, generation_root, self.__policy.owner_uid, "browser generation tree")
+            if stat.S_IMODE(directory_path.stat(follow_symlinks=False).st_mode) != 0o555:
+                raise BrowserManagerError("browser_runtime_unsafe", "browser generation directory mode is invalid")
             for name in list(directories):
                 candidate = directory_path / name
                 if candidate.is_symlink():

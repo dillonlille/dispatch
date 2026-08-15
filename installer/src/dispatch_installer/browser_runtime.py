@@ -40,6 +40,13 @@ _MAX_RECEIPT_BYTES = 64 * 1024
 _MAX_MEMBER_BYTES = 1024 * 1024 * 1024
 _MAX_TREE_BYTES_EXPANDED = 2 * 1024 * 1024 * 1024
 _MAX_MEMBERS = 100_000
+_SOURCE_DATA_MODES = {0o444, 0o600, 0o644}
+_SOURCE_EXECUTABLE_MODES = {0o555, 0o700, 0o755}
+_EVIDENCE_FILENAMES = {
+    "os_dependencies": "os-dependencies.json",
+    "sandbox": "sandbox.json",
+    "launch_probe": "launch-probe.json",
+}
 
 _MANIFEST_KEYS = frozenset(
     {
@@ -69,7 +76,15 @@ _EVIDENCE_KEYS = frozenset(
 )
 _OS_EVIDENCE_KEYS = frozenset({"verified", "receipt_sha256"})
 _SANDBOX_EVIDENCE_KEYS = frozenset({"verified", "policy_id", "receipt_sha256"})
-_LAUNCH_EVIDENCE_KEYS = frozenset({"passed", "executable_sha256"})
+_LAUNCH_EVIDENCE_KEYS = frozenset({"passed", "executable_sha256", "receipt_sha256"})
+_BASE_EVIDENCE_RECEIPT_KEYS = frozenset({"schema_version", "generation", "verified_at", "platform"})
+_OS_RECEIPT_KEYS = _BASE_EVIDENCE_RECEIPT_KEYS | {"verified", "dependency_set_sha256"}
+_SANDBOX_RECEIPT_KEYS = _BASE_EVIDENCE_RECEIPT_KEYS | {"verified", "policy_id", "policy_sha256"}
+_LAUNCH_RECEIPT_KEYS = _BASE_EVIDENCE_RECEIPT_KEYS | {
+    "passed",
+    "manifest_sha256",
+    "executable_sha256",
+}
 _MEMBER_KEYS = frozenset({"size", "sha256", "executable"})
 _SELECTOR_KEYS = frozenset({"schema_version", "generation", "receipt_sha256"})
 _TREE_KEYS = frozenset({"schema_version", "files"})
@@ -102,6 +117,7 @@ _RECEIPT_KEYS = frozenset(
         "executable_sha256",
         "tree_manifest_relative_path",
         "tree_manifest_sha256",
+        "source_manifest_sha256",
         "os_dependencies_verified",
         "sandbox_verified",
         "sandbox_policy_id",
@@ -134,6 +150,7 @@ class BrowserInstallationEvidence:
     data: bytes
     sha256: str
     verified_at: str
+    receipts: dict[str, bytes]
 
 
 def _sha256_bytes(data: bytes) -> str:
@@ -163,6 +180,11 @@ def _decode_json(data: bytes, *, code: str, label: str) -> dict[str, object]:
     return payload
 
 
+def _schema_is_current(payload: dict[str, object]) -> bool:
+    value = payload.get("schema_version")
+    return type(value) is int and value == _SCHEMA_VERSION
+
+
 def _relative(value: object, *, code: str, label: str) -> str:
     if (
         not isinstance(value, str)
@@ -175,7 +197,9 @@ def _relative(value: object, *, code: str, label: str) -> str:
     path = PurePosixPath(value)
     if path.is_absolute() or path.as_posix() != value or any(part in {"", ".", ".."} for part in path.parts):
         raise InstallerError(code, f"{label} must be a safe canonical relative path")
-    if value in {"tree-manifest.json", "installation-receipt.json", "installation-evidence.json"}:
+    if value in {"tree-manifest.json", "installation-receipt.json", "installation-evidence.json"} or value.startswith(
+        "installation-evidence/"
+    ):
         raise InstallerError(code, f"{label} uses an installer-reserved path")
     return value
 
@@ -290,6 +314,8 @@ def _read_regular(
     allowed_modes: set[int] | None = None,
 ) -> tuple[bytes, os.stat_result]:
     flags = os.O_RDONLY
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
@@ -327,6 +353,8 @@ def _hash_regular(
     allowed_modes: set[int] | None = None,
 ) -> tuple[str, os.stat_result]:
     flags = os.O_RDONLY
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
     try:
@@ -378,7 +406,7 @@ def _read_input_manifest(path: Path, expected_sha256: str) -> tuple[dict[str, ob
 
 def load_browser_runtime_manifest(path: Path, *, expected_sha256: str) -> BrowserRuntimeManifest:
     payload, manifest_sha256 = _read_input_manifest(path, expected_sha256)
-    if frozenset(payload) != _MANIFEST_KEYS or payload.get("schema_version") != _SCHEMA_VERSION:
+    if frozenset(payload) != _MANIFEST_KEYS or not _schema_is_current(payload):
         raise InstallerError("browser_manifest_shape", "browser runtime manifest schema is invalid")
     generation = payload.get("generation")
     installer_release = payload.get("installer_release")
@@ -475,25 +503,75 @@ def load_browser_runtime_manifest(path: Path, *, expected_sha256: str) -> Browse
     )
 
 
+def _evidence_timestamp(payload: dict[str, object], *, require_fresh: bool) -> str:
+    verified_at = payload.get("verified_at")
+    if not isinstance(verified_at, str):
+        raise InstallerError("browser_evidence_invalid", "browser evidence timestamp is invalid")
+    try:
+        timestamp = datetime.fromisoformat(verified_at.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise InstallerError("browser_evidence_invalid", "browser evidence timestamp is invalid") from exc
+    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
+        raise InstallerError("browser_evidence_invalid", "browser evidence timestamp requires a timezone")
+    if require_fresh:
+        now = datetime.now(timezone.utc)
+        if timestamp > now + timedelta(minutes=5) or now - timestamp > timedelta(hours=1):
+            raise InstallerError("browser_evidence_stale", "browser evidence receipt is not fresh")
+    return verified_at
+
+
+def _validate_evidence_receipt(
+    kind: str,
+    payload: dict[str, object],
+    *,
+    generation: str,
+    manifest_sha256: str,
+    executable_sha256: str,
+    require_fresh: bool,
+) -> str:
+    expected_keys = {
+        "os_dependencies": _OS_RECEIPT_KEYS,
+        "sandbox": _SANDBOX_RECEIPT_KEYS,
+        "launch_probe": _LAUNCH_RECEIPT_KEYS,
+    }[kind]
+    if frozenset(payload) != expected_keys or not _schema_is_current(payload):
+        raise InstallerError("browser_evidence_shape", f"browser {kind} evidence receipt schema is invalid")
+    if payload.get("generation") != generation or payload.get("platform") != _PLATFORM:
+        raise InstallerError("browser_evidence_mismatch", f"browser {kind} evidence identity differs")
+    verified_at = _evidence_timestamp(payload, require_fresh=require_fresh)
+    if kind == "os_dependencies":
+        valid = payload.get("verified") is True and isinstance(payload.get("dependency_set_sha256"), str) and bool(
+            _SHA256.fullmatch(str(payload["dependency_set_sha256"]))
+        )
+    elif kind == "sandbox":
+        valid = (
+            payload.get("verified") is True
+            and payload.get("policy_id") == _SANDBOX_POLICY_ID
+            and isinstance(payload.get("policy_sha256"), str)
+            and bool(_SHA256.fullmatch(str(payload["policy_sha256"])))
+        )
+    else:
+        valid = (
+            payload.get("passed") is True
+            and payload.get("manifest_sha256") == manifest_sha256
+            and payload.get("executable_sha256") == executable_sha256
+        )
+    if not valid:
+        raise InstallerError("browser_evidence_incomplete", f"browser {kind} evidence is incomplete")
+    return verified_at
+
+
 def _validate_evidence_payload(
     payload: dict[str, object],
     *,
     generation: str,
     executable_sha256: str,
 ) -> str:
-    if frozenset(payload) != _EVIDENCE_KEYS or payload.get("schema_version") != _SCHEMA_VERSION:
+    if frozenset(payload) != _EVIDENCE_KEYS or not _schema_is_current(payload):
         raise InstallerError("browser_evidence_shape", "browser installation evidence schema is invalid")
     if payload.get("generation") != generation or payload.get("platform") != _PLATFORM:
         raise InstallerError("browser_evidence_mismatch", "browser installation evidence identity differs")
-    verified_at = payload.get("verified_at")
-    if not isinstance(verified_at, str):
-        raise InstallerError("browser_evidence_invalid", "browser installation evidence timestamp is invalid")
-    try:
-        timestamp = datetime.fromisoformat(verified_at.replace("Z", "+00:00"))
-    except ValueError as exc:
-        raise InstallerError("browser_evidence_invalid", "browser installation evidence timestamp is invalid") from exc
-    if timestamp.tzinfo is None or timestamp.utcoffset() is None:
-        raise InstallerError("browser_evidence_invalid", "browser installation evidence timestamp requires a timezone")
+    verified_at = _evidence_timestamp(payload, require_fresh=False)
     os_evidence = payload.get("os_dependencies")
     sandbox_evidence = payload.get("sandbox")
     launch_evidence = payload.get("launch_probe")
@@ -519,39 +597,75 @@ def _validate_evidence_payload(
         or frozenset(launch_evidence) != _LAUNCH_EVIDENCE_KEYS
         or launch_evidence.get("passed") is not True
         or launch_evidence.get("executable_sha256") != executable_sha256
+        or not isinstance(launch_evidence.get("receipt_sha256"), str)
+        or not _SHA256.fullmatch(str(launch_evidence["receipt_sha256"]))
     ):
         raise InstallerError("browser_evidence_incomplete", "browser launch-probe evidence is incomplete")
     return verified_at
 
 
+def _evidence_root(layout: InstallLayout, generation: str) -> Path:
+    return layout.browser_selector.parent / "browser-runtime-evidence" / generation
+
+
 def _load_installation_evidence(
-    path: Path,
+    layout: InstallLayout,
     *,
-    expected_sha256: str,
     manifest: BrowserRuntimeManifest,
 ) -> BrowserInstallationEvidence:
-    if not path.is_absolute() or path.resolve(strict=False) != path or not _SHA256.fullmatch(expected_sha256):
-        raise InstallerError("browser_evidence_unsafe", "browser installation evidence path or digest is invalid")
-    data, _ = _read_regular(
-        path,
-        owner_uid=os.geteuid(),
-        max_bytes=_MAX_RECEIPT_BYTES,
-        code="browser_evidence_unsafe",
+    owner_uid = _authority_owner(layout)
+    root = _evidence_root(layout, manifest.generation)
+    _validate_directory(layout.browser_selector.parent, owner_uid=owner_uid, mode=0o755, code="browser_evidence_unsafe")
+    _validate_directory(root.parent, owner_uid=owner_uid, mode=0o755, code="browser_evidence_unsafe")
+    _validate_directory(root, owner_uid=owner_uid, mode=0o755, code="browser_evidence_unsafe")
+    receipts: dict[str, bytes] = {}
+    receipt_digests: dict[str, str] = {}
+    verified_times: list[str] = []
+    for kind, filename in _EVIDENCE_FILENAMES.items():
+        data, _ = _read_regular(
+            root / filename,
+            owner_uid=owner_uid,
+            max_bytes=_MAX_RECEIPT_BYTES,
+            code="browser_evidence_unsafe",
+            allowed_modes={0o444},
+        )
+        payload = _decode_json(data, code="browser_evidence_invalid", label=f"browser {kind} evidence receipt")
+        verified_times.append(
+            _validate_evidence_receipt(
+                kind,
+                payload,
+                generation=manifest.generation,
+                manifest_sha256=manifest.manifest_sha256,
+                executable_sha256=manifest.members[manifest.browser_executable].sha256,
+                require_fresh=True,
+            )
+        )
+        receipts[kind] = data
+        receipt_digests[kind] = _sha256_bytes(data)
+    payload: dict[str, object] = {
+        "schema_version": _SCHEMA_VERSION,
+        "generation": manifest.generation,
+        "verified_at": max(verified_times),
+        "platform": _PLATFORM,
+        "os_dependencies": {"verified": True, "receipt_sha256": receipt_digests["os_dependencies"]},
+        "sandbox": {
+            "verified": True,
+            "policy_id": _SANDBOX_POLICY_ID,
+            "receipt_sha256": receipt_digests["sandbox"],
+        },
+        "launch_probe": {
+            "passed": True,
+            "executable_sha256": manifest.members[manifest.browser_executable].sha256,
+            "receipt_sha256": receipt_digests["launch_probe"],
+        },
+    }
+    data = _encoded_json(payload)
+    return BrowserInstallationEvidence(
+        data=data,
+        sha256=_sha256_bytes(data),
+        verified_at=str(payload["verified_at"]),
+        receipts=receipts,
     )
-    observed = _sha256_bytes(data)
-    if observed != expected_sha256:
-        raise InstallerError("browser_evidence_digest", "browser installation evidence digest does not match")
-    payload = _decode_json(data, code="browser_evidence_invalid", label="browser installation evidence")
-    verified_at = _validate_evidence_payload(
-        payload,
-        generation=manifest.generation,
-        executable_sha256=manifest.members[manifest.browser_executable].sha256,
-    )
-    timestamp = datetime.fromisoformat(verified_at.replace("Z", "+00:00"))
-    now = datetime.now(timezone.utc)
-    if timestamp > now + timedelta(minutes=5) or now - timestamp > timedelta(hours=1):
-        raise InstallerError("browser_evidence_stale", "browser installation evidence is not fresh")
-    return BrowserInstallationEvidence(data=data, sha256=observed, verified_at=verified_at)
 
 
 def _source_tree_paths(source: Path, manifest: BrowserRuntimeManifest) -> None:
@@ -591,6 +705,7 @@ def _verify_source_members(source: Path, manifest: BrowserRuntimeManifest) -> No
             owner_uid=os.geteuid(),
             max_bytes=_MAX_MEMBER_BYTES,
             code="browser_source_unsafe",
+            allowed_modes=_SOURCE_EXECUTABLE_MODES if member.executable else _SOURCE_DATA_MODES,
         )
         if details.st_size != member.size or digest != member.sha256:
             raise InstallerError("browser_source_digest", "browser runtime source member differs from manifest")
@@ -598,6 +713,8 @@ def _verify_source_members(source: Path, manifest: BrowserRuntimeManifest) -> No
 
 def _copy_source_member(source: Path, target: Path, member: BrowserRuntimeMember) -> None:
     source_flags = os.O_RDONLY
+    if hasattr(os, "O_NONBLOCK"):
+        source_flags |= os.O_NONBLOCK
     if hasattr(os, "O_NOFOLLOW"):
         source_flags |= os.O_NOFOLLOW
     try:
@@ -611,7 +728,8 @@ def _copy_source_member(source: Path, target: Path, member: BrowserRuntimeMember
             not stat.S_ISREG(details.st_mode)
             or details.st_uid != os.geteuid()
             or details.st_nlink != 1
-            or details.st_mode & 0o022
+            or stat.S_IMODE(details.st_mode)
+            not in (_SOURCE_EXECUTABLE_MODES if member.executable else _SOURCE_DATA_MODES)
             or details.st_size != member.size
         ):
             raise InstallerError("browser_source_unsafe", f"browser runtime source member is unsafe: {source}")
@@ -649,6 +767,25 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _fsync_staged_tree(root: Path) -> None:
+    directories = [root, *(path for path in root.rglob("*") if path.is_dir())]
+    files = [path for path in root.rglob("*") if path.is_file()]
+    for path in sorted(files):
+        flags = os.O_RDONLY
+        if hasattr(os, "O_NOFOLLOW"):
+            flags |= os.O_NOFOLLOW
+        descriptor = os.open(path, flags)
+        try:
+            details = os.fstat(descriptor)
+            if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+                raise InstallerError("browser_generation_unsafe", "staged browser generation contains an unsafe file")
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+    for path in sorted(directories, key=lambda candidate: len(candidate.parts), reverse=True):
+        _fsync_directory(path)
+
+
 def _remove_staged_tree(path: Path) -> None:
     if not path.exists():
         return
@@ -675,6 +812,13 @@ def _tree_payload(
         "sha256": evidence.sha256,
         "mode": "0444",
     }
+    for kind, filename in _EVIDENCE_FILENAMES.items():
+        receipt_data = evidence.receipts[kind]
+        files[f"installation-evidence/{filename}"] = {
+            "size": len(receipt_data),
+            "sha256": _sha256_bytes(receipt_data),
+            "mode": "0444",
+        }
     return {
         "schema_version": _SCHEMA_VERSION,
         "files": dict(sorted(files.items())),
@@ -713,6 +857,7 @@ def _receipt_payload(manifest: BrowserRuntimeManifest, *, tree_sha256: str, inst
         "executable_sha256": executable.sha256,
         "tree_manifest_relative_path": "tree-manifest.json",
         "tree_manifest_sha256": tree_sha256,
+        "source_manifest_sha256": manifest.manifest_sha256,
         "os_dependencies_verified": True,
         "sandbox_verified": True,
         "sandbox_policy_id": _SANDBOX_POLICY_ID,
@@ -759,9 +904,9 @@ def _verify_generation(
     )
     tree = _decode_json(tree_data, code="browser_tree_invalid", label="browser tree manifest")
     receipt = _decode_json(receipt_data, code="browser_receipt_invalid", label="browser installation receipt")
-    if frozenset(tree) != _TREE_KEYS or tree.get("schema_version") != _SCHEMA_VERSION:
+    if frozenset(tree) != _TREE_KEYS or not _schema_is_current(tree):
         raise InstallerError("browser_tree_invalid", "browser tree manifest schema is invalid")
-    if frozenset(receipt) != _RECEIPT_KEYS or receipt.get("schema_version") != _SCHEMA_VERSION:
+    if frozenset(receipt) != _RECEIPT_KEYS or not _schema_is_current(receipt):
         raise InstallerError("browser_receipt_invalid", "browser installation receipt schema is invalid")
     if receipt.get("generation") != generation:
         raise InstallerError("browser_receipt_mismatch", "browser installation receipt generation differs")
@@ -784,13 +929,16 @@ def _verify_generation(
         "playwright_revision": _PLAYWRIGHT_REVISION,
         "tree_manifest_relative_path": "tree-manifest.json",
         "tree_manifest_sha256": _sha256_bytes(tree_data),
-        "os_dependencies_verified": True,
-        "sandbox_verified": True,
         "sandbox_policy_id": _SANDBOX_POLICY_ID,
-        "launch_probe_passed": True,
     }
     if any(receipt.get(key) != value for key, value in expected_receipt.items()):
         raise InstallerError("browser_receipt_mismatch", "browser installation receipt differs from policy")
+    for key in ("os_dependencies_verified", "sandbox_verified", "launch_probe_passed"):
+        if receipt.get(key) is not True:
+            raise InstallerError("browser_receipt_mismatch", "browser installation receipt evidence is not verified")
+    source_manifest_sha256 = receipt.get("source_manifest_sha256")
+    if not isinstance(source_manifest_sha256, str) or not _SHA256.fullmatch(source_manifest_sha256):
+        raise InstallerError("browser_receipt_invalid", "browser source manifest digest is invalid")
     files = tree.get("files")
     if not isinstance(files, dict) or not files or len(files) > _MAX_MEMBERS:
         raise InstallerError("browser_tree_invalid", "browser tree file declaration is invalid")
@@ -798,8 +946,9 @@ def _verify_generation(
     expanded = 0
     for raw_path, entry in files.items():
         relative = (
-            "installation-evidence.json"
+            str(raw_path)
             if raw_path == "installation-evidence.json"
+            or raw_path in {f"installation-evidence/{name}" for name in _EVIDENCE_FILENAMES.values()}
             else _relative(raw_path, code="browser_tree_invalid", label="browser tree member")
         )
         if not isinstance(entry, dict) or frozenset(entry) != _TREE_MEMBER_KEYS:
@@ -843,6 +992,36 @@ def _verify_generation(
         generation=generation,
         executable_sha256=str(receipt.get("executable_sha256")),
     )
+    for kind, filename in _EVIDENCE_FILENAMES.items():
+        relative = f"installation-evidence/{filename}"
+        entry = declared.get(relative)
+        if entry is None or entry["mode"] != "0444":
+            raise InstallerError("browser_evidence_missing", f"browser {kind} evidence receipt is missing")
+        receipt_bytes, _ = _read_regular(
+            generation_root / relative,
+            owner_uid=owner_uid,
+            max_bytes=_MAX_RECEIPT_BYTES,
+            code="browser_evidence_unsafe",
+            allowed_modes={0o444},
+        )
+        if len(receipt_bytes) != entry["size"] or _sha256_bytes(receipt_bytes) != entry["sha256"]:
+            raise InstallerError("browser_evidence_mismatch", f"browser {kind} evidence receipt differs from tree")
+        evidence_section = evidence_payload.get(kind)
+        if not isinstance(evidence_section, dict) or evidence_section.get("receipt_sha256") != entry["sha256"]:
+            raise InstallerError("browser_evidence_mismatch", f"browser {kind} evidence digest differs")
+        evidence_receipt = _decode_json(
+            receipt_bytes,
+            code="browser_evidence_invalid",
+            label=f"browser {kind} evidence receipt",
+        )
+        _validate_evidence_receipt(
+            kind,
+            evidence_receipt,
+            generation=generation,
+            manifest_sha256=source_manifest_sha256,
+            executable_sha256=str(receipt.get("executable_sha256")),
+            require_fresh=False,
+        )
 
     special = {
         "playwright_module_relative_path": ("playwright_module_size", "playwright_module_sha256", False),
@@ -859,6 +1038,7 @@ def _verify_generation(
         entry = declared.get(relative)
         if (
             entry is None
+            or type(receipt.get(size_key)) is not int
             or receipt.get(size_key) != entry["size"]
             or receipt.get(digest_key) != entry["sha256"]
             or entry["mode"] != ("0555" if executable else "0444")
@@ -921,15 +1101,25 @@ def verify_browser_generation(layout: InstallLayout, generation: str) -> dict[st
 def _generation_matches_manifest(
     layout: InstallLayout,
     manifest: BrowserRuntimeManifest,
-    evidence: BrowserInstallationEvidence,
 ) -> bool:
     receipt, tree, _ = _verify_generation(layout, manifest.generation)
-    expected_tree = _tree_payload(manifest, evidence)
-    if tree != expected_tree:
+    files = tree.get("files")
+    assert isinstance(files, dict)
+    evidence_paths = {"installation-evidence.json"} | {
+        f"installation-evidence/{filename}" for filename in _EVIDENCE_FILENAMES.values()
+    }
+    if set(files) != set(manifest.members) | evidence_paths:
         return False
+    for relative, member in manifest.members.items():
+        if files.get(relative) != {
+            "size": member.size,
+            "sha256": member.sha256,
+            "mode": "0555" if member.executable else "0444",
+        }:
+            return False
     expected_receipt = _receipt_payload(
         manifest,
-        tree_sha256=_sha256_bytes(_encoded_json(expected_tree)),
+        tree_sha256=str(receipt["tree_manifest_sha256"]),
         installed_at=str(receipt["installed_at"]),
     )
     return receipt == expected_receipt
@@ -939,34 +1129,45 @@ def stage_browser_runtime(
     layout: InstallLayout,
     source_root: Path,
     manifest_path: Path,
-    evidence_path: Path,
     *,
     expected_manifest_sha256: str,
-    expected_evidence_sha256: str,
 ) -> dict[str, str | int | bool]:
     manifest = load_browser_runtime_manifest(manifest_path, expected_sha256=expected_manifest_sha256)
-    evidence = _load_installation_evidence(
-        evidence_path,
-        expected_sha256=expected_evidence_sha256,
-        manifest=manifest,
-    )
     _source_tree_paths(source_root, manifest)
     _verify_source_members(source_root, manifest)
     with browser_authority_lock(layout):
         destination = layout.browser_generations / manifest.generation
         if destination.exists() or destination.is_symlink():
-            if destination.is_symlink() or not _generation_matches_manifest(layout, manifest, evidence):
+            if destination.is_symlink() or not _generation_matches_manifest(layout, manifest):
                 raise InstallerError("browser_generation_collision", "existing browser generation differs from manifest")
+            try:
+                _fsync_directory(layout.browser_generations)
+            except OSError as exc:
+                raise InstallerError(
+                    "browser_generation_publish_uncertain",
+                    "existing browser generation verified but publication durability remains uncertain",
+                ) from exc
             verified = verify_browser_generation(layout, manifest.generation)
             return {**verified, "reused": True}
+        evidence = _load_installation_evidence(layout, manifest=manifest)
         stage = Path(tempfile.mkdtemp(prefix=".browser-", dir=layout.browser_generations))
         published = False
         try:
             for relative, member in sorted(manifest.members.items()):
-                _copy_source_member(source_root.joinpath(*PurePosixPath(relative).parts), stage.joinpath(*PurePosixPath(relative).parts), member)
+                _copy_source_member(
+                    source_root.joinpath(*PurePosixPath(relative).parts),
+                    stage.joinpath(*PurePosixPath(relative).parts),
+                    member,
+                )
             evidence_target = stage / "installation-evidence.json"
             evidence_target.write_bytes(evidence.data)
             evidence_target.chmod(0o444)
+            evidence_receipt_root = stage / "installation-evidence"
+            evidence_receipt_root.mkdir(mode=0o700)
+            for kind, filename in _EVIDENCE_FILENAMES.items():
+                receipt_target = evidence_receipt_root / filename
+                receipt_target.write_bytes(evidence.receipts[kind])
+                receipt_target.chmod(0o444)
             tree_data = _encoded_json(_tree_payload(manifest, evidence))
             tree_path = stage / "tree-manifest.json"
             tree_path.write_bytes(tree_data)
@@ -979,38 +1180,38 @@ def stage_browser_runtime(
             receipt_path = stage / "installation-receipt.json"
             receipt_path.write_bytes(_encoded_json(receipt))
             receipt_path.chmod(0o444)
-            for path in sorted((candidate for candidate in stage.rglob("*") if candidate.is_dir()), reverse=True):
+            for path in sorted(
+                (candidate for candidate in stage.rglob("*") if candidate.is_dir()),
+                key=lambda candidate: len(candidate.parts),
+                reverse=True,
+            ):
                 path.chmod(0o555)
-            for path in sorted((candidate for candidate in stage.rglob("*") if candidate.is_file())):
-                descriptor = os.open(path, os.O_RDONLY)
-                try:
-                    os.fsync(descriptor)
-                finally:
-                    os.close(descriptor)
             stage.chmod(0o555)
-            _fsync_directory(stage)
+            _fsync_staged_tree(stage)
             os.replace(stage, destination)
             published = True
-            _fsync_directory(layout.browser_generations)
-            if not _generation_matches_manifest(layout, manifest, evidence):
-                raise InstallerError("browser_generation_verification", "published browser generation failed verification")
+            try:
+                _fsync_directory(layout.browser_generations)
+            except OSError as exc:
+                raise InstallerError(
+                    "browser_generation_publish_uncertain",
+                    "browser generation is visible but publication durability could not be confirmed",
+                ) from exc
+            if not _generation_matches_manifest(layout, manifest):
+                raise InstallerError(
+                    "browser_generation_verification",
+                    "published browser generation failed verification and was preserved for reconciliation",
+                )
             verified = verify_browser_generation(layout, manifest.generation)
         except Exception:
-            if stage.exists():
+            if not published and stage.exists():
                 _remove_staged_tree(stage)
-            if published and destination.exists():
-                _remove_staged_tree(destination)
-                _fsync_directory(layout.browser_generations)
             raise
     return {**verified, "reused": False}
 
 
-def _selector_path(layout: InstallLayout, *, previous: bool = False) -> Path:
-    return layout.browser_selector.with_name("browser-runtime-previous.json") if previous else layout.browser_selector
-
-
-def _read_selector(layout: InstallLayout, *, previous: bool = False, missing_ok: bool = False) -> dict[str, object] | None:
-    path = _selector_path(layout, previous=previous)
+def _read_selector(layout: InstallLayout, *, missing_ok: bool = False) -> dict[str, object] | None:
+    path = layout.browser_selector
     owner_uid = _authority_owner(layout)
     if missing_ok:
         try:
@@ -1028,7 +1229,7 @@ def _read_selector(layout: InstallLayout, *, previous: bool = False, missing_ok:
         allowed_modes={0o444},
     )
     payload = _decode_json(data, code="browser_selector_invalid", label="browser runtime selector")
-    if frozenset(payload) != _SELECTOR_KEYS or payload.get("schema_version") != _SCHEMA_VERSION:
+    if frozenset(payload) != _SELECTOR_KEYS or not _schema_is_current(payload):
         raise InstallerError("browser_selector_invalid", "browser runtime selector schema is invalid")
     generation = payload.get("generation")
     receipt_sha256 = payload.get("receipt_sha256")
@@ -1081,47 +1282,39 @@ def _selector_for_generation(layout: InstallLayout, generation: str) -> dict[str
     }
 
 
+def _activate_selected_generation(
+    layout: InstallLayout,
+    generation: str,
+    *,
+    require_current: bool,
+) -> dict[str, str | bool | None]:
+    owner_uid = _authority_owner(layout)
+    candidate = _selector_for_generation(layout, generation)
+    current = _read_selector(layout, missing_ok=True)
+    if current is None and require_current:
+        raise InstallerError("browser_rollback_unavailable", "browser rollback requires an active generation")
+    if current == candidate:
+        if require_current:
+            raise InstallerError("browser_rollback_invalid", "rollback target is already active")
+        return {"generation": generation, "previous_generation": None, "reused": True}
+    previous_generation = str(current["generation"]) if current is not None else None
+    _atomic_authority_json(layout.browser_selector, candidate, owner_uid)
+    verified = _read_selector(layout)
+    if verified != candidate:
+        raise InstallerError("browser_activation_mismatch", "active browser selector does not match candidate")
+    return {"generation": generation, "previous_generation": previous_generation, "reused": False}
+
+
 def activate_browser_generation(layout: InstallLayout, generation: str) -> dict[str, str | bool | None]:
     with browser_authority_lock(layout):
-        owner_uid = _authority_owner(layout)
-        candidate = _selector_for_generation(layout, generation)
-        current = _read_selector(layout, missing_ok=True)
-        if current == candidate:
-            return {"generation": generation, "previous_generation": None, "reused": True}
-        previous_generation = str(current["generation"]) if current is not None else None
-        if current is not None:
-            _atomic_authority_json(_selector_path(layout, previous=True), current, owner_uid)
-        elif _selector_path(layout, previous=True).exists() or _selector_path(layout, previous=True).is_symlink():
-            raise InstallerError("browser_previous_selector_unexpected", "previous browser selector exists before first activation")
-        _atomic_authority_json(layout.browser_selector, candidate, owner_uid)
-        verified = _read_selector(layout)
-        if verified != candidate:
-            raise InstallerError("browser_activation_mismatch", "active browser selector does not match candidate")
-        return {"generation": generation, "previous_generation": previous_generation, "reused": False}
+        return _activate_selected_generation(layout, generation, require_current=False)
 
 
-def rollback_browser_generation(layout: InstallLayout) -> dict[str, str]:
+def rollback_browser_generation(layout: InstallLayout, generation: str) -> dict[str, str | bool | None]:
+    """Atomically select an explicit retained generation after re-verifying it."""
+
     with browser_authority_lock(layout):
-        owner_uid = _authority_owner(layout)
-        current = _read_selector(layout)
-        previous = _read_selector(layout, previous=True)
-        assert current is not None and previous is not None
-        if current == previous:
-            raise InstallerError("browser_rollback_invalid", "active and previous browser selectors are identical")
-        _atomic_authority_json(layout.browser_selector, previous, owner_uid)
-        if _read_selector(layout) != previous:
-            raise InstallerError("browser_rollback_mismatch", "rolled-back browser selector does not match previous generation")
-        try:
-            _atomic_authority_json(_selector_path(layout, previous=True), current, owner_uid)
-        except Exception as exc:
-            raise InstallerError(
-                "browser_rollback_bookkeeping_uncertain",
-                "browser rollback activated but previous-selector bookkeeping failed",
-            ) from exc
-        return {
-            "generation": str(previous["generation"]),
-            "previous_generation": str(current["generation"]),
-        }
+        return _activate_selected_generation(layout, generation, require_current=True)
 
 
 def inspect_browser_runtime(layout: InstallLayout) -> dict[str, str | int | None]:

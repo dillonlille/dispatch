@@ -24,8 +24,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/browser_runtime.py",
-      "sha256": "fc02042415e9b1415a238f8548d8f6d4ebac13d3518afd1b890b4da14221d2a0",
-      "size": 51952
+      "sha256": "4ebf87c6080b2754c579fd814c431f1e27ae1ef260efbd1d49aedd03d9b89ca1",
+      "size": 59878
     },
     {
       "path": "installer/src/dispatch_installer/cli.py",
@@ -39,8 +39,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/doctor.py",
-      "sha256": "1a8790101ba4fd0cb1f18706b2c55c347471755534f1b73ae3f2a4cd92d2aafb",
-      "size": 4087
+      "sha256": "55ffcbfc42019a0998e02f71f1a72f446d72a65896c9237e9e8c285b521df68f",
+      "size": 4848
     },
     {
       "path": "installer/src/dispatch_installer/download.py",

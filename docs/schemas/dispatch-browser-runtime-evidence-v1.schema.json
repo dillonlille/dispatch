@@ -56,10 +56,11 @@
     "launch_probe": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["passed", "executable_sha256"],
+      "required": ["passed", "executable_sha256", "receipt_sha256"],
       "properties": {
         "passed": {"const": true},
-        "executable_sha256": {"$ref": "#/$defs/sha256"}
+        "executable_sha256": {"$ref": "#/$defs/sha256"},
+        "receipt_sha256": {"$ref": "#/$defs/sha256"}
       }
     }
   },

@@ -12,6 +12,7 @@ from pathlib import Path
 
 import pytest
 
+import dispatch_installer.doctor as doctor_module
 from dispatch_installer.core_release import (
     activate_core_release,
     sha256_file,
@@ -84,7 +85,7 @@ def stage_core_wheel(layout: InstallLayout, wheel: Path, **kwargs):
     )
 
 
-def test_core_release_staging_activation_and_reuse(tmp_path: Path) -> None:
+def test_core_release_staging_activation_and_reuse(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     layout = layout_for(tmp_path)
     wheel = make_wheel(tmp_path / "dispatch_core-1.0.0-py3-none-any.whl")
     digest = sha256_file(wheel)
@@ -100,7 +101,18 @@ def test_core_release_staging_activation_and_reuse(tmp_path: Path) -> None:
     assert activated["version"] == "1.0.0"
     assert stat.S_IMODE(release.stat().st_mode) == 0o555
     assert stat.S_IMODE(layout.active_release_selector.stat().st_mode) == 0o600
-    assert inspect_installation(layout)["checks"]["core"]["status"] == "ready"
+    monkeypatch.setattr(
+        doctor_module,
+        "inspect_browser_runtime",
+        lambda unused_layout: {"status": "verified", "generation": "synthetic"},
+    )
+    report = inspect_installation(layout)
+    assert report["checks"]["core"]["status"] == "ready"
+    assert report["checks"]["browser_authority"]["status"] == "verified"
+    assert report["checks"]["production_release"]["status"] == "blocked"
+    assert report["checks"]["browser_launch_composition"]["status"] == "blocked"
+    assert report["ok"] is False
+    assert report["status"] == "incomplete"
 
 
 def test_unsafe_artifact_alias_and_mode_are_rejected(tmp_path: Path) -> None:
