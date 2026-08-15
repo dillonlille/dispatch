@@ -15,7 +15,7 @@ def test_installation_release_manifest_matches_schema_and_is_fail_closed() -> No
 
     jsonschema.Draft202012Validator(schema).validate(manifest)
     assert manifest["ready"] is False
-    assert manifest["product"] == {"name": "dispatch", "version": "0.0.3"}
+    assert manifest["product"] == {"name": "dispatch", "version": "0.0.4"}
     assert manifest["installer"]["artifact"] == {"url": None, "size": None, "sha256": None}
     assert manifest["core"]["artifact"] == {"url": None, "size": None, "sha256": None}
     assert manifest["builtin_plugins"] == []
