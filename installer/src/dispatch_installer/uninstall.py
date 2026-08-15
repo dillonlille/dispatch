@@ -5,6 +5,7 @@ import json
 import os
 import re
 import stat
+import subprocess
 import tempfile
 from dataclasses import replace
 from pathlib import Path
@@ -23,6 +24,7 @@ _LAYOUT_KEYS = {
     "home",
     "dispatch_home",
     "releases",
+    "plugins",
     "bin",
     "config",
     "data",
@@ -37,6 +39,10 @@ _KNOWN_INSTALL_FILES = {
     "active-release.json",
     "installer.lock",
     "layout.json",
+    "release-manifest.json",
+    "release.json",
+    "service.json",
+    "setup.json",
     "uninstall-receipt.json",
     "uninstall-transaction.json",
 }
@@ -171,6 +177,7 @@ def _layout_at_descriptor(layout: InstallLayout, root_descriptor: int) -> Instal
         layout,
         dispatch_home=root,
         releases=root / "releases",
+        plugins=root / "plugins",
         bin=root / "bin",
         config=root / "config",
         data=root / "data",
@@ -264,6 +271,60 @@ def _safe_regular(path: Path, *, mode: int | None = None) -> os.stat_result:
     if mode is not None and stat.S_IMODE(details.st_mode) != mode:
         raise InstallerError("uninstall_metadata_unsafe", f"uninstall metadata mode is unsafe: {path}")
     return details
+
+
+def _remove_user_service(layout: InstallLayout) -> None:
+    receipt_path = layout.state / "install" / "service.json"
+    if not receipt_path.exists() and not receipt_path.is_symlink():
+        return
+    _safe_regular(receipt_path, mode=0o600)
+    receipt = _read_json(receipt_path)
+    expected_unit = layout.home / ".config" / "systemd" / "user" / "dispatch-core.service"
+    if (
+        set(receipt) != {
+            "schema_version",
+            "unit",
+            "unit_sha256",
+            "launcher",
+            "service",
+            "status",
+            "contains_secrets",
+        }
+        or receipt.get("schema_version") != 1
+        or receipt.get("unit") != str(expected_unit)
+        or receipt.get("launcher") != str(layout.bin / "dispatch")
+        or receipt.get("service") != "dispatch-core.service"
+        or receipt.get("status") not in {"prepared", "active"}
+        or receipt.get("contains_secrets") is not False
+        or not isinstance(receipt.get("unit_sha256"), str)
+        or re.fullmatch(r"[0-9a-f]{64}", receipt["unit_sha256"]) is None
+    ):
+        raise InstallerError("uninstall_service_receipt_invalid", "service receipt does not authorize removal")
+    if receipt["status"] == "active":
+        completed = subprocess.run(
+            ("systemctl", "--user", "disable", "--now", "dispatch-core.service"),
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        if completed.returncode != 0:
+            raise InstallerError("uninstall_service_active", "Dispatch user service could not be stopped")
+    if expected_unit.exists() or expected_unit.is_symlink():
+        _safe_regular(expected_unit, mode=0o600)
+        if sha256_file(expected_unit) != receipt["unit_sha256"]:
+            raise InstallerError("uninstall_service_unit_changed", "Dispatch user service differs from its receipt")
+        expected_unit.unlink()
+        _fsync_directory(expected_unit.parent)
+    completed = subprocess.run(
+        ("systemctl", "--user", "daemon-reload"),
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if receipt["status"] == "active" and completed.returncode != 0:
+        raise InstallerError("uninstall_service_reload", "user service manager could not be reloaded")
+    receipt_path.unlink()
+    _fsync_directory(receipt_path.parent)
 
 
 def _read_json(path: Path, *, maximum_size: int = 64 * 1024) -> dict:
@@ -859,6 +920,7 @@ def _base_plan(
 
     expected_roots = {
         layout.releases,
+        layout.plugins,
         layout.bin,
         layout.config,
         layout.data,
@@ -936,7 +998,7 @@ def _base_plan(
         except OSError:
             blockers.append("runtime_requires_shutdown_verification")
 
-    targets = [layout.bin, layout.cache, layout.staging, layout.runtime]
+    targets = [layout.plugins, layout.bin, layout.cache, layout.staging, layout.runtime]
     if purge:
         targets.extend((layout.config, layout.data))
     for target in targets:
@@ -1100,6 +1162,7 @@ def _apply_uninstall_locked(
         journal=journal,
         release_names=verified_release_names,
     )
+    _remove_user_service(authority)
 
     if layout.active_release_selector.exists():
         _safe_regular(layout.active_release_selector, mode=0o600)
@@ -1111,7 +1174,7 @@ def _apply_uninstall_locked(
     if layout.releases.exists() and not any(layout.releases.iterdir()):
         layout.releases.rmdir()
 
-    for target in (layout.bin, layout.cache, layout.staging, layout.runtime):
+    for target in (layout.plugins, layout.bin, layout.cache, layout.staging, layout.runtime):
         if target.exists():
             _remove_owned_tree(
                 target,

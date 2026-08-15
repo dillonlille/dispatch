@@ -1,6 +1,9 @@
 """Read-only installed health, verification, and path responses."""
 from __future__ import annotations
 
+import json
+import os
+import stat
 from typing import Any
 
 from dispatch_core.paths import DispatchPaths, PathConfigError
@@ -19,6 +22,55 @@ PLANES = (
     "delivery",
     "overall",
 )
+
+
+def _setup_state(paths: DispatchPaths) -> dict[str, Any]:
+    path = paths.state / "install" / "setup.json"
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except FileNotFoundError:
+        return {"complete": False, "selected_plugins": [], "capabilities": []}
+    except OSError:
+        return {"complete": False, "selected_plugins": [], "capabilities": [], "invalid": True}
+    try:
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.geteuid()
+            or details.st_nlink != 1
+            or stat.S_IMODE(details.st_mode) != 0o600
+            or details.st_size > 64 * 1024
+        ):
+            return {"complete": False, "selected_plugins": [], "capabilities": [], "invalid": True}
+        with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
+            descriptor = -1
+            payload = json.load(stream)
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return {"complete": False, "selected_plugins": [], "capabilities": [], "invalid": True}
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 1
+        or payload.get("status") != "complete"
+        or payload.get("contains_secrets") is not False
+        or not isinstance(payload.get("selected_plugins"), list)
+        or not isinstance(payload.get("plugins"), list)
+        or any(
+            not isinstance(plugin, dict) or not isinstance(plugin.get("capabilities"), list)
+            for plugin in payload["plugins"]
+        )
+    ):
+        return {"complete": False, "selected_plugins": [], "capabilities": [], "invalid": True}
+    capabilities = sorted(
+        {value for plugin in payload["plugins"] for value in plugin["capabilities"] if isinstance(value, str)}
+    )
+    return {
+        "complete": True,
+        "selected_plugins": payload["selected_plugins"],
+        "capabilities": capabilities,
+    }
 
 
 def envelope(
@@ -123,29 +175,41 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             action not in {"health", "verify"} or durable_queue.get("ready") is True
         )
         browser_ready = inspection["ready"] is True
-        setup_ready = browser_ready and authentication_ready
+        setup = _setup_state(paths)
+        browser_required = "browser" in setup["capabilities"]
+        authentication_required = "authentication" in setup["capabilities"]
+        setup_ready = (
+            setup["complete"] is True
+            and (not browser_required or browser_ready)
+            and (not authentication_required or authentication_ready)
+        )
         core_operational = collection_ready
-        configured = inspection["configured"] is True
+        configured = setup["complete"] is True
         planes = {name: "not_applicable" for name in PLANES}
         planes.update(
             {
                 "registration": "ready",
                 "runtime_integrity": "ready",
                 "configuration": "ready" if configured else "unavailable",
-                "browser": "ready" if browser_ready else "unavailable",
+                "browser": "ready" if browser_ready else ("unavailable" if browser_required else "not_applicable"),
                 "overall": "ready" if setup_ready else "setup_incomplete",
             }
         )
         if action in {"health", "verify"}:
             planes["query"] = "ready"
             planes["collector"] = "ready" if collection_ready else "unavailable"
-            planes["authentication"] = "ready" if authentication_ready else "unavailable"
+            planes["authentication"] = (
+                ("ready" if authentication_ready else "unavailable")
+                if authentication_required
+                else "not_applicable"
+            )
         data: dict[str, Any] = {
             "installed": True,
             "configured": configured,
             "ready": setup_ready,
             "operational": browser_ready if action == "browser-doctor" else core_operational,
             "planes": planes,
+            "setup": setup,
             "browser_manager": {
                 **inspection,
                 "realms": RealmRegistry().safe_data(),

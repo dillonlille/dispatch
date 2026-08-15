@@ -6,9 +6,13 @@ import sys
 from dataclasses import asdict
 from pathlib import Path
 
+from . import __version__
+from .application import install_core_application
 from .doctor import inspect_installation
 from .layout import InstallLayout, InstallerError, installation_lock
 from .manifest import load_manifest
+from .service import install_user_service
+from .setup import persist_release_manifest
 from .uninstall import plan_uninstall, uninstall as apply_uninstall
 
 
@@ -25,6 +29,11 @@ def _parser() -> argparse.ArgumentParser:
     plan = subparsers.add_parser("plan", help="validate a digest-pinned installation manifest")
     plan.add_argument("--manifest", type=Path, required=True)
     plan.add_argument("--manifest-sha256", required=True)
+    install = subparsers.add_parser("install", help="install a reviewed ready Core release")
+    install.add_argument("--manifest", type=Path, required=True)
+    install.add_argument("--manifest-sha256", required=True)
+    install.add_argument("--core-wheel", type=Path, required=True)
+    install.add_argument("--yes", action="store_true", help="confirm Core installation")
     uninstall = subparsers.add_parser("uninstall", help="plan or apply a receipt-bound user-scope uninstall")
     uninstall.add_argument("--plan", action="store_true", help="show the uninstall plan without changing files")
     uninstall.add_argument("--purge", action="store_true", help="also remove configuration and durable data")
@@ -71,6 +80,36 @@ def main(argv: list[str] | None = None) -> int:
             status = "ready" if manifest.ready else "blocked"
             _emit(manifest.ready, "plan", status, {"manifest": asdict(manifest)})
             return 0 if manifest.ready else 2
+        if args.action == "install":
+            if not args.yes:
+                raise InstallerError("confirmation_required", "install requires --yes")
+            manifest = load_manifest(args.manifest, expected_sha256=args.manifest_sha256)
+            if not manifest.ready:
+                raise InstallerError("release_not_ready", "installation manifest is not ready")
+            if manifest.installer_version != __version__:
+                raise InstallerError("installer_version_mismatch", "running installer version differs from release authority")
+            if manifest.core_artifact.size is None or args.core_wheel.stat().st_size != manifest.core_artifact.size:
+                raise InstallerError("core_artifact_size", "Core artifact size differs from release authority")
+            result = install_core_application(
+                layout,
+                args.core_wheel,
+                expected_sha256=str(manifest.core_artifact.sha256),
+                expected_version=manifest.core_version,
+                expected_package_files=dict(manifest.core_package_files),
+                expected_requires_dist=manifest.core_requires_dist,
+                launcher_python=Path(sys.executable),
+            )
+            persist_release_manifest(
+                layout,
+                args.manifest,
+                expected_sha256=args.manifest_sha256,
+                product_version=manifest.product_version,
+            )
+            result["service"] = install_user_service(layout, Path(str(result["launcher"])))
+            result["product_version"] = manifest.product_version
+            result["builtin_plugins"] = [asdict(plugin) for plugin in manifest.builtin_plugins]
+            _emit(True, "install", "installed", result)
+            return 0
         if args.action == "uninstall":
             if args.plan and args.yes:
                 raise InstallerError("uninstall_arguments", "--plan and --yes cannot be combined")

@@ -335,6 +335,7 @@ class InstallLayout:
     home: Path
     dispatch_home: Path
     releases: Path
+    plugins: Path
     bin: Path
     config: Path
     data: Path
@@ -355,7 +356,10 @@ class InstallLayout:
         env = dict(os.environ if environment is None else environment)
         home = _absolute(env.get("HOME", ""), "HOME")
         root = _absolute(dispatch_home or env.get("DISPATCH_HOME") or home / ".dispatch", "DISPATCH_HOME")
-        children = {name: root / name for name in ("releases", "bin", "config", "data", "state", "cache", "staging")}
+        children = {
+            name: root / name
+            for name in ("releases", "plugins", "bin", "config", "data", "state", "cache", "staging")
+        }
         for name, path in children.items():
             _within(path, root, name)
             if path.is_symlink():
@@ -374,6 +378,7 @@ class InstallLayout:
             home=home,
             dispatch_home=root,
             releases=children["releases"],
+            plugins=children["plugins"],
             bin=children["bin"],
             config=children["config"],
             data=children["data"],
@@ -411,6 +416,7 @@ class InstallLayout:
             "home": str(self.home),
             "dispatch_home": str(self.dispatch_home),
             "releases": str(self.releases),
+            "plugins": str(self.plugins),
             "bin": str(self.bin),
             "config": str(self.config),
             "data": str(self.data),
@@ -430,7 +436,7 @@ class InstallLayout:
         if not self.dispatch_home.exists():
             self.dispatch_home.mkdir(mode=0o700)
         _private_directory(self.dispatch_home)
-        for path in (self.releases, self.bin, self.config, self.data, self.state, self.cache, self.staging):
+        for path in (self.releases, self.plugins, self.bin, self.config, self.data, self.state, self.cache, self.staging):
             _within(path, self.dispatch_home, path.name)
             _private_directory(path)
         _safe_existing_parent(self.runtime.parent, "runtime")

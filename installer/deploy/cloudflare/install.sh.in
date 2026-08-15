@@ -1,0 +1,97 @@
+#!/bin/sh
+set -eu
+
+PRODUCT_VERSION='@PRODUCT_VERSION@'
+MANIFEST_URL='@MANIFEST_URL@'
+MANIFEST_SHA256='@MANIFEST_SHA256@'
+INSTALLER_URL='@INSTALLER_URL@'
+INSTALLER_SIZE='@INSTALLER_SIZE@'
+INSTALLER_SHA256='@INSTALLER_SHA256@'
+DISPATCH_HOME="${DISPATCH_HOME:-$HOME/.dispatch}"
+
+fail() {
+    printf '%s\n' "Dispatch installation failed: $*" >&2
+    exit 1
+}
+
+command -v curl >/dev/null 2>&1 || fail 'curl is required'
+command -v python3 >/dev/null 2>&1 || fail 'Python 3.11 through 3.13 is required'
+python3 -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (3, 14) else 1)' \
+    || fail 'Python 3.11 through 3.13 is required'
+
+umask 077
+mkdir -p "$DISPATCH_HOME/staging"
+chmod 700 "$DISPATCH_HOME" "$DISPATCH_HOME/staging"
+[ ! -e "$DISPATCH_HOME/installer-venv" ] || fail 'an installer environment already exists; upgrade is not implemented yet'
+work="$(mktemp -d "$DISPATCH_HOME/staging/bootstrap.XXXXXX")"
+installer_stage="$DISPATCH_HOME/staging/installer-venv.$$"
+cleanup() {
+    rm -rf "$work" "$installer_stage"
+}
+trap cleanup EXIT HUP INT TERM
+
+manifest="$work/installation-release-manifest.json"
+installer_wheel="$work/${INSTALLER_URL##*/}"
+curl -fsSL --proto '=https' --tlsv1.2 --max-redirs 0 "$MANIFEST_URL" -o "$manifest"
+curl -fsSL --proto '=https' --tlsv1.2 --max-redirs 0 "$INSTALLER_URL" -o "$installer_wheel"
+
+MANIFEST="$manifest" INSTALLER="$installer_wheel" \
+MANIFEST_SHA256="$MANIFEST_SHA256" INSTALLER_SHA256="$INSTALLER_SHA256" INSTALLER_SIZE="$INSTALLER_SIZE" \
+python3 - <<'PY' || fail 'bootstrap artifact verification failed'
+import hashlib
+import os
+from pathlib import Path
+for path_name, digest_name, size_name in (
+    ('MANIFEST', 'MANIFEST_SHA256', None),
+    ('INSTALLER', 'INSTALLER_SHA256', 'INSTALLER_SIZE'),
+):
+    path = Path(os.environ[path_name])
+    data = path.read_bytes()
+    if size_name is not None and len(data) != int(os.environ[size_name]):
+        raise SystemExit(1)
+    if hashlib.sha256(data).hexdigest() != os.environ[digest_name]:
+        raise SystemExit(1)
+PY
+
+python3 -m venv "$installer_stage"
+"$installer_stage/bin/python" -m pip install --disable-pip-version-check --no-deps "$installer_wheel" >/dev/null
+plan="$work/plan.json"
+if ! "$installer_stage/bin/dispatch-installer" plan --manifest "$manifest" --manifest-sha256 "$MANIFEST_SHA256" >"$plan"; then
+    fail 'product release is not ready'
+fi
+core_url="$(PLAN="$plan" python3 -c 'import json,os; print(json.load(open(os.environ["PLAN"]))["data"]["manifest"]["core_artifact"]["url"])')"
+core_size="$(PLAN="$plan" python3 -c 'import json,os; print(json.load(open(os.environ["PLAN"]))["data"]["manifest"]["core_artifact"]["size"])')"
+core_sha256="$(PLAN="$plan" python3 -c 'import json,os; print(json.load(open(os.environ["PLAN"]))["data"]["manifest"]["core_artifact"]["sha256"])')"
+core_wheel="$work/${core_url##*/}"
+curl -fsSL --proto '=https' --tlsv1.2 --max-redirs 0 "$core_url" -o "$core_wheel"
+CORE="$core_wheel" CORE_SIZE="$core_size" CORE_SHA256="$core_sha256" python3 - <<'PY' \
+    || fail 'Core artifact verification failed'
+import hashlib
+import os
+from pathlib import Path
+content = Path(os.environ['CORE']).read_bytes()
+if len(content) != int(os.environ['CORE_SIZE']) or hashlib.sha256(content).hexdigest() != os.environ['CORE_SHA256']:
+    raise SystemExit(1)
+PY
+
+mv "$installer_stage" "$DISPATCH_HOME/installer-venv"
+"$DISPATCH_HOME/installer-venv/bin/dispatch-installer" install \
+    --manifest "$manifest" \
+    --manifest-sha256 "$MANIFEST_SHA256" \
+    --core-wheel "$core_wheel" \
+    --yes
+"$DISPATCH_HOME/bin/dispatch" health >/dev/null || fail 'Core health verification failed'
+
+printf '\nDispatch %s is installed.\n' "$PRODUCT_VERSION"
+printf '1. Start Setup\n2. Skip for Now\n'
+if [ -r /dev/tty ]; then
+    printf 'Select [1-2]: ' >/dev/tty
+    IFS= read -r choice </dev/tty || choice=2
+else
+    choice=2
+fi
+case "$choice" in
+    1) "$DISPATCH_HOME/bin/dispatch" setup </dev/tty ;;
+    2) printf '%s\n' "Setup skipped. Run $DISPATCH_HOME/bin/dispatch setup when ready." ;;
+    *) fail 'invalid setup choice' ;;
+esac

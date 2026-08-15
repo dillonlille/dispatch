@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dispatch.invalid/schemas/dispatch-installation-release-v1.schema.json",
-  "title": "Dispatch product release planning manifest v1",
+  "title": "Dispatch product release manifest v1",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -17,7 +17,7 @@
   ],
   "properties": {
     "schema_version": {"const": 1},
-    "ready": {"const": false},
+    "ready": {"type": "boolean"},
     "product": {
       "type": "object",
       "additionalProperties": false,
@@ -39,7 +39,7 @@
       "additionalProperties": false,
       "required": ["ready", "install_phase", "selector", "generation_root"],
       "properties": {
-        "ready": {"const": false},
+        "ready": {"type": "boolean"},
         "install_phase": {"const": "setup"},
         "selector": {"const": "/etc/dispatch/browser-runtime-active.json"},
         "generation_root": {"const": "/opt/dispatch/browser-runtimes"}
@@ -50,7 +50,7 @@
       "additionalProperties": false,
       "required": ["setup_implemented", "setup_command", "choices"],
       "properties": {
-        "setup_implemented": {"const": false},
+        "setup_implemented": {"type": "boolean"},
         "setup_command": {"const": "dispatch setup"},
         "choices": {"const": ["start_setup", "skip_for_now"]}
       }
@@ -76,8 +76,41 @@
       }
     }
   },
+  "allOf": [
+    {
+      "if": {"properties": {"ready": {"const": true}}, "required": ["ready"]},
+      "then": {
+        "properties": {
+          "installer": {"properties": {"artifact": {"$ref": "#/$defs/completeArtifact"}}},
+          "core": {"properties": {"artifact": {"$ref": "#/$defs/completeArtifact"}}},
+          "builtin_plugins": {
+            "items": {"properties": {"artifact": {"$ref": "#/$defs/completeArtifact"}}}
+          },
+          "post_install": {
+            "properties": {"setup_implemented": {"const": true}}
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "installer": {"properties": {"artifact": {"$ref": "#/$defs/nullArtifact"}}},
+          "core": {"properties": {"artifact": {"$ref": "#/$defs/nullArtifact"}}},
+          "builtin_plugins": {
+            "items": {"properties": {"artifact": {"$ref": "#/$defs/nullArtifact"}}}
+          },
+          "browser_runtime": {"properties": {"ready": {"const": false}}}
+        }
+      }
+    }
+  ],
   "$defs": {
     "artifact": {
+      "oneOf": [
+        {"$ref": "#/$defs/nullArtifact"},
+        {"$ref": "#/$defs/completeArtifact"}
+      ]
+    },
+    "nullArtifact": {
       "type": "object",
       "additionalProperties": false,
       "required": ["url", "size", "sha256"],
@@ -85,6 +118,16 @@
         "url": {"const": null},
         "size": {"const": null},
         "sha256": {"const": null}
+      }
+    },
+    "completeArtifact": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["url", "size", "sha256"],
+      "properties": {
+        "url": {"type": "string", "pattern": "^https://"},
+        "size": {"type": "integer", "minimum": 1},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },
     "installer": {
@@ -100,17 +143,38 @@
     "core": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["name", "version", "artifact"],
+      "required": ["name", "version", "artifact", "package_files", "requires_dist"],
       "properties": {
         "name": {"const": "dispatch-core"},
         "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+$"},
-        "artifact": {"$ref": "#/$defs/artifact"}
+        "artifact": {"$ref": "#/$defs/artifact"},
+        "package_files": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 256,
+          "items": {"$ref": "#/$defs/packageFile"}
+        },
+        "requires_dist": {
+          "type": "array",
+          "maxItems": 64,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256}
+        }
+      }
+    },
+    "packageFile": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "sha256"],
+      "properties": {
+        "path": {"type": "string", "pattern": "^dispatch_core/"},
+        "sha256": {"type": "string", "pattern": "^[0-9a-f]{64}$"}
       }
     },
     "builtinPlugin": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["id", "package", "version", "artifact", "capabilities"],
+      "required": ["id", "package", "version", "artifact", "capabilities", "requires_dist"],
       "properties": {
         "id": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"},
         "package": {"type": "string", "pattern": "^dispatch-[a-z0-9][a-z0-9-]{0,63}$"},
@@ -121,6 +185,13 @@
           "maxItems": 16,
           "uniqueItems": true,
           "items": {"type": "string", "pattern": "^[a-z][a-z0-9-]{0,63}$"}
+        },
+        "requires_dist": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 32,
+          "uniqueItems": true,
+          "items": {"type": "string", "minLength": 1, "maxLength": 256}
         }
       }
     }

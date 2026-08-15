@@ -26,12 +26,13 @@ def test_installation_release_manifest_matches_schema_and_is_fail_closed() -> No
             "version": "0.1.0",
             "artifact": {"url": None, "size": None, "sha256": None},
             "capabilities": [],
+            "requires_dist": ["dispatch-core==1.0.0", "pytest==9.1.1; extra == \"dev\""],
         }
     ]
     assert manifest["browser_runtime"]["ready"] is False
     assert manifest["browser_runtime"]["install_phase"] == "setup"
     assert manifest["post_install"] == {
-        "setup_implemented": False,
+        "setup_implemented": True,
         "setup_command": "dispatch setup",
         "choices": ["start_setup", "skip_for_now"],
     }
@@ -57,6 +58,15 @@ def test_product_manifest_versions_match_component_sources() -> None:
         installer["version"],
     )
     assert (manifest["core"]["name"], manifest["core"]["version"]) == (core["name"], core["version"])
+    runtime_plan = json.loads((ROOT / "packaging" / "runtime-package-plan.json").read_text(encoding="utf-8"))
+    core_plan = next(item for item in runtime_plan["distributions"] if item["name"] == "dispatch-core")
+    assert manifest["core"]["package_files"] == [
+        {"path": item["path"], "sha256": item["sha256"]} for item in core_plan["files"]
+    ]
+    assert manifest["core"]["requires_dist"] == [
+        *core_plan["requires_dist"],
+        *core_plan["optional_requires_dist"],
+    ]
     assert manifest["builtin_plugins"] == [
         {
             "id": handbook_manifest["id"],
@@ -64,5 +74,6 @@ def test_product_manifest_versions_match_component_sources() -> None:
             "version": handbook["version"],
             "artifact": {"url": None, "size": None, "sha256": None},
             "capabilities": [],
+            "requires_dist": ["dispatch-core==1.0.0", "pytest==9.1.1; extra == \"dev\""],
         }
     ]

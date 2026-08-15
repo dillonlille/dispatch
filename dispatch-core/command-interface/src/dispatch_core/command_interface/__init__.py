@@ -4,11 +4,13 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import signal
 from typing import Any, Sequence
 
 from dispatch_core.collection_manager import CollectionStoreError, CollectionTaskStore
 from dispatch_core.collection_manager.queue import utc_now
 from dispatch_core.collection_manager.supervisor import (
+    CollectionService,
     CollectionWorkerSupervisor,
     ProductionManagerFactory,
 )
@@ -28,6 +30,9 @@ def parser() -> argparse.ArgumentParser:
     subcommands.add_parser("health", help="report installed Core path readiness")
     subcommands.add_parser("verify", help="verify the installed Core package and path contract")
     subcommands.add_parser("browser-doctor", help="report non-mutating Browser Manager dependency readiness")
+    service = subcommands.add_parser("service", help="run the foreground Core collection service")
+    service.add_argument("--idle-seconds", type=float, default=1.0)
+    service.add_argument("--max-ticks", type=int)
     paths = subcommands.add_parser("paths", help="resolve non-mutating installation roots")
     paths.add_argument("--owner")
 
@@ -120,6 +125,32 @@ def _collection_result(args: argparse.Namespace) -> dict[str, Any]:
     return envelope(ok=True, action=action, status="ready", data=data)
 
 
+def _service_result(args: argparse.Namespace) -> dict[str, Any]:
+    paths = DispatchPaths.from_environment()
+    store = CollectionTaskStore.from_paths(paths)
+    supervisor = CollectionWorkerSupervisor(store.database, ProductionManagerFactory(paths))
+    service = CollectionService(store, supervisor)
+    stopping = False
+
+    def request_stop(_signum: int, _frame: object) -> None:
+        nonlocal stopping
+        stopping = True
+
+    previous_term = signal.signal(signal.SIGTERM, request_stop)
+    previous_int = signal.signal(signal.SIGINT, request_stop)
+    try:
+        ticks = service.run(lambda: stopping, idle_seconds=args.idle_seconds, max_ticks=args.max_ticks)
+    finally:
+        signal.signal(signal.SIGTERM, previous_term)
+        signal.signal(signal.SIGINT, previous_int)
+    return envelope(
+        ok=True,
+        action="service",
+        status="stopped",
+        data={"ticks": len(ticks), "last_tick": ticks[-1].safe_data() if ticks else None},
+    )
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = parser().parse_args(argv)
     try:
@@ -127,6 +158,8 @@ def main(argv: Sequence[str] | None = None) -> int:
             result = _auth_result(args)
         elif args.action == "collection":
             result = _collection_result(args)
+        elif args.action == "service":
+            result = _service_result(args)
         else:
             result = resolved(args.action, getattr(args, "owner", None))
     except (CommandInterfaceError, CollectionStoreError, PathConfigError) as exc:

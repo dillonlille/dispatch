@@ -65,8 +65,8 @@ A staged Core release is not sufficient for complete product activation. The pub
 
 The planning manifest records the immutable product version, mandatory installer/Core declarations, the built-in plugin catalog, and the future setup UX contract:
 
-- `setup_implemented: false`;
-- setup command: `dispatch setup`, which will select and install built-in plugins from the same product release;
+- `setup_implemented: true` for the current capability-free Handbook catalog;
+- setup command: `dispatch setup`, which selects, verifies, activates, and receipts built-in plugins from the same product release;
 - post-install choices: `start_setup` or `skip_for_now`.
 
 The installer must not collect credentials, account identifiers, provider configuration, MFA, CAPTCHA answers, schedules, or delivery settings.

@@ -49,6 +49,35 @@ def test_installed_health_and_owner_paths_use_standard_envelopes(monkeypatch, tm
     assert not (tmp_path / "installed-home").exists()
 
 
+def test_core_only_setup_completion_does_not_require_browser_or_authentication(monkeypatch, tmp_path: Path) -> None:
+    configure(monkeypatch, tmp_path)
+    setup_directory = tmp_path / "installed-home" / ".dispatch" / "state" / "install"
+    setup_directory.mkdir(mode=0o700, parents=True)
+    setup = setup_directory / "setup.json"
+    setup.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "complete",
+                "product_version": "0.0.1",
+                "selected_plugins": [],
+                "plugins": [],
+                "contains_secrets": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    setup.chmod(0o600)
+
+    health = resolved("health")
+
+    assert health["ok"] is True
+    assert health["status"] == "ready"
+    assert health["data"]["configured"] is True
+    assert health["data"]["planes"]["browser"] == "not_applicable"
+    assert health["data"]["planes"]["authentication"] == "not_applicable"
+
+
 def test_installed_health_rejects_invalid_private_root(monkeypatch, tmp_path: Path) -> None:
     configure(monkeypatch, tmp_path)
     monkeypatch.setenv("DISPATCH_DATA_ROOT", "relative/data")

@@ -89,3 +89,18 @@ def test_collection_worker_once_is_bounded_and_idle_without_collectors(monkeypat
     assert payload["action"] == "collection-worker-once"
     assert payload["data"]["status"] == "idle"
     assert payload["data"]["process_cleaned"] is True
+
+
+def test_service_runs_setup_independent_idle_tick(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+
+    assert main(["service", "--idle-seconds", "0.05", "--max-ticks", "1"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["action"] == "service"
+    assert payload["status"] == "stopped"
+    assert payload["data"]["ticks"] == 1
+    assert payload["data"]["last_tick"]["worker"]["status"] == "idle"

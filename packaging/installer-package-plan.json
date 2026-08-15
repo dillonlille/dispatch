@@ -34,8 +34,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/cli.py",
-      "sha256": "7ddc7e5144332ad54473f6fad65679133e4dfbc2bba52232de8a4135b08584dc",
-      "size": 4589
+      "sha256": "45c54c676e711dd915552404e014a40e8b87a6bc0e7943c04d8d75715a46f8fa",
+      "size": 6902
     },
     {
       "path": "installer/src/dispatch_installer/core_release.py",
@@ -49,28 +49,38 @@
     },
     {
       "path": "installer/src/dispatch_installer/download.py",
-      "sha256": "aa0b368cabff7f2c16eec599613cc1ddf2963c3877b2ffcc9142e8d5b04b4299",
-      "size": 9386
+      "sha256": "910325f7a483d22760e614a86eb44b0cbf6b40e09e0cd29499baf446b4b3fa48",
+      "size": 10894
     },
     {
       "path": "installer/src/dispatch_installer/launcher.py",
-      "sha256": "a5b27a7a3940a67b247cf64f1d0986ad57b8fe5d5b2d86fbf2f7adca5c66d4e3",
-      "size": 1841
+      "sha256": "73c5b3318bba5097a438eef4a6671ed781deae1bc09d30a73b2b47e58725634e",
+      "size": 2330
     },
     {
       "path": "installer/src/dispatch_installer/layout.py",
-      "sha256": "7ed5617f9820460931077fc58d60451b63cac1c95b019c7f484287bbc23a6d3f",
-      "size": 18263
+      "sha256": "fdd7698c6d96b36c06682782e7bee1d03156a97f21a13006c65783dcd33b088e",
+      "size": 18423
     },
     {
       "path": "installer/src/dispatch_installer/manifest.py",
-      "sha256": "0d9f0943bec51b19b5f6ec6f6f7b12a077f2214348de7aa8e236b49ff131e087",
-      "size": 11077
+      "sha256": "bfaa830ecfdc2c37bcc2b7bc1e647cb0dcb1075f67ba72279e29096c019a9206",
+      "size": 16261
+    },
+    {
+      "path": "installer/src/dispatch_installer/service.py",
+      "sha256": "201f6be4d96f247ab9667706e69df83cc54f20add122b2a40a75de7d1b067823",
+      "size": 4298
+    },
+    {
+      "path": "installer/src/dispatch_installer/setup.py",
+      "sha256": "fe04ca7637dd2cf91549f4f6b10d7762c9d40b86ba16a7398303bf5b5f93c543",
+      "size": 23289
     },
     {
       "path": "installer/src/dispatch_installer/uninstall.py",
-      "sha256": "8782af11c11ae3d82c0963971e78d48d256d7037bac2e88101315c97feca9626",
-      "size": 53012
+      "sha256": "debf121a54c6f4e3119699ce40a6c7b0ad0d825a0ad288b59d44f871590543c5",
+      "size": 55613
     }
   ],
   "online_only": true,

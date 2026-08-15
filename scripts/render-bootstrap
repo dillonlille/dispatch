@@ -1,0 +1,74 @@
+#!/usr/bin/env python3
+from __future__ import annotations
+
+import argparse
+import hashlib
+import os
+import tempfile
+from pathlib import Path
+from urllib.parse import urlsplit
+
+from dispatch_installer.layout import InstallerError
+from dispatch_installer.manifest import load_manifest
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Render a digest-pinned Dispatch bootstrap")
+    parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument("--installer-wheel", type=Path, required=True)
+    parser.add_argument("--template", type=Path, required=True)
+    parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+
+    manifest_bytes = args.manifest.read_bytes()
+    manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
+    manifest = load_manifest(args.manifest, expected_sha256=manifest_sha256)
+    if not manifest.ready:
+        raise InstallerError("release_not_ready", "bootstrap rendering requires a ready release manifest")
+    artifact = manifest.installer_artifact
+    wheel_bytes = args.installer_wheel.read_bytes()
+    if len(wheel_bytes) != artifact.size or hashlib.sha256(wheel_bytes).hexdigest() != artifact.sha256:
+        raise InstallerError("installer_artifact_mismatch", "installer wheel differs from release manifest")
+    if args.installer_wheel.name != Path(urlsplit(str(artifact.url)).path).name:
+        raise InstallerError("installer_artifact_name", "installer wheel filename differs from release manifest")
+
+    replacements = {
+        "@PRODUCT_VERSION@": manifest.product_version,
+        "@MANIFEST_URL@": (
+            f"https://dispatch.dillonlille.com/releases/{manifest.product_version}/installation-release-manifest.json"
+        ),
+        "@MANIFEST_SHA256@": manifest_sha256,
+        "@INSTALLER_URL@": str(artifact.url),
+        "@INSTALLER_SIZE@": str(artifact.size),
+        "@INSTALLER_SHA256@": str(artifact.sha256),
+    }
+    rendered = args.template.read_text(encoding="utf-8")
+    for token, value in replacements.items():
+        if rendered.count(token) != 1:
+            raise InstallerError("bootstrap_template", f"bootstrap template token {token} is invalid")
+        rendered = rendered.replace(token, value)
+    if "@" in rendered:
+        raise InstallerError("bootstrap_template", "bootstrap template contains unresolved tokens")
+
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    descriptor, temporary_name = tempfile.mkstemp(prefix=".install-", dir=args.output.parent)
+    temporary = Path(temporary_name)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
+            stream.write(rendered)
+            stream.flush()
+            os.fsync(stream.fileno())
+        temporary.chmod(0o755)
+        os.replace(temporary, args.output)
+        directory = os.open(args.output.parent, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(directory)
+        finally:
+            os.close(directory)
+    finally:
+        temporary.unlink(missing_ok=True)
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+import dispatch_installer.cli as cli_module
 from dispatch_installer.cli import main
 from dispatch_installer.layout import InstallerError
 from dispatch_installer.manifest import load_manifest
@@ -29,7 +30,7 @@ def test_incomplete_repository_manifest_is_valid_and_fail_closed() -> None:
     ]
     assert manifest.browser_ready is False
     assert manifest.browser_install_phase == "setup"
-    assert manifest.setup_implemented is False
+    assert manifest.setup_implemented is True
     assert manifest.setup_command == "dispatch setup"
     assert manifest.uninstall_user_scope_implemented is True
     assert manifest.uninstall_administrative_command == "dispatch-installer uninstall"
@@ -51,7 +52,7 @@ def test_manifest_tampering_is_rejected(tmp_path: Path) -> None:
         load_manifest(copied, expected_sha256=digest)
 
 
-def test_schema_v1_rejects_all_ready_manifests(tmp_path: Path) -> None:
+def test_schema_v1_rejects_partial_ready_manifest(tmp_path: Path) -> None:
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     payload["ready"] = True
     payload["core"]["artifact"] = {
@@ -66,7 +67,95 @@ def test_schema_v1_rejects_all_ready_manifests(tmp_path: Path) -> None:
     with pytest.raises(InstallerError) as error:
         load_manifest(path, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
 
-    assert error.value.code == "manifest_ready_unsupported"
+    assert error.value.code == "manifest_partial_artifact"
+
+
+def test_complete_ready_manifest_authorizes_core_policy(tmp_path: Path) -> None:
+    payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    payload["ready"] = True
+    payload["post_install"]["setup_implemented"] = True
+    artifacts = [payload["installer"]["artifact"], payload["core"]["artifact"], payload["builtin_plugins"][0]["artifact"]]
+    filenames = [
+        "dispatch_installer-0.1.0-py3-none-any.whl",
+        "dispatch_core-1.0.0-py3-none-any.whl",
+        "dispatch_local_handbook-0.1.0-py3-none-any.whl",
+    ]
+    for index, (artifact, filename) in enumerate(zip(artifacts, filenames)):
+        artifact.update(
+            url=f"https://dispatch.dillonlille.com/releases/0.0.1/{filename}",
+            size=index + 1,
+            sha256=str(index) * 64,
+        )
+    path = tmp_path / "ready.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    manifest = load_manifest(path, expected_sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+
+    assert manifest.ready is True
+    assert dict(manifest.core_package_files)["dispatch_core/__init__.py"]
+    assert any('extra == "browser"' in item for item in manifest.core_requires_dist)
+
+
+def test_install_uses_ready_manifest_core_authority(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    wheel = tmp_path / "core.whl"
+    wheel.write_bytes(b"reviewed-core")
+    payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    payload["ready"] = True
+    payload["post_install"]["setup_implemented"] = True
+    payload["installer"]["artifact"] = {
+        "url": "https://dispatch.dillonlille.com/releases/0.0.1/dispatch_installer-0.1.0-py3-none-any.whl",
+        "size": 1,
+        "sha256": "1" * 64,
+    }
+    payload["core"]["artifact"] = {
+        "url": "https://dispatch.dillonlille.com/releases/0.0.1/dispatch_core-1.0.0-py3-none-any.whl",
+        "size": wheel.stat().st_size,
+        "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+    }
+    payload["builtin_plugins"][0]["artifact"] = {
+        "url": "https://dispatch.dillonlille.com/releases/0.0.1/dispatch_local_handbook-0.1.0-py3-none-any.whl",
+        "size": 1,
+        "sha256": "2" * 64,
+    }
+    path = tmp_path / "ready.json"
+    path.write_text(json.dumps(payload), encoding="utf-8")
+    captured: dict[str, object] = {}
+
+    def install(layout, selected_wheel, **policy):
+        captured.update({"layout": layout, "wheel": selected_wheel, **policy})
+        return {"status": "installed", "launcher": "/tmp/dispatch", "setup_required": True}
+
+    monkeypatch.setattr(cli_module, "install_core_application", install)
+    monkeypatch.setattr(cli_module, "persist_release_manifest", lambda *args, **kwargs: path)
+    monkeypatch.setattr(
+        cli_module,
+        "install_user_service",
+        lambda layout, launcher: {"status": "active", "unit": "/tmp/dispatch-core.service"},
+    )
+    result = main(
+        [
+            "--dispatch-home",
+            str(tmp_path / "home" / ".dispatch"),
+            "install",
+            "--manifest",
+            str(path),
+            "--manifest-sha256",
+            hashlib.sha256(path.read_bytes()).hexdigest(),
+            "--core-wheel",
+            str(wheel),
+            "--yes",
+        ]
+    )
+
+    assert result == 0
+    assert captured["wheel"] == wheel
+    assert captured["expected_sha256"] == payload["core"]["artifact"]["sha256"]
+    assert captured["expected_package_files"] == dict(
+        (item["path"], item["sha256"]) for item in payload["core"]["package_files"]
+    )
+    assert json.loads(capsys.readouterr().out)["status"] == "installed"
 
 
 def test_scalar_manifest_uses_bounded_shape_error(tmp_path: Path) -> None:
@@ -176,7 +265,7 @@ def test_plan_reports_current_publication_blocker(tmp_path: Path, monkeypatch, c
     assert payload["data"]["manifest"]["builtin_plugins"][0]["id"] == "handbook"
     assert payload["data"]["manifest"]["browser_ready"] is False
     assert payload["data"]["manifest"]["browser_install_phase"] == "setup"
-    assert payload["data"]["manifest"]["setup_implemented"] is False
+    assert payload["data"]["manifest"]["setup_implemented"] is True
     assert payload["data"]["manifest"]["setup_command"] == "dispatch setup"
     assert payload["data"]["manifest"]["uninstall_user_scope_implemented"] is True
     assert payload["data"]["manifest"]["uninstall_default_mode"] == "keep-data"

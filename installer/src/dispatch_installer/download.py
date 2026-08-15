@@ -20,6 +20,7 @@ APPROVED_GITHUB_HOSTS = frozenset(
         "release-assets.githubusercontent.com",
     }
 )
+APPROVED_ARTIFACT_HOSTS = APPROVED_GITHUB_HOSTS | {"dispatch.dillonlille.com"}
 _MAX_URL_LENGTH = 2048
 _MAX_ARTIFACT_SIZE = 4 * 1024 * 1024 * 1024
 _CHUNK_SIZE = 64 * 1024
@@ -43,6 +44,28 @@ def validate_github_https_url(url: str) -> str:
         or parsed.fragment
     ):
         raise InstallerError("download_url_unapproved", "artifact URL is not an approved GitHub HTTPS URL")
+    return url
+
+
+def validate_artifact_https_url(url: str) -> str:
+    if not isinstance(url, str) or not url or len(url) > _MAX_URL_LENGTH:
+        raise InstallerError("download_url_invalid", "artifact URL is invalid")
+    parsed = urlsplit(url)
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise InstallerError("download_url_invalid", "artifact URL port is invalid") from exc
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname not in APPROVED_ARTIFACT_HOSTS
+        or parsed.username is not None
+        or parsed.password is not None
+        or port not in {None, 443}
+        or not parsed.path.startswith("/")
+        or (parsed.hostname == "dispatch.dillonlille.com" and parsed.query)
+        or parsed.fragment
+    ):
+        raise InstallerError("download_url_unapproved", "artifact URL is not an approved HTTPS URL")
     return url
 
 
@@ -73,7 +96,7 @@ def validate_core_release_asset_url(url: str, *, version: str) -> str:
 
 class _ApprovedRedirectHandler(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
-        validate_github_https_url(newurl)
+        validate_artifact_https_url(newurl)
         return super().redirect_request(req, fp, code, msg, headers, newurl)
 
 
@@ -95,7 +118,7 @@ def _validate_private_parent(parent: Path) -> None:
         raise InstallerError("download_parent_unsafe", "download parent ownership or mode is unsafe")
 
 
-def _download_github_artifact(
+def _download_artifact(
     url: str,
     destination: Path,
     *,
@@ -103,7 +126,7 @@ def _download_github_artifact(
     expected_sha256: str,
     timeout: int = 60,
 ) -> dict[str, str | int | bool]:
-    validate_github_https_url(url)
+    validate_artifact_https_url(url)
     if (
         not isinstance(expected_size, int)
         or isinstance(expected_size, bool)
@@ -152,7 +175,7 @@ def _download_github_artifact(
         os.fchmod(descriptor, 0o600)
         try:
             with _open(url, timeout) as response:
-                validate_github_https_url(response.geturl())
+                validate_artifact_https_url(response.geturl())
                 content_encoding = response.headers.get("Content-Encoding")
                 if content_encoding not in {None, "identity"}:
                     raise InstallerError("download_encoding", "artifact response encoding is not identity")
@@ -214,6 +237,10 @@ def _download_github_artifact(
     }
 
 
+# Compatibility name for the original GitHub-only caller and focused tests.
+_download_github_artifact = _download_artifact
+
+
 def download_core_release_artifact(
     url: str,
     destination: Path,
@@ -226,7 +253,26 @@ def download_core_release_artifact(
     """Download one exact manifest-authorized Core wheel without broadening policy."""
 
     validate_core_release_asset_url(url, version=version)
-    return _download_github_artifact(
+    return _download_artifact(
+        url,
+        destination,
+        expected_size=expected_size,
+        expected_sha256=expected_sha256,
+        timeout=timeout,
+    )
+
+
+def download_release_artifact(
+    url: str,
+    destination: Path,
+    *,
+    expected_size: int,
+    expected_sha256: str,
+    timeout: int = 60,
+) -> dict[str, str | int | bool]:
+    """Download one exact product-manifest artifact from an approved host."""
+
+    return _download_artifact(
         url,
         destination,
         expected_size=expected_size,
