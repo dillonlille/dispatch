@@ -17,6 +17,7 @@ from .manifest import load_manifest
 from .service import install_user_service
 from .setup import persist_release_manifest
 from .uninstall import plan_uninstall, uninstall as apply_uninstall
+from .user_command import install_user_command, validate_user_command_install
 
 
 def _record_install_phase(
@@ -146,7 +147,14 @@ def main(argv: list[str] | None = None) -> int:
                     or re.fullmatch(r"[0-9a-f]{64}", transaction["manifest_sha256"]) is None
                     or not isinstance(transaction.get("product_version"), str)
                     or transaction.get("phase")
-                    not in {"started", "core_active", "manifest_persisted", "service_active", "complete"}
+                    not in {
+                        "started",
+                        "core_active",
+                        "command_active",
+                        "manifest_persisted",
+                        "service_active",
+                        "complete",
+                    }
                 ):
                     raise InstallerError("install_transaction_invalid", "install transaction receipt is invalid")
                 if transaction["phase"] != "complete" and transaction.get("manifest_sha256") != args.manifest_sha256:
@@ -154,6 +162,7 @@ def main(argv: list[str] | None = None) -> int:
                         "install_transaction_incomplete",
                         "a different incomplete installation must be repaired before another release is installed",
                     )
+            validate_user_command_install(layout)
             _record_install_phase(
                 layout,
                 manifest_sha256=args.manifest_sha256,
@@ -193,6 +202,13 @@ def main(argv: list[str] | None = None) -> int:
                 manifest_sha256=args.manifest_sha256,
                 product_version=manifest.product_version,
                 phase="service_active",
+            )
+            result["command"] = install_user_command(layout)
+            _record_install_phase(
+                layout,
+                manifest_sha256=args.manifest_sha256,
+                product_version=manifest.product_version,
+                phase="command_active",
             )
             verification = inspect_installation(layout)
             if not verification["ok"]:

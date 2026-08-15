@@ -34,6 +34,12 @@ def main(argv: list[str] | None = None) -> int:
         arguments = list(sys.argv[1:] if argv is None else argv)
         if arguments and arguments[0] == "setup":
             return run_setup(layout, arguments[1:])
+        if arguments and arguments[0] == "uninstall":
+            from .cli import main as installer_main
+
+            return installer_main(
+                ["--dispatch-home", str(layout.dispatch_home), "uninstall", *arguments[1:]]
+            )
         inspection = inspect_installation(layout)
         core = inspection["checks"]["core"]
         if core.get("status") != "ready":

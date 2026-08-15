@@ -145,12 +145,17 @@ def test_core_release_staging_activation_and_reuse(tmp_path: Path, monkeypatch: 
     monkeypatch.setattr(
         doctor_module,
         "load_installed_manifest",
-        lambda _layout: SimpleNamespace(core_version="1.0.0", product_version="0.0.1", browser_ready=False),
+        lambda _layout: SimpleNamespace(core_version="1.0.0", product_version="0.0.2", browser_ready=False),
     )
     monkeypatch.setattr(
         doctor_module,
         "inspect_user_service",
         lambda _layout: {"status": "ready", "active": True, "enabled": True},
+    )
+    monkeypatch.setattr(
+        doctor_module,
+        "inspect_user_command",
+        lambda _layout: {"status": "ready", "command": "/tmp/dispatch"},
     )
     ready_report = inspect_installation(layout)
     assert ready_report["ok"] is True

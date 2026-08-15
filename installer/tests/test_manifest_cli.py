@@ -31,8 +31,8 @@ def test_incomplete_repository_manifest_is_valid_and_fail_closed() -> None:
     manifest = load_manifest(MANIFEST, expected_sha256=digest)
 
     assert manifest.ready is False
-    assert manifest.product_version == "0.0.1"
-    assert manifest.installer_version == "0.1.0"
+    assert manifest.product_version == "0.0.2"
+    assert manifest.installer_version == "0.1.1"
     assert manifest.installer_artifact.complete is False
     assert manifest.core_version == "1.0.0"
     assert manifest.core_artifact_url is None
@@ -85,12 +85,12 @@ def test_complete_ready_manifest_authorizes_core_policy(tmp_path: Path) -> None:
     payload["post_install"]["setup_implemented"] = True
     artifacts = [payload["installer"]["artifact"], payload["core"]["artifact"]]
     filenames = [
-        "dispatch_installer-0.1.0-py3-none-any.whl",
+        "dispatch_installer-0.1.1-py3-none-any.whl",
         "dispatch_core-1.0.0-py3-none-any.whl",
     ]
     for index, (artifact, filename) in enumerate(zip(artifacts, filenames)):
         artifact.update(
-            url=f"https://dispatch.dillonlille.com/releases/0.0.1/{filename}",
+            url=f"https://dispatch.dillonlille.com/releases/0.0.2/{filename}",
             size=index + 1,
             sha256=str(index) * 64,
         )
@@ -119,12 +119,12 @@ def test_install_uses_ready_manifest_core_authority(
     payload["ready"] = True
     payload["post_install"]["setup_implemented"] = True
     payload["installer"]["artifact"] = {
-        "url": "https://dispatch.dillonlille.com/releases/0.0.1/dispatch_installer-0.1.0-py3-none-any.whl",
+        "url": "https://dispatch.dillonlille.com/releases/0.0.2/dispatch_installer-0.1.1-py3-none-any.whl",
         "size": 1,
         "sha256": "1" * 64,
     }
     payload["core"]["artifact"] = {
-        "url": "https://dispatch.dillonlille.com/releases/0.0.1/dispatch_core-1.0.0-py3-none-any.whl",
+        "url": "https://dispatch.dillonlille.com/releases/0.0.2/dispatch_core-1.0.0-py3-none-any.whl",
         "size": wheel.stat().st_size,
         "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
     }
@@ -174,6 +174,67 @@ def test_install_uses_ready_manifest_core_authority(
     assert transaction["phase"] == "complete"
     assert transaction["manifest_sha256"] == hashlib.sha256(path.read_bytes()).hexdigest()
     assert json.loads(capsys.readouterr().out)["status"] == "installed"
+
+
+def test_install_refuses_untracked_dispatch_command_before_core_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    home = tmp_path / "home"
+    runtime = tmp_path / "run"
+    home.mkdir(mode=0o700)
+    runtime.mkdir(mode=0o700)
+    local = home / ".local"
+    local.mkdir(mode=0o700)
+    command_directory = local / "bin"
+    command_directory.mkdir(mode=0o700)
+    command = command_directory / "dispatch"
+    command.write_text("#!/bin/sh\nexec false\n", encoding="utf-8")
+    command.chmod(0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("XDG_RUNTIME_DIR", str(runtime))
+
+    wheel = tmp_path / "core.whl"
+    wheel.write_bytes(b"reviewed-core")
+    payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    payload["ready"] = True
+    payload["installer"]["artifact"] = {
+        "url": "https://dispatch.dillonlille.com/releases/0.0.2/dispatch_installer-0.1.1-py3-none-any.whl",
+        "size": 1,
+        "sha256": "1" * 64,
+    }
+    payload["core"]["artifact"] = {
+        "url": "https://dispatch.dillonlille.com/releases/0.0.2/dispatch_core-1.0.0-py3-none-any.whl",
+        "size": wheel.stat().st_size,
+        "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
+    }
+    manifest = tmp_path / "ready.json"
+    manifest.write_text(json.dumps(payload), encoding="utf-8")
+    called = False
+
+    def install(*_args, **_kwargs):
+        nonlocal called
+        called = True
+        return {}
+
+    monkeypatch.setattr(cli_module, "install_core_application", install)
+    result = main(
+        [
+            "install",
+            "--manifest",
+            str(manifest),
+            "--manifest-sha256",
+            hashlib.sha256(manifest.read_bytes()).hexdigest(),
+            "--core-wheel",
+            str(wheel),
+            "--yes",
+        ]
+    )
+    response = json.loads(capsys.readouterr().out)
+
+    assert result == 1
+    assert response["error"]["code"] == "command_conflict"
+    assert called is False
+    assert command.read_text(encoding="utf-8") == "#!/bin/sh\nexec false\n"
 
 
 def test_scalar_manifest_uses_bounded_shape_error(tmp_path: Path) -> None:
@@ -281,7 +342,7 @@ def test_plan_reports_current_publication_blocker(tmp_path: Path, monkeypatch, c
 
     assert result == 2
     assert payload["status"] == "blocked"
-    assert payload["data"]["manifest"]["product_version"] == "0.0.1"
+    assert payload["data"]["manifest"]["product_version"] == "0.0.2"
     assert payload["data"]["manifest"]["builtin_plugins"] == []
     assert payload["data"]["manifest"]["browser_ready"] is False
     assert payload["data"]["manifest"]["browser_install_phase"] == "setup"

@@ -13,22 +13,22 @@ Hermes and shared operating-system dependencies are always preserved.
 Inspect the exact plan without mutation:
 
 ```text
-dispatch-installer uninstall --plan
+dispatch uninstall --plan
 ```
 
 Remove installed code and disposable operational material while preserving configuration and durable data:
 
 ```text
-dispatch-installer uninstall --yes
+dispatch uninstall --yes
 ```
 
 Explicitly remove configuration and durable data as well:
 
 ```text
-dispatch-installer uninstall --purge --yes
+dispatch uninstall --purge --yes
 ```
 
-The future `dispatch uninstall` command may wrap this administrative entry point after the launcher exists. The administrative command requires either `--plan` or `--yes`; there is no implicit destructive default.
+`dispatch uninstall` routes directly to the installer authority rather than through Core. It requires either `--plan` or `--yes`; there is no implicit destructive default. If shell command resolution is unavailable, the equivalent administrative fallback is `${DISPATCH_HOME}/installer-venv/bin/python -m dispatch_installer uninstall`, with `${DISPATCH_HOME}` defaulting to `${HOME}/.dispatch`.
 
 ## Default preservation boundary
 
@@ -47,12 +47,13 @@ It removes only validated user-owned Dispatch roots and verified Core releases:
 
 - active Core selector and verified immutable Core releases;
 - `${DISPATCH_HOME}/bin`;
+- the receipt-owned `${HOME}/.local/bin/dispatch` command when its exact bytes verify;
 - `${DISPATCH_HOME}/cache`;
 - `${DISPATCH_HOME}/staging`;
 - transient runtime material after quiescence is proven;
 - ordinary user-owned operational state.
 
-An unknown release entry is preserved by default and blocks purge. A symlink, hard-linked regular file, unsupported file type, unexpected owner, mount-boundary crossing, invalid selector, invalid release, or invalid receipt blocks mutation.
+An unrelated or untracked `${HOME}/.local/bin/dispatch` is preserved. A tracked command whose bytes differ from its receipt blocks mutation. An unknown release entry is preserved by default and blocks purge. A symlink, hard-linked regular file, unsupported file type, unexpected owner, mount-boundary crossing, invalid selector, invalid release, or invalid receipt blocks mutation.
 
 ## Purge boundary
 

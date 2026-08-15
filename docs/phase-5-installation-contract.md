@@ -65,7 +65,7 @@ A staged Core release is not sufficient for complete product activation. The pub
 
 The planning manifest records the immutable product version, mandatory installer/Core declarations, the built-in plugin catalog, and the future setup UX contract:
 
-- `setup_implemented: true` for the Core-only `0.0.1` catalog;
+- `setup_implemented: true` for the Core-only `0.0.2` catalog;
 - setup command: `dispatch setup`, which selects, verifies, activates, and receipts built-in plugins from the same product release;
 - post-install choices: `start_setup` or `skip_for_now`.
 
@@ -73,7 +73,7 @@ The installer must not collect credentials, account identifiers, provider config
 
 ## Current fail-closed boundary
 
-`packaging/installation-release-manifest.json` remains `ready: false` until exact installer and Core artifacts are published and clean-machine acceptance passes. Schema version 1 accepts `ready: true` only when every required artifact has its exact production URL, size, and SHA-256. The installer exposes a manifest-authorized `install` command, records durable install phases, activates the user service, and verifies the installed Core-only release. Browser generation remains outside `0.0.1`; doctor treats browser launch composition as not applicable for releases that do not require it.
+`packaging/installation-release-manifest.json` remains `ready: false` until exact installer and Core artifacts are published and clean-machine acceptance passes. Schema version 1 accepts `ready: true` only when every required artifact has its exact production URL, size, and SHA-256. The installer exposes a manifest-authorized `install` command, records durable install phases, activates the user service, and verifies the installed Core-only release. Browser generation remains outside `0.0.2`; doctor treats browser launch composition as not applicable for releases that do not require it.
 
 The implemented user-scope uninstaller preserves configuration and durable data by default and requires `--purge --yes` to remove them. It preserves Hermes and shared operating-system packages in every mode. It fails closed before mutation when root-owned browser authority, non-quiescent runtime state, invalid receipts, invalid releases, symlinks, hard links, ownership changes, or mount-boundary crossings are present. The exact contract is documented in [`uninstallation.md`](uninstallation.md).
 
@@ -89,5 +89,5 @@ This is not replaced with development cache authority, arbitrary paths, test wra
 - no secrets appear in source, manifests, receipts, logs, profiles, or model output;
 - Python 3.12 and 3.13 matrix checks;
 - final post-install Start Setup / Skip for Now behavior passes through the real bootstrap;
-- same-release repair, service-integrated uninstall, keep-data reinstall, and purge acceptance pass; cross-version rollback remains a later-release feature because `0.0.1` has no predecessor;
+- same-release repair, service-integrated uninstall, keep-data reinstall, purge acceptance, and the bounded `0.0.1` to `0.0.2` installer-only migration pass; general cross-version rollback remains a later-release feature;
 - rights and licensing review before publication.

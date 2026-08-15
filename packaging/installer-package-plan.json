@@ -5,7 +5,7 @@
     "name": "dispatch-installer",
     "pyproject": "installer/pyproject.toml",
     "python_requires": ">=3.11,<3.14",
-    "version": "0.1.0"
+    "version": "0.1.1"
   },
   "files": [
     {
@@ -15,12 +15,12 @@
     },
     {
       "path": "installer/pyproject.toml",
-      "sha256": "caea3cdca0edd850df88dbffb23941ed6ca4761c8afa79d20d9e7026af96d15c",
+      "sha256": "a16cc1e0ef73f5911260a97cf312014188ba60d236c4914bd729bf4c01dc4e89",
       "size": 607
     },
     {
       "path": "installer/src/dispatch_installer/__init__.py",
-      "sha256": "f21583272a72bec7014bf36f9ea9d5c9da3bf290de11ab39a68311d91ad6715c",
+      "sha256": "4008426970e0799fbbb13a697ad7c1f9ecbc086283b601a9ce0631ecd7bcad34",
       "size": 961
     },
     {
@@ -40,8 +40,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/cli.py",
-      "sha256": "00dd5dac5ba7ff90de84ce6f350e423edac7ef94d6c56a05559421b12935c3ba",
-      "size": 11355
+      "sha256": "bbd554ac69c459b4326fc901e598bb5c5626879911a14002ec7ca96bedf37530",
+      "size": 11954
     },
     {
       "path": "installer/src/dispatch_installer/core_release.py",
@@ -50,8 +50,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/doctor.py",
-      "sha256": "6f303466de81abd1cc733b5a9d97d1c493880f5114518b3b1da2f8d0fa4016f4",
-      "size": 7414
+      "sha256": "3a9cf1c0e2db6fe7ea3e3e0904a06854fd238a5ee16e05b807d712ec20a401ea",
+      "size": 7565
     },
     {
       "path": "installer/src/dispatch_installer/download.py",
@@ -60,8 +60,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/launcher.py",
-      "sha256": "c10701d172880635fe75a51d30e3e803821b95344cf810bd15cc31f198b929dd",
-      "size": 2575
+      "sha256": "2d61465b565d11a92c08f79d64ce8b19e917007cc0caf1efe5b344bbc009ecd3",
+      "size": 2823
     },
     {
       "path": "installer/src/dispatch_installer/layout.py",
@@ -85,11 +85,16 @@
     },
     {
       "path": "installer/src/dispatch_installer/uninstall.py",
-      "sha256": "f2d35d0b8d3c489bfaa9be39151fa1e4531401f965088e4c4207b83e6974a561",
-      "size": 55645
+      "sha256": "0eea8ae6bd5f51517350797d3c5c7a499ca5e2afc047a762d42990c34165b4e8",
+      "size": 56183
+    },
+    {
+      "path": "installer/src/dispatch_installer/user_command.py",
+      "sha256": "68a372ce96cee9e8dc27f097f3abc264109c0046608f699e22b9406341f866f0",
+      "size": 12783
     }
   ],
   "online_only": true,
-  "production_install_ready": true,
+  "production_install_ready": false,
   "schema_version": 1
 }

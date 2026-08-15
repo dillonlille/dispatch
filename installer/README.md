@@ -19,6 +19,7 @@ GitHub publication and the copy-and-paste command are deliberately deferred unti
 - rejects aliased, hard-linked, or group/world-writable artifacts;
 - binds release reuse to verified wheel bytes and reconciles safe interrupted staging/publication;
 - stages Core into an immutable content-addressed release and activates it with an atomic selector;
+- publishes `${HOME}/.local/bin/dispatch` only when absent or already bound to this installation by an exact receipt;
 - verifies the complete active Core release tree and detects tampering;
 - provides non-mutating `doctor` and `verify` inspection.
 - provides receipt-bound uninstall planning, keep-data removal, explicit purge, lifecycle locking, and interruption recovery;
@@ -32,12 +33,12 @@ dispatch-installer prepare --yes
 dispatch-installer doctor
 dispatch-installer verify
 dispatch-installer plan --manifest <path> --manifest-sha256 <digest>
-dispatch-installer uninstall --plan
-dispatch-installer uninstall --yes
-dispatch-installer uninstall --purge --yes
+dispatch uninstall --plan
+dispatch uninstall --yes
+dispatch uninstall --purge --yes
 ```
 
-`prepare` creates directories only. Standard uninstall preserves `config` and `data`; `--purge` is the separately confirmed destructive mode. Unknown top-level files and unknown release entries are not silently deleted. Shared system packages and Hermes are always preserved. See [`../docs/uninstallation.md`](../docs/uninstallation.md).
+`prepare` creates directories only. `dispatch uninstall` routes to the installer module before loading Core. Standard uninstall preserves `config` and `data`; `--purge` is the separately confirmed destructive mode. Unknown top-level files and unknown release entries are not silently deleted. Shared system packages and Hermes are always preserved. See [`../docs/uninstallation.md`](../docs/uninstallation.md).
 
 None of these commands configures accounts, credentials, authentication, browser sessions, collection, scheduling, delivery, or setup answers.
 
@@ -47,7 +48,7 @@ Hermes is a user-supplied prerequisite. The installer does not install, configur
 
 ## Setup boundary
 
-Setup is not implemented in Phase 5. The manifest records the future UX contract only: after a complete installation, the `dispatch` CLI will offer **Start setup process** or **Skip for now**. A skipped setup can later be started with:
+Setup is a separate explicit phase. After a complete installation, the bootstrap offers **Start Setup** or **Skip for Now**. A skipped setup can later be started with:
 
 ```text
 dispatch setup

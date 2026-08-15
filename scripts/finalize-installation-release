@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Finalize the immutable Core-only Dispatch 0.0.1 release directory."""
+"""Finalize an immutable Core-only Dispatch release directory."""
 from __future__ import annotations
 
 import argparse
@@ -120,6 +120,9 @@ def main() -> int:
         "keep_data_uninstall",
         "reinstall_preserved_data",
         "confirmed_purge_data",
+        "path_command_ready",
+        "command_collision_rejected",
+        "command_uninstall_removed",
     }
     if not args.acceptance_candidate:
         if args.acceptance_evidence is None:

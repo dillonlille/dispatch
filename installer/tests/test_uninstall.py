@@ -12,6 +12,7 @@ import zipfile
 from contextlib import contextmanager
 from dataclasses import replace
 from pathlib import Path
+from typing import cast
 
 import pytest
 
@@ -24,6 +25,7 @@ from dispatch_installer.core_release import (
 )
 from dispatch_installer.layout import InstallLayout, InstallerError
 from dispatch_installer.uninstall import plan_uninstall, uninstall
+from dispatch_installer.user_command import command_path, install_user_command
 
 
 def layout_for(tmp_path: Path) -> InstallLayout:
@@ -136,6 +138,40 @@ def test_uninstall_plan_is_non_mutating_and_preserves_user_data(tmp_path: Path) 
     assert str(unknown) in result["preserve"]
     assert result["hermes"] == "untouched"
     assert snapshot(layout.dispatch_home) == before
+
+
+def test_uninstall_removes_only_receipt_owned_public_command(tmp_path: Path) -> None:
+    layout, _ = installed_layout(tmp_path)
+    (layout.bin / "dispatch").write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+    (layout.bin / "dispatch").chmod(0o700)
+    install_user_command(layout)
+    unrelated = command_path(layout).parent / "other-tool"
+    unrelated.write_text("preserve", encoding="utf-8")
+    unrelated.chmod(0o700)
+
+    plan = plan_uninstall(layout)
+    result = uninstall(layout)
+
+    assert str(command_path(layout)) in cast(list[str], plan["remove"])
+    assert result["status"] == "uninstalled"
+    assert not command_path(layout).exists()
+    assert unrelated.read_text(encoding="utf-8") == "preserve"
+
+
+def test_uninstall_preserves_untracked_public_command(tmp_path: Path) -> None:
+    layout, _ = installed_layout(tmp_path)
+    command = command_path(layout)
+    command.parent.parent.mkdir(mode=0o700)
+    command.parent.mkdir(mode=0o700)
+    command.write_text("unrelated", encoding="utf-8")
+    command.chmod(0o700)
+
+    plan = plan_uninstall(layout)
+    result = uninstall(layout)
+
+    assert str(command) in cast(list[str], plan["preserve"])
+    assert result["status"] == "uninstalled"
+    assert command.read_text(encoding="utf-8") == "unrelated"
 
 
 def test_fallback_runtime_is_removed_and_not_reported_as_preserved(tmp_path: Path) -> None:

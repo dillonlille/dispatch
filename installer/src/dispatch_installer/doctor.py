@@ -12,6 +12,7 @@ from .core_release import verify_core_release
 from .layout import InstallLayout, InstallerError
 from .service import inspect_user_service
 from .setup import load_installed_manifest
+from .user_command import inspect_user_command
 
 
 _BROWSER_LAUNCH_COMPOSITION_READY = False
@@ -121,6 +122,7 @@ def inspect_installation(layout: InstallLayout) -> dict:
     checks["core"] = core
 
     checks["service"] = inspect_user_service(layout)
+    checks["command"] = inspect_user_command(layout)
     checks["browser_authority"] = inspect_browser_runtime(layout)
     installed_manifest = None
     try:
@@ -159,6 +161,7 @@ def inspect_installation(layout: InstallLayout) -> dict:
         not unsafe
         and checks["production_release"]["status"] == "ready"
         and checks["service"]["status"] == "ready"
+        and checks["command"]["status"] == "ready"
         and browser_composition_ready
         and checks["core"]["status"] == "ready"
         and (not browser_required or checks["browser_authority"]["status"] == "verified")

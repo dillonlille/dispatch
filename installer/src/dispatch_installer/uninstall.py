@@ -18,6 +18,7 @@ from .layout import (
     installation_transaction_lock,
     lifecycle_lock,
 )
+from .user_command import command_path, command_receipt_path, inspect_user_command, remove_user_command
 
 _RELEASE_RE = re.compile(r"^dispatch-core-[0-9]+\.[0-9]+\.[0-9]+-[0-9a-f]{16}$")
 _LAYOUT_KEYS = {
@@ -37,6 +38,7 @@ _LAYOUT_KEYS = {
 }
 _KNOWN_INSTALL_FILES = {
     "active-release.json",
+    "command.json",
     "install-transaction.json",
     "installer.lock",
     "layout.json",
@@ -983,6 +985,10 @@ def _base_plan(
     except InstallerError as exc:
         blockers.append(exc.code)
 
+    command = inspect_user_command(authority)
+    if command["status"] == "unsafe":
+        blockers.append("user_command_unsafe")
+
     browser_state = layout.state / "browser-manager"
     if browser_state.exists():
         try:
@@ -1026,6 +1032,10 @@ def _base_plan(
     remove.extend(str(path) for path in targets if path.exists())
     remove.append(str(layout.state) if purge else str(layout.state / "<operational-state>"))
     preserve = [str(path) for path in preserved_release_entries]
+    if command["status"] in {"ready", "incomplete"} and command_receipt_path(authority).exists():
+        remove.append(str(command_path(authority)))
+    elif command["status"] == "untracked":
+        preserve.append(str(command_path(authority)))
     if not purge:
         preserve.extend(str(path) for path in (layout.config, layout.data) if path.exists())
         install_directory = layout.state / "install"
@@ -1164,6 +1174,7 @@ def _apply_uninstall_locked(
         release_names=verified_release_names,
     )
     _remove_user_service(authority)
+    remove_user_command(authority)
 
     if layout.active_release_selector.exists():
         _safe_regular(layout.active_release_selector, mode=0o600)
