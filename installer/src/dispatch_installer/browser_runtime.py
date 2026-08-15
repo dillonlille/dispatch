@@ -584,6 +584,18 @@ def _source_tree_paths(source: Path, manifest: BrowserRuntimeManifest) -> None:
         raise InstallerError("browser_source_scope", "browser runtime source tree differs from manifest")
 
 
+def _verify_source_members(source: Path, manifest: BrowserRuntimeManifest) -> None:
+    for relative, member in sorted(manifest.members.items()):
+        digest, details = _hash_regular(
+            source.joinpath(*PurePosixPath(relative).parts),
+            owner_uid=os.geteuid(),
+            max_bytes=_MAX_MEMBER_BYTES,
+            code="browser_source_unsafe",
+        )
+        if details.st_size != member.size or digest != member.sha256:
+            raise InstallerError("browser_source_digest", "browser runtime source member differs from manifest")
+
+
 def _copy_source_member(source: Path, target: Path, member: BrowserRuntimeMember) -> None:
     source_flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -939,6 +951,7 @@ def stage_browser_runtime(
         manifest=manifest,
     )
     _source_tree_paths(source_root, manifest)
+    _verify_source_members(source_root, manifest)
     with browser_authority_lock(layout):
         destination = layout.browser_generations / manifest.generation
         if destination.exists() or destination.is_symlink():

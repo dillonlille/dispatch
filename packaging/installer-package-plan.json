@@ -24,8 +24,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/browser_runtime.py",
-      "sha256": "691925c96d5a5c31bc3fbaf6e807701ae92f5dc7c59ed9a8f4823e82ac1043ca",
-      "size": 51294
+      "sha256": "bc14127c16d47fa9642bc330460c8e4d0973231f6d5ae5ed74f9ba6167f023d9",
+      "size": 51906
     },
     {
       "path": "installer/src/dispatch_installer/cli.py",
