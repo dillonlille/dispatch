@@ -30,6 +30,8 @@ def test_bootstrap_template_is_fail_closed_and_shell_valid(tmp_path: Path) -> No
     assert "2. Skip for Now" in rendered
     assert '"$installer_environment/bin/python" -m dispatch_installer install' in rendered
     assert "/bin/dispatch-installer" not in rendered
+    assert "(: </dev/tty)" in rendered
+    assert "[ -r /dev/tty ]" not in rendered
     assert "| sh" not in rendered and "| bash" not in rendered
 
 

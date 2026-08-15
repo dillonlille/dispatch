@@ -118,15 +118,17 @@ fi
 install_complete=1
 
 printf '\nDispatch %s is installed.\n' "$PRODUCT_VERSION"
-printf '1. Start Setup\n2. Skip for Now\n'
-if [ -r /dev/tty ]; then
-    printf 'Select [1-2]: ' >/dev/tty
-    IFS= read -r choice </dev/tty || choice=2
+choice=2
+if (: </dev/tty) 2>/dev/null; then
+    exec 3<>/dev/tty
+    printf '1. Start Setup\n2. Skip for Now\nSelect [1-2]: ' >&3
+    IFS= read -r choice <&3 || choice=2
+    case "$choice" in
+        1) "$DISPATCH_HOME/bin/dispatch" setup <&3 ;;
+        2) printf '%s\n' "Setup skipped. Run $DISPATCH_HOME/bin/dispatch setup when ready." ;;
+        *) fail 'invalid setup choice' ;;
+    esac
+    exec 3>&-
 else
-    choice=2
+    printf '%s\n' "No controlling terminal; setup skipped. Run $DISPATCH_HOME/bin/dispatch setup when ready."
 fi
-case "$choice" in
-    1) "$DISPATCH_HOME/bin/dispatch" setup </dev/tty ;;
-    2) printf '%s\n' "Setup skipped. Run $DISPATCH_HOME/bin/dispatch setup when ready." ;;
-    *) fail 'invalid setup choice' ;;
-esac
