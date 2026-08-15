@@ -324,7 +324,7 @@ def test_slow_worker_is_heartbeated_without_sliding_execution_deadline(tmp_path:
     supervisor = CollectionWorkerSupervisor(
         store.database,
         _Factory(str(store.database), "slow"),
-        _policy(timeout=1),
+        _policy(timeout=3),
         clock=clock,
     )
     outcome = supervisor.run_once("worker-heartbeat")

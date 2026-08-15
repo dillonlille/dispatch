@@ -67,7 +67,7 @@
         },
         {
           "path": "dispatch_core/collection_manager/supervisor.py",
-          "sha256": "03ffd233d9ea039665300a32b16b33b19afe253d470cc9b1263cc8b9510cc6d3",
+          "sha256": "f489b36ce09435fc4978baac3a8d1e0257065a0c52740e77365d34655be18f36",
           "source": "dispatch-core/collection-manager/src/dispatch_core/collection_manager/supervisor.py"
         },
         {

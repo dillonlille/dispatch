@@ -21,6 +21,9 @@ from . import CollectionManager, CollectorRegistration
 from .queue import CollectionStoreError, CollectionTaskStore, TaskRecord, TaskState, utc_now
 
 
+_SUPERVISOR_SQLITE_TIMEOUT_SECONDS = 0.25
+
+
 class ManagerFactory(Protocol):
     def __call__(self) -> CollectionManager: ...
 
@@ -321,7 +324,10 @@ class CollectionWorkerSupervisor:
                             status = "worker_protocol_error"
                             break
                         task_id = value
-                        store = CollectionTaskStore(self._database, sqlite_timeout_seconds=0.0)
+                        store = CollectionTaskStore(
+                            self._database,
+                            sqlite_timeout_seconds=_SUPERVISOR_SQLITE_TIMEOUT_SECONDS,
+                        )
                         wall_now = self._clock()
                         wall_deadline = wall_now + timedelta(seconds=self._policy.execution_timeout_seconds)
                         store.attach_worker_process(
@@ -426,7 +432,10 @@ class CollectionWorkerSupervisor:
                 cleaned = False
             if task_id is not None and cleaned:
                 try:
-                    store = store or CollectionTaskStore(self._database, sqlite_timeout_seconds=0.0)
+                    store = store or CollectionTaskStore(
+                        self._database,
+                        sqlite_timeout_seconds=_SUPERVISOR_SQLITE_TIMEOUT_SECONDS,
+                    )
                     current = store.get(task_id)
                     if (
                         current.worker_pid == pid
