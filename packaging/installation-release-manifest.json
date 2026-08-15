@@ -112,7 +112,7 @@
       "url": null
     },
     "name": "dispatch-installer",
-    "version": "0.1.3"
+    "version": "0.1.4"
   },
   "post_install": {
     "choices": [
@@ -124,7 +124,7 @@
   },
   "product": {
     "name": "dispatch",
-    "version": "0.0.4"
+    "version": "0.0.5"
   },
   "ready": false,
   "schema_version": 1,

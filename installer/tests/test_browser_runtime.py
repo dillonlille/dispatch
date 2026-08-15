@@ -85,7 +85,7 @@ def _runtime_fixture(
     manifest: dict[str, object] = {
         "schema_version": 1,
         "generation": generation,
-        "installer_release": "dispatch-installer-0.1.3",
+        "installer_release": "dispatch-installer-0.1.4",
         "platform": PLATFORM,
         "playwright": {
             "version": "1.62.0",
