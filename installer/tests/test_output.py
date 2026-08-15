@@ -117,3 +117,73 @@ def test_nested_health_statuses_remain_visible() -> None:
     assert "Setup complete: No" in output
     assert "Collection: No Collectors" in output
     assert "realms" not in output.casefold()
+
+
+def test_verify_is_concise_and_omits_internal_browser_detail() -> None:
+    output = format_human(
+        {
+            "ok": True,
+            "action": "verify",
+            "status": "ready",
+            "data": {
+                "ready": True,
+                "package": "dispatch-core",
+                "version": "1.0.0",
+                "setup": {"complete": True, "selected_plugins": []},
+                "collection_manager": {"status": "no_collectors", "ready": True},
+                "authentication": {"configured": False, "dependency": "not_installed"},
+                "browser_manager": {
+                    "configured": False,
+                    "realms": [{"id": "internal-browser-realm"}],
+                    "required_chromium_revision": "1234",
+                },
+            },
+        }
+    )
+
+    assert "Core: dispatch-core 1.0.0" in output
+    assert "Installation: Verified" in output
+    assert "Collection: No Collectors" in output
+    assert "Authentication: Not configured" in output
+    assert "Browser: Not configured" in output
+    assert "internal-browser-realm" not in output
+    assert "1234" not in output
+
+
+def test_paths_and_collection_status_are_concise() -> None:
+    paths = format_human(
+        {
+            "ok": True,
+            "action": "paths",
+            "status": "ready",
+            "data": {
+                "paths": {
+                    "DISPATCH_CODE_ROOT": "/users/example/.dispatch/releases/core",
+                    "DISPATCH_DATA_ROOT": "/users/example/.dispatch/data",
+                }
+            },
+        }
+    )
+    collection = format_human(
+        {
+            "ok": True,
+            "action": "collection-status",
+            "status": "ready",
+            "data": {
+                "tasks": {"queued": 2, "running": 1, "failed": 0},
+                "workers": 1,
+                "schedules": 0,
+                "overdue_workers": 0,
+            },
+        }
+    )
+
+    assert paths == (
+        "✓ Paths: Ready\n\n"
+        "Code: /users/example/.dispatch/releases/core\n"
+        "Data: /users/example/.dispatch/data"
+    )
+    assert "Tasks: 3" in collection
+    assert "Queued: 2" in collection
+    assert "Running: 1" in collection
+    assert "Failed" not in collection

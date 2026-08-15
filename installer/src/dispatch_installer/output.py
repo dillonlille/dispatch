@@ -226,6 +226,59 @@ def _health_lines(data: Mapping[str, object]) -> list[str]:
     return lines
 
 
+def _verify_lines(data: Mapping[str, object]) -> list[str]:
+    lines: list[str] = []
+    package = data.get("package")
+    version = data.get("version")
+    if package is not None:
+        lines.append(f"Core: {package}" + (f" {version}" if version is not None else ""))
+    lines.append(f"Installation: {'Verified' if data.get('ready') is True else 'Needs attention'}")
+
+    setup = data.get("setup")
+    if isinstance(setup, Mapping):
+        lines.append(f"Setup: {'Complete' if setup.get('complete') is True else 'Incomplete'}")
+        plugins = setup.get("selected_plugins")
+        if isinstance(plugins, Sequence) and not isinstance(plugins, (str, bytes, bytearray)):
+            lines.append("Plugins: " + (", ".join(str(plugin) for plugin in plugins) if plugins else "None"))
+
+    collection = data.get("collection_manager")
+    if isinstance(collection, Mapping):
+        lines.append(f"Collection: {_label(collection.get('status'))}")
+    authentication = data.get("authentication")
+    if isinstance(authentication, Mapping):
+        state = "Configured" if authentication.get("configured") is True else "Not configured"
+        lines.append(f"Authentication: {state}")
+    browser = data.get("browser_manager")
+    if isinstance(browser, Mapping):
+        state = "Configured" if browser.get("configured") is True else "Not configured"
+        lines.append(f"Browser: {state}")
+    return lines
+
+
+def _paths_lines(data: Mapping[str, object]) -> list[str]:
+    paths = data.get("paths")
+    if not isinstance(paths, Mapping):
+        return []
+    lines: list[str] = []
+    for key, value in paths.items():
+        name = str(key).removeprefix("DISPATCH_").removesuffix("_ROOT")
+        lines.append(f"{_label(name)}: {_value(value)}")
+    return lines
+
+
+def _collection_lines(data: Mapping[str, object]) -> list[str]:
+    lines: list[str] = []
+    tasks = data.get("tasks")
+    if isinstance(tasks, Mapping):
+        counts = {str(key): value for key, value in tasks.items() if isinstance(value, int)}
+        lines.append(f"Tasks: {sum(counts.values())}")
+        lines.extend(f"  {_label(key)}: {value}" for key, value in counts.items() if value)
+    for key in ("workers", "schedules", "overdue_workers"):
+        if data.get(key) is not None:
+            lines.append(f"{_label(key)}: {_value(data[key])}")
+    return lines
+
+
 def format_human(payload: Mapping[str, object]) -> str:
     lines = [_headline(payload)]
     error = payload.get("error")
@@ -251,6 +304,25 @@ def format_human(payload: Mapping[str, object]) -> str:
         if rendered:
             lines.extend(("", *rendered))
         return "\n".join(lines)
+
+    action = payload.get("action")
+    if action == "verify" and isinstance(data, Mapping):
+        rendered = _verify_lines(data)
+        if rendered:
+            lines.extend(("", *rendered))
+        return "\n".join(lines)
+    if action == "paths" and isinstance(data, Mapping):
+        rendered = _paths_lines(data)
+        if rendered:
+            lines.extend(("", *rendered))
+        return "\n".join(lines)
+    if action == "collection-status" and isinstance(data, Mapping):
+        rendered = _collection_lines(data)
+        if rendered:
+            lines.extend(("", *rendered))
+        return "\n".join(lines)
+    if action == "plugin-list" and isinstance(data, Mapping) and not data.get("plugins"):
+        return "✓ No plugins are installed"
 
     if isinstance(error, Mapping):
         message = error.get("message")

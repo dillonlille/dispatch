@@ -75,8 +75,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/output.py",
-      "sha256": "ea3a291424b830964b0a15822ff80d617c3a3dbbe5fc85ab56b7c8510e812343",
-      "size": 10286
+      "sha256": "b334cf36b516be1e75ce8bd2f988ea363d112a0c6aeb29f33e4e88e5d7e7be71",
+      "size": 13389
     },
     {
       "path": "installer/src/dispatch_installer/service.py",
