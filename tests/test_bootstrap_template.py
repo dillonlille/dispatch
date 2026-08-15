@@ -35,10 +35,11 @@ def test_bootstrap_template_is_fail_closed_and_shell_valid(tmp_path: Path) -> No
     assert "| sh" not in rendered and "| bash" not in rendered
 
 
-def test_public_bootstrap_remains_blocked_until_release_activation() -> None:
+def test_public_bootstrap_is_the_digest_pinned_core_release() -> None:
     content = PUBLIC.read_text(encoding="utf-8")
-    assert "installation is not available yet" in content
-    assert "exit 1" in content
+    assert "PRODUCT_VERSION='0.0.1'" in content
+    assert "MANIFEST_SHA256='aacd0fddf9cf7af685677050600b72e6ca21819b7c1599b2070b1587a503c8c1'" in content
+    assert "installation is not available yet" not in content
 
 
 def test_renderer_refuses_draft_release(tmp_path: Path) -> None:

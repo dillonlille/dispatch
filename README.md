@@ -1,8 +1,8 @@
 # Dispatch
 
-Dispatch is being rebuilt as a clean-installable, per-user Linux product. This is the public product-source repository, not yet a published release. It contains Dispatch Core, the installer, and independently packaged Dispatch-owned built-in plugin source. External plugins live in separate repositories. The fail-closed installer foundation is not yet a complete production installer.
+Dispatch is a clean-installable, per-user Linux product. This public product-source repository contains Dispatch Core, the installer, and independently packaged Dispatch-owned built-in plugin source. External plugins live in separate repositories. The first Core-only product release is `0.0.1`.
 
-The repository uses GitHub-hosted source verification. Product installation, browser, and authorized-account acceptance remain reserved for a separate clean test system.
+The repository uses GitHub-hosted source verification. Product installation and lifecycle acceptance run on a separate clean test system; browser and authorized-account acceptance remain future capability gates.
 
 ## Repository structure
 
@@ -50,7 +50,7 @@ No domain collectors, Companion Bridge, Slack delivery, enabled schedules, produ
 
 ## Current readiness
 
-The current scope supports the `${HOME}/.dispatch` per-user layout, deterministic Core builds, a stable launcher, user-level service registration, durable install receipts, resumable same-release installation, Core-only setup, exact Core-wheel closure verification, plugin conformance, source privacy verification, encrypted Authentication storage, Browser Manager lifecycle infrastructure, and durable Collection Manager orchestration. Hermes is assumed to be preinstalled and is not inspected, configured, or removed. The source does **not** yet provide approved `0.0.1` release artifacts, an activated public bootstrap, authorized live-account Authentication acceptance, browser-capable release composition, cross-version product rollback, or completed clean-machine acceptance.
+The `0.0.1` release provides the `${HOME}/.dispatch` per-user layout, digest-pinned Core and installer artifacts, a stable launcher, user-level service registration, durable install receipts, resumable same-release installation, Core-only setup, exact wheel-closure verification, clean-machine lifecycle acceptance, and the public installation bootstrap. Hermes is assumed to be preinstalled and is not inspected, configured, or removed. Authorized live-account Authentication acceptance, browser-capable release composition, optional production plugins, and cross-version rollback are not part of this initial Core-only release.
 
 ## Source, data, and privacy boundaries
 

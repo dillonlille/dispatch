@@ -38,7 +38,7 @@
     "README.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "59140135a6375fb58e5be9f0f3cf072c686f35e730aeedd2e9335b130dc8cec6"
+      "sha256": "fc02379db838339eb2412e4c9ca69c4df5ae4a092ccd30a41a8c007799a70fa3"
     },
     "SECURITY.md": {
       "kind": "file",
@@ -333,7 +333,7 @@
     "docs/online-installation.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "03e008c5c39d3d3edf8e368852c13a6d0b9df814dcd47ab841a9a6158498438d"
+      "sha256": "a3bd2ac3ed9995d3d57471587c1de6a4a9f9ce0deb7fe5fb7aefe5903f27931f"
     },
     "docs/path-configuration.md": {
       "kind": "file",
@@ -403,7 +403,7 @@
     "installer/deploy/cloudflare/public/install.sh": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "6afb9b79b3aab2615916e48db1dfe202920a0c5abcd371206ee69fa1edf76142"
+      "sha256": "b8745777ee031ce1637907314f223a2e08b0c8356bf616a82660117ba0ebcb52"
     },
     "installer/deploy/cloudflare/public/robots.txt": {
       "kind": "file",
@@ -723,7 +723,7 @@
     "tests/test_bootstrap_template.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "c63c4d9f6ba6ff2a9bc88af668528a457d09e7dd69eb875472b4de5641ccbf0c"
+      "sha256": "6659fd624bdc89e70ebf80ee4da5253158fb3872be6db8f145360fa84f7b6452"
     },
     "tests/test_core_wheel_policy.py": {
       "kind": "file",
