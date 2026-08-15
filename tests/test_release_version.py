@@ -27,11 +27,26 @@ def _git(root: Path, *arguments: str) -> None:
 def _fixture(tmp_path: Path, *, core_changed: bool = True) -> Path:
     root = tmp_path / "repository"
     root.mkdir()
-    _write(root / "installer/pyproject.toml", '[project]\nname = "dispatch-installer"\nversion = "0.1.5"\n')
+    _write(
+        root / "installer/pyproject.toml",
+        '[project]\nname = "dispatch-installer"\nversion = "0.1.5"\n'
+        'description = "Synthetic installer"\nrequires-python = ">=3.11"\nlicense = "Apache-2.0"\n'
+        'license-files = ["LICENSE"]\ndependencies = []\n[project.scripts]\n'
+        'dispatch-installer = "dispatch_installer:main"\n[tool.setuptools]\n'
+        'packages = ["dispatch_installer"]\n[tool.setuptools.package-dir]\n'
+        'dispatch_installer = "src/dispatch_installer"\n',
+    )
     _write(root / "installer/src/dispatch_installer/__init__.py", '__version__ = "0.1.5"\n')
     _write(root / "installer/src/dispatch_installer/module.py", "VALUE = 1\n")
     _write(root / "installer/LICENSE", "synthetic license\n")
-    _write(root / "dispatch-core/pyproject.toml", '[project]\nname = "dispatch-core"\nversion = "1.0.0"\n')
+    _write(
+        root / "dispatch-core/pyproject.toml",
+        '[project]\nname = "dispatch-core"\nversion = "1.0.0"\n'
+        'description = "Synthetic Core"\nrequires-python = ">=3.11"\nlicense = "Apache-2.0"\n'
+        'license-files = ["LICENSE"]\ndependencies = []\n[project.scripts]\n'
+        'dispatch-core = "dispatch_core:main"\n[tool.setuptools]\npackages = ["dispatch_core"]\n'
+        '[tool.setuptools.package-dir]\ndispatch_core = "src/dispatch_core"\n',
+    )
     _write(root / "dispatch-core/src/dispatch_core/__init__.py", '__version__ = "1.0.0"\n')
     _write(root / "dispatch-core/src/dispatch_core/module.py", "VALUE = 1\n")
     _write(root / "dispatch-core/LICENSE", "synthetic license\n")
@@ -184,9 +199,9 @@ def test_prepare_release_apply_updates_consistent_draft(tmp_path: Path) -> None:
     assert manifest["ready"] is False
     assert manifest["installer"]["artifact"] == {"url": None, "size": None, "sha256": None}
 
-    verified = _invoke(VERIFY, root)
+    verified = _invoke(VERIFY, root, "--phase", "prepared")
     assert verified.returncode == 0, verified.stdout + verified.stderr
-    assert json.loads(verified.stdout)["status"] == "ready"
+    assert json.loads(verified.stdout)["status"] == "prepared"
 
 
 def test_prepare_release_rejects_bump_for_unchanged_component(tmp_path: Path) -> None:
@@ -217,3 +232,111 @@ def test_json_parser_error_is_one_document(tmp_path: Path) -> None:
     assert result.returncode == 2
     assert result.stderr == ""
     assert json.loads(result.stdout)["error"]["code"] == "invalid_arguments"
+
+
+def test_bootstrap_mutation_is_blocked_even_when_version_is_unchanged(tmp_path: Path) -> None:
+    root = _fixture(tmp_path)
+    bootstrap = root / "installer/deploy/cloudflare/public/install.sh"
+    bootstrap.write_text(bootstrap.read_text(encoding="utf-8") + "# mutation\n", encoding="utf-8")
+    _git(root, "add", str(bootstrap.relative_to(root)))
+    _git(root, "commit", "-m", "mutate production bootstrap")
+
+    result = _invoke(
+        PREPARE,
+        root,
+        "--product-version",
+        "0.0.8",
+        "--installer-version",
+        "0.1.6",
+        "--core-version",
+        "1.0.1",
+    )
+
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["error"]["code"] == "bootstrap_changed"
+
+
+def test_new_distributable_file_cannot_hide_behind_stale_plan(tmp_path: Path) -> None:
+    root = _fixture(tmp_path, core_changed=False)
+    _write(root / "dispatch-core/src/dispatch_core/new_module.py", "VALUE = 3\n")
+    _git(root, "add", ".")
+    _git(root, "commit", "-m", "add unplanned Core module")
+
+    result = _invoke(
+        PREPARE,
+        root,
+        "--product-version",
+        "0.0.8",
+        "--installer-version",
+        "0.1.6",
+        "--core-version",
+        "1.0.0",
+    )
+
+    assert result.returncode == 1
+    assert "core changed and must be newer than 1.0.0" in json.loads(result.stdout)["error"]["message"]
+
+
+def test_failed_apply_rolls_back_every_preparation_output(tmp_path: Path) -> None:
+    root = _fixture(tmp_path)
+    (root / "dispatch-core/LICENSE").unlink()
+    _git(root, "add", "dispatch-core/LICENSE")
+    _git(root, "commit", "-m", "remove required Core license")
+    before = {path: (root / path).read_bytes() for path in (
+        "installer/pyproject.toml",
+        "installer/src/dispatch_installer/__init__.py",
+        "dispatch-core/pyproject.toml",
+        "dispatch-core/src/dispatch_core/__init__.py",
+        "dispatch-core/core-manifest.json",
+        "packaging/installer-package-plan.json",
+        "packaging/runtime-package-plan.json",
+        "packaging/installation-release-manifest.json",
+        "policy/public-source-scope.json",
+    )}
+
+    result = _invoke(
+        PREPARE,
+        root,
+        "--product-version",
+        "0.0.8",
+        "--installer-version",
+        "0.1.6",
+        "--core-version",
+        "1.0.1",
+        "--apply",
+    )
+
+    assert result.returncode == 1
+    assert json.loads(result.stdout)["error"]["code"] == "apply_failed"
+    assert {path: (root / path).read_bytes() for path in before} == before
+    assert subprocess.run(
+        ["git", "status", "--porcelain", "--untracked-files=all"],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout == ""
+
+
+def test_release_phase_rejects_dirty_preparation_without_evidence(tmp_path: Path) -> None:
+    root = _fixture(tmp_path)
+    prepared = _invoke(
+        PREPARE,
+        root,
+        "--product-version",
+        "0.0.8",
+        "--installer-version",
+        "0.1.6",
+        "--core-version",
+        "1.0.1",
+        "--apply",
+    )
+    assert prepared.returncode == 0, prepared.stdout + prepared.stderr
+
+    result = _invoke(VERIFY, root)
+
+    assert result.returncode == 1
+    payload = json.loads(result.stdout)
+    assert payload["status"] == "not_ready"
+    assert "release readiness requires a clean worktree" in payload["data"]["issues"]
+    assert "release readiness requires exact acceptance evidence" in payload["data"]["issues"]

@@ -58,7 +58,7 @@ The source candidate contains canonical source and declared synthetic test mater
 
 See [`docs/public-source-boundary.md`](docs/public-source-boundary.md) and [`docs/path-configuration.md`](docs/path-configuration.md).
 The current installer boundary is defined in [`docs/phase-5-installation-contract.md`](docs/phase-5-installation-contract.md).
-Repository controls are defined in [`docs/private-github-setup.md`](docs/private-github-setup.md).
+Repository controls are defined in [`docs/github-repository-controls.md`](docs/github-repository-controls.md).
 The version preparation, acceptance, release, and production-promotion workflow is defined in [`docs/releasing.md`](docs/releasing.md).
 The user-scope uninstall boundary is defined in [`docs/uninstallation.md`](docs/uninstallation.md).
 

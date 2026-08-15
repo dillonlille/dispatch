@@ -14,8 +14,10 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / "installer" / "src"))
+sys.path.insert(0, str(ROOT / "scripts"))
 
 from dispatch_installer.manifest import load_manifest  # noqa: E402
+from release_version import ReleaseVersionError, validate_acceptance_evidence  # noqa: E402
 
 
 def _sha256(path: Path) -> str:
@@ -103,49 +105,13 @@ def main() -> int:
         text=True,
     ).stdout.strip()
     acceptance: dict[str, object] | None = None
-    required_checks = {
-        "literal_staged_install",
-        "interrupted_install_recovery",
-        "same_release_repair",
-        "setup_incomplete_before_setup",
-        "setup_ready_after_setup",
-        "service_restart_persistence",
-        "reboot_persistence",
-        "corrupt_artifact_rejected",
-        "keep_data_uninstall",
-        "reinstall_preserved_data",
-        "confirmed_purge_data",
-        "path_command_ready",
-        "command_collision_rejected",
-        "command_uninstall_removed",
-    }
     if not args.acceptance_candidate:
         if args.acceptance_evidence is None:
             raise SystemExit("production finalization requires --acceptance-evidence")
-        acceptance = json.loads(args.acceptance_evidence.read_text(encoding="utf-8"))
-        if (
-            not isinstance(acceptance, dict)
-            or set(acceptance)
-            != {
-                "schema_version",
-                "product_version",
-                "source_commit",
-                "host",
-                "completed_at",
-                "checks",
-                "contains_secrets",
-            }
-            or acceptance.get("schema_version") != 1
-            or acceptance.get("product_version") != version
-            or acceptance.get("source_commit") != source_commit
-            or acceptance.get("host") != "dispatch-testing"
-            or not isinstance(acceptance.get("completed_at"), str)
-            or acceptance.get("contains_secrets") is not False
-            or not isinstance(acceptance.get("checks"), dict)
-            or set(acceptance["checks"]) != required_checks
-            or any(value is not True for value in acceptance["checks"].values())
-        ):
-            raise SystemExit("acceptance evidence is incomplete or does not match this release")
+        try:
+            acceptance = validate_acceptance_evidence(ROOT, args.acceptance_evidence, version)
+        except ReleaseVersionError as exc:
+            raise SystemExit(str(exc)) from exc
     expected_names = {
         "installer": f"dispatch_installer-{payload['installer']['version']}-py3-none-any.whl",
         "core": f"dispatch_core-{payload['core']['version']}-py3-none-any.whl",

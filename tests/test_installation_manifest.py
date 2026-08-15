@@ -65,6 +65,7 @@ def test_release_publishes_only_the_install_script() -> None:
     workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
 
     assert "fetch-depth: 0" in workflow
-    assert "scripts/verify-release-readiness --require-clean --json" in workflow
+    assert "--phase release" in workflow
+    assert '--acceptance-evidence "$RUNNER_TEMP/acceptance-evidence.json"' in workflow
     assert 'gh release create "$GITHUB_REF_NAME" "$RUNNER_TEMP/release/install.sh" \\' in workflow
     assert '"$RUNNER_TEMP"/release/*' not in workflow

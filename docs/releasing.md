@@ -30,7 +30,7 @@ Run from a clean `dev` branch with the full published tag history available:
   --core-version X.Y.Z
 ```
 
-The default is preview-only. It compares the working source with the product version named by the tracked production bootstrap, resolves that immutable tag, and reports which component sources changed.
+The default is preview-only. It compares the complete distributable closure with the exact immutable production baseline, verifies the tracked production bootstrap byte-for-byte, and reports which component sources changed.
 
 Rules enforced by the command:
 
@@ -54,17 +54,17 @@ After the proposed versions are approved:
   --apply
 ```
 
-Application is allowed only on `dev` with a clean worktree. The command updates canonical product, installer, and Core identities; refreshes package-plan hashes and sizes; rebuilds the draft manifest's Core file declarations; clears all draft artifact identities; keeps `ready` false; and refreshes the exact public-source scope.
+Application is allowed only on `dev` with a clean worktree. The command updates canonical product, installer, and Core identities; rebuilds package plans from declared package roots and project metadata; rebuilds the draft manifest's Core file declarations; clears all draft artifact identities; keeps `ready` false; and refreshes the exact public-source scope. Writes are transactional and restricted to the documented preparation outputs; a failure restores their original bytes.
 
 It does not commit, push, tag, build, publish, deploy, or modify the production bootstrap.
 
-## 3. Verify static release readiness
+## 3. Verify prepared metadata
 
 ```bash
-./scripts/verify-release-readiness --require-clean
+./scripts/verify-release-readiness --phase prepared
 ```
 
-Run this after committing the prepared metadata. It verifies:
+Run this immediately after preparation and again after committing it. The prepared phase verifies:
 
 - product and component version consistency;
 - changed-component version policy against the published tag;
@@ -73,9 +73,10 @@ Run this after committing the prepared metadata. It verifies:
 - draft manifest/package-plan consistency;
 - empty artifact identities and `ready: false` before finalization;
 - absence of mutable production-approval state in source metadata;
-- worktree cleanliness when requested.
+- complete source closure reconstructed from `pyproject.toml`, including newly added files omitted from stale plans;
+- exact production-bootstrap bytes and baseline ancestry.
 
-Static readiness is not lifecycle acceptance and is not permission to publish.
+Prepared status permits a dirty worktree containing only the version-preparation changes. It is not lifecycle acceptance and is not permission to publish.
 
 ## 4. Build and accept the exact candidate
 
@@ -99,6 +100,16 @@ Ask Dillon in the active conversation whether to merge that exact PR head. Merge
 ## 6. Post-merge acceptance
 
 Resolve the resulting `main` commit and verify that its tree contains the approved source. Rebuild deterministically from that exact commit and repeat final acceptance on `dispatch-testing`. Production finalization requires acceptance evidence whose source commit and product version exactly match the release source.
+
+At the exact clean release tag, run the release phase with that evidence:
+
+```bash
+./scripts/verify-release-readiness \
+  --phase release \
+  --acceptance-evidence /path/to/acceptance-evidence.json
+```
+
+The release phase requires a clean worktree and evidence from `dispatch-testing` whose product version, full source commit, required checks, and no-secrets declaration all match. The release finalizer uses the same evidence validator.
 
 `production_install_ready` is intentionally not stored in source metadata. Exact acceptance evidence is the production-readiness authority; a mutable boolean could become stale after any source change.
 

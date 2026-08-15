@@ -18,12 +18,12 @@
     ".github/workflows/release.yml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "c75d9c5b4f7382f1a1986701112e6f54463dae5106c2d3e188eadde085403f72"
+      "sha256": "dd6c90f23f1d6a66150aa19fc453b7b36956ef4cee7caa826326cd9f48143018"
     },
     ".gitignore": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "7161f9801058540b6dd21bf5aec2600f0f1b1ee889786a141db71f7d12fad2d4"
+      "sha256": "2dffb4d4134a7dea51515d379d815311f28617edd7cbb6b573d73a67d82abd8e"
     },
     "CONTRIBUTING.md": {
       "kind": "file",
@@ -38,7 +38,7 @@
     "README.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "e698f6914e9607cff2b0b9f05565f0371a4df2bf0965bcd098aece5ea86b1fce"
+      "sha256": "f723380ab9b50505dc2e4ab9645fa4b0e3127dd03ab38bb309b9400edd788852"
     },
     "SECURITY.md": {
       "kind": "file",
@@ -330,6 +330,11 @@
       "origin": "generated_public",
       "sha256": "d55f40d2bba1e6939fe538f736ec2a500b7a30b51888711e6df06d96b091e67f"
     },
+    "docs/github-repository-controls.md": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "d49b4cc1792cc6be5cc58dc349c97679967460a61e50f2638558b20ae6008ac5"
+    },
     "docs/online-installation.md": {
       "kind": "file",
       "origin": "generated_public",
@@ -345,11 +350,6 @@
       "origin": "generated_public",
       "sha256": "a8857362b8e5aafd7506b34b7cf1c37fe73a36263d41bcb544a4551e5789f257"
     },
-    "docs/private-github-setup.md": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "1a5273510d76e65eeb1e9b41ae5c5d5032669c2bbe8b75404a25c8d2736f68ed"
-    },
     "docs/public-source-boundary.md": {
       "kind": "file",
       "origin": "generated_public",
@@ -358,7 +358,7 @@
     "docs/releasing.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "f399f6ea1f9c757f133385d3feae1a4693a73d48d32b801801d302829ee58563"
+      "sha256": "0fe6f3d111bed713dd7367b3c61bf53d04a81c412c85c3d6532da3f0e36ab654"
     },
     "docs/schemas/dispatch-browser-runtime-evidence-v1.schema.json": {
       "kind": "file",
@@ -708,7 +708,7 @@
     "scripts/finalize-installation-release": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "60e9cdc8ce11fb4f8435925b9cd294f44e16e511feaa376a0378be363fa029bc"
+      "sha256": "880baf0ec0cd950799c64dbbb6984ddb9bd59fb3af8bbd22ab641cbc746b4252"
     },
     "scripts/prepare-release": {
       "kind": "file",
@@ -718,7 +718,7 @@
     "scripts/release_version.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "2d6613eea1576cb1ace01453ba373ab657c58f90b77e4a4576ecc755a0fdd288"
+      "sha256": "a59e2db69a7e1fa2a86214c7a39dbb73cf0a6d1c9809398e7f2d66560b512d62"
     },
     "scripts/render-bootstrap": {
       "kind": "file",
@@ -773,7 +773,7 @@
     "tests/test_installation_manifest.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "ece401b7c74bf16aec5d13cd77804ab7690141dce39d2d72eedb975d24e6df27"
+      "sha256": "0c6a3fdc3c8ec53460e18f11de7035b5f95314ba6e00fdcf2a1730046bf9152d"
     },
     "tests/test_installer_package_plan.py": {
       "kind": "file",
@@ -783,7 +783,7 @@
     "tests/test_release_version.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "3ca5ef845de0a263ba5b4d8dac1f7d4d878ce767abb8dc9323aaf7f479331ecf"
+      "sha256": "1bd534e93e593aa0cc543221350625e85d855be63ae3163cfcf1d70a12c2e406"
     },
     "tests/test_repository_hygiene.py": {
       "kind": "file",

@@ -19,7 +19,9 @@ SKILLS/
 **/logs/
 **/locks/
 **/backups/
-**/archive/
+**/backup/
+**/cache/
+**/private/
 **/downloads/
 **/browser-state/
 **/chrome-profile/
@@ -59,29 +61,30 @@ junit.xml
 # Editors and operating systems
 .DS_Store
 Thumbs.db
-.idea/
-.vscode/
 *.swp
 *.swo
 *~
+*.orig
+*.rej
 
 # Local build, acceptance, and release outputs
 /.worktrees/
 /candidate/
-/release/
 /reviewed/
 /wheelhouse/
 .wrangler/
-acceptance-evidence*.json
-release-evidence*.json
+acceptance-evidence.json
+release-evidence.json
 SHA256SUMS*
 *.sha256
-*.tar.gz
-*.tgz
 
 # Operational files
 *.sqlite
 *.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
 *.db
 *.db-wal
 *.db-shm
@@ -89,6 +92,13 @@ SHA256SUMS*
 *.pid
 *.sock
 .hermes-tmp.*
+install-receipt.json
+launcher-manifest.json
+release-retention.json
+Cookies
+History
+Login Data
+Web Data
 
 # Local credentials and signing material
 *.key
