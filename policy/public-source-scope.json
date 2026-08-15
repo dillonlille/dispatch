@@ -8,7 +8,7 @@
     ".github/workflows/ci.yml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "8dad4446321cc9abd9afcf0dab78c52f0b81200a2b8649b579b9fd61f98dafcf"
+      "sha256": "68157233dc01696cac6220f3c7a332ef44791315369ed618e8e4c9238d1719a5"
     },
     ".github/workflows/core-artifact.yml": {
       "kind": "file",
@@ -28,7 +28,7 @@
     "README.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "9ae2472a92d537a6baef25c60a0de9794cc2050589ff6f173abbdbdd26703b74"
+      "sha256": "cfc61e898d22bc54b32beb089280ed35089d730038453b4dead7c98591c74658"
     },
     "SECURITY.md": {
       "kind": "file",
@@ -38,7 +38,7 @@
     "SKILL/dispatch-plugin-development/SKILL.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "274116ca295cd96df24834785fcec8d57b0fbdabf531cbfeee9498c02924f002"
+      "sha256": "960ec1c2868fe2a3048e7a25d3866553a6154afe033d43ba315866a6b958f8f4"
     },
     "SKILL/dispatch-plugin-development/references/component-design.md": {
       "kind": "file",
@@ -53,7 +53,7 @@
     "SKILL/dispatch-plugin-development/references/standard-v1.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "5b91e832ba488760d789092589a9e70cba02185470a8e33963ee9fae6cb6a1c0"
+      "sha256": "005e4dd75187ad417f9944790944d9965105ac3155cc2077ca68692486810da4"
     },
     "SKILL/dispatch-plugin-development/templates/dispatch-plugin.yaml": {
       "kind": "file",
@@ -123,7 +123,7 @@
     "dispatch-core/browser-manager/src/dispatch_core/browser_manager/runtime_authority.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "a5ac17ca4625087f2ec5e66b5062d06f9a6049e211f979f0b0865fb58683950a"
+      "sha256": "bacec89b43e9ea76898ff1efffb3840f37b8b614fb4e3a2f89bc4d5b9a47ba58"
     },
     "dispatch-core/browser-manager/src/dispatch_core/browser_manager/store.py": {
       "kind": "file",
@@ -138,7 +138,7 @@
     "dispatch-core/browser-manager/tests/test_runtime_authority.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "1d08690315b95398b47c0606a028d108589b79af1c4d5657657fe2fad250495d"
+      "sha256": "23db71ad7e0c3a8e194a31042eb373b51f7f2ea012fe274b3bf0e4e78a46491d"
     },
     "dispatch-core/collection-manager/README.md": {
       "kind": "file",
@@ -303,12 +303,12 @@
     "docs/dispatch-plugin-standard-v1.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "5b91e832ba488760d789092589a9e70cba02185470a8e33963ee9fae6cb6a1c0"
+      "sha256": "005e4dd75187ad417f9944790944d9965105ac3155cc2077ca68692486810da4"
     },
     "docs/online-installation.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "dff619a43ef4053a534b7978b3eafd8bff6ffb365175d83473f9ae721daf25dd"
+      "sha256": "27d8f08e1ce775f8e83c058ab320f4d3403dd1aba7f6ffadc7cf4ccebb738ec0"
     },
     "docs/path-configuration.md": {
       "kind": "file",
@@ -318,17 +318,17 @@
     "docs/phase-5-installation-contract.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "45664559bd1b035e4d85c616d7c41107e6894d1c0f37b700c83795aa06e25ae4"
+      "sha256": "72058b46f0e06cd17b53240d235605a54f67ebd4fee84769d2ab8b0832fa6112"
     },
     "docs/private-github-setup.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "c217a233db3422a5e7767a8a37fa14b62bfb41d74a738fed349087e96055a1f2"
+      "sha256": "1a5273510d76e65eeb1e9b41ae5c5d5032669c2bbe8b75404a25c8d2736f68ed"
     },
     "docs/public-source-boundary.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "d74f9fd3a431528abe0b10c0f3305a63ef447fdb9409d52d36ba87ef9afa6e48"
+      "sha256": "2ba092baa2a1ed801d47466e829fbc602ed7dfeadbef29c5686c2ef91b710e1b"
     },
     "docs/schemas/dispatch-browser-runtime-evidence-v1.schema.json": {
       "kind": "file",
@@ -338,7 +338,7 @@
     "docs/schemas/dispatch-browser-runtime-generation-v1.schema.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "48102db15bb3f7dcc14363f2236707a4dbbf5d58a4f5ec8442efd44a0e438292"
+      "sha256": "aab8c074447fe00aa6f2784e5243c94a2062857deefb08c3ddb305c39e417b01"
     },
     "docs/schemas/dispatch-installation-release-v1.schema.json": {
       "kind": "file",
@@ -358,7 +358,27 @@
     "installer/README.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "eab5df103bc64b3ba09f2d6fa8a236eb2976334c01f06d0e8d434e2815c16ed5"
+      "sha256": "94e1c0e51da496923d9c07b7dfb19c447131f34c7e85e94f3286a3edd6828c53"
+    },
+    "installer/deploy/cloudflare/public/_headers": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "270f965375abae12adf850bf59eeeabbd767bb56fe33ceeb31de3dac10828c1f"
+    },
+    "installer/deploy/cloudflare/public/install.sh": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "6afb9b79b3aab2615916e48db1dfe202920a0c5abcd371206ee69fa1edf76142"
+    },
+    "installer/deploy/cloudflare/public/robots.txt": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "331ea9090db0c9f6f597bd9840fd5b171830f6e0b3ba1cb24dfa91f0c95aedc1"
+    },
+    "installer/deploy/cloudflare/wrangler.json": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "fb9e543bee23fda9af40e30c2658038781eb593ee5f536a177f4f884013e3b73"
     },
     "installer/pyproject.toml": {
       "kind": "file",
@@ -378,7 +398,7 @@
     "installer/src/dispatch_installer/browser_runtime.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "4ebf87c6080b2754c579fd814c431f1e27ae1ef260efbd1d49aedd03d9b89ca1"
+      "sha256": "f8426d496a09c5db329c51821b498ee23bf175feea1276fa276bf15993fd4055"
     },
     "installer/src/dispatch_installer/cli.py": {
       "kind": "file",
@@ -393,7 +413,7 @@
     "installer/src/dispatch_installer/doctor.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "55ffcbfc42019a0998e02f71f1a72f446d72a65896c9237e9e8c285b521df68f"
+      "sha256": "162cd57d86b1925e89fad965894f03d4016781e9d2dc1da3e0393f263b5f37e4"
     },
     "installer/src/dispatch_installer/download.py": {
       "kind": "file",
@@ -423,12 +443,12 @@
     "installer/tests/test_browser_runtime.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "dc2f93cd36e0538514df31d1074b0f5565b6f7e6afa3eaea65e6bf435e0b199b"
+      "sha256": "789e7330bb03b672b8393162778c4f79c63b7da6bf3fe3f3dc48e2ae64c9bfff"
     },
     "installer/tests/test_core_release.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "1a8c8b83c2d92552130bf1c99246405b9752391f43ffdb215178796d55ab41dd"
+      "sha256": "ed0978afe7b9c6453863d7c0376955f612dbeffa2989be76407a712028e79c75"
     },
     "installer/tests/test_download.py": {
       "kind": "file",
@@ -468,12 +488,12 @@
     "packaging/installer-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "c9d9cfd16c699d0295bcc42e9d2d752ac46b279cd048969bdaf979e4b6b70de5"
+      "sha256": "a2ba6409fb06bee568c3b9748925de3f41b4b127375ab073ad74fc91b19fd22d"
     },
     "packaging/runtime-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "932e4ec471665e5257b4adb740cd0dfc3f569e8fa01988492b36ad392512489a"
+      "sha256": "43837bebadfc2c1405d4935214642b28ef8609e286e377f8e8c7fef7dcea614d"
     },
     "plugins/handbook/README.md": {
       "kind": "file",

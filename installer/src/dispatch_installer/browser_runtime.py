@@ -253,6 +253,13 @@ def _ensure_directory(path: Path, *, owner_uid: int, mode: int) -> None:
     except OSError as exc:
         raise InstallerError("browser_authority_create_failed", f"cannot create browser authority directory: {path}") from exc
     _validate_directory(path, owner_uid=owner_uid, mode=mode, code="browser_authority_unsafe")
+    try:
+        _fsync_directory(parent)
+    except OSError as exc:
+        raise InstallerError(
+            "browser_authority_create_uncertain",
+            f"browser authority directory is visible but parent durability is uncertain: {path}",
+        ) from exc
 
 
 def _prepare_authority_roots(layout: InstallLayout, owner_uid: int) -> None:
@@ -1296,6 +1303,13 @@ def _activate_selected_generation(
     if current == candidate:
         if require_current:
             raise InstallerError("browser_rollback_invalid", "rollback target is already active")
+        try:
+            _fsync_directory(layout.browser_selector.parent)
+        except OSError as exc:
+            raise InstallerError(
+                "browser_selector_publish_uncertain",
+                "browser selector is visible but parent durability remains uncertain",
+            ) from exc
         return {"generation": generation, "previous_generation": None, "reused": True}
     previous_generation = str(current["generation"]) if current is not None else None
     _atomic_authority_json(layout.browser_selector, candidate, owner_uid)

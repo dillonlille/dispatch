@@ -85,7 +85,12 @@
       "minLength": 1,
       "maxLength": 512,
       "pattern": "^(?!/)(?!.*\\\\)(?!.*[\\u0000-\\u001f])(?!.*(?:^|/)\\.{1,2}(?:/|$))(?!.*//)[^/]+(?:/[^/]+)*$",
-      "not": {"enum": ["tree-manifest.json", "installation-receipt.json", "installation-evidence.json"]}
+      "not": {
+        "anyOf": [
+          {"enum": ["tree-manifest.json", "installation-receipt.json", "installation-evidence.json"]},
+          {"pattern": "^installation-evidence/"}
+        ]
+      }
     },
     "member": {
       "type": "object",

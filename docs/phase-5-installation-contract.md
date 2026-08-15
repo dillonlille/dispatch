@@ -6,7 +6,7 @@ Phase 5 turns reviewed Dispatch Core source into a deterministic online installa
 
 ## Intended public flow
 
-Public release publication happens only after the owner decides the project is ready and all release gates pass. Private source-monorepo development and remote CI may happen earlier, but they create no public URL or copy-and-paste production command. At final release time, a reviewed, versioned, digest-pinned terminal command will retrieve the bootstrap and approved component artifacts without cloning or downloading the source monorepo.
+Public release publication happens only after the owner decides the project is ready and all release gates pass. Private product-repository development and remote CI may happen earlier, but they create no copy-and-paste production installer. At final release time, a reviewed, versioned, digest-pinned terminal command will retrieve the bootstrap and approved component artifacts without cloning or downloading any source repository.
 
 After a complete future installation, the `dispatch` CLI will offer **Start setup process** or **Skip for now**. Setup is not implemented here. A user who skips can later run:
 

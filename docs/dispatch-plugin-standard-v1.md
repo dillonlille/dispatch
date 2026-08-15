@@ -13,7 +13,7 @@ This document defines how Dispatch components are classified, authored, tested, 
 5. **Owner-scoped data.** Databases use `db/<owner>/`; generated and downloaded artifacts use `artifacts/<owner>/`; operational state stays under `plugins/<owner>/`.
 6. **Fail closed and report honestly.** Missing data, unavailable producers, stale data, failed domain audits, and unavailable authentication are distinct states.
 7. **Standardize contracts, not business logic.** Shared infrastructure may verify releases, execute launchers, and deliver messages; domain validation remains with the owning plugin.
-8. **Source-control-independent release identity.** Git tracks the source monorepo, but installed release identity is based on deterministic content and manifests rather than a checkout or commit alone.
+8. **Source-control-independent release identity.** Git tracks component source repositories, but installed release identity is based on deterministic content and manifests rather than a checkout or commit alone.
 
 ## 2. Component classes
 

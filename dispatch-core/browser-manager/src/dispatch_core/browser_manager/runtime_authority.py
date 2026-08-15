@@ -12,7 +12,7 @@ import hashlib
 import importlib.metadata
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import platform
 import re
 import stat
@@ -70,6 +70,10 @@ _RECEIPT_KEYS = frozenset(
 )
 _TREE_KEYS = frozenset({"schema_version", "files"})
 _TREE_FILE_KEYS = frozenset({"size", "sha256", "mode"})
+_MAX_SELECTOR_BYTES = 4096
+_MAX_RECEIPT_BYTES = 64 * 1024
+_MAX_TREE_BYTES = 16 * 1024 * 1024
+_MAX_MEMBER_BYTES = 1024 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -130,12 +134,94 @@ class VerifiedBrowserInstallation:
     playwright_driver_cli: Path
 
 
-def _sha256(path: Path) -> str:
+def _open_secure_file(
+    path: Path,
+    boundary: Path,
+    owner_uid: int,
+    label: str,
+    *,
+    max_bytes: int,
+) -> tuple[int, os.stat_result]:
+    _secure_directory(path.parent, boundary, owner_uid, label)
+    flags = os.O_RDONLY
+    if hasattr(os, "O_NONBLOCK"):
+        flags |= os.O_NONBLOCK
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except FileNotFoundError as exc:
+        raise BrowserManagerError("browser_runtime_missing", f"{label} is missing") from exc
+    except (OSError, ValueError) as exc:
+        raise BrowserManagerError("browser_runtime_unsafe", f"{label} cannot be opened safely") from exc
+    try:
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_nlink != 1
+            or details.st_uid != owner_uid
+            or details.st_mode & 0o022
+            or details.st_size > max_bytes
+        ):
+            raise BrowserManagerError("browser_runtime_unsafe", f"{label} is not a safe regular file")
+        return descriptor, details
+    except Exception:
+        os.close(descriptor)
+        raise
+
+
+def _read_secure_file(
+    path: Path,
+    boundary: Path,
+    owner_uid: int,
+    label: str,
+    *,
+    max_bytes: int,
+) -> tuple[bytes, os.stat_result]:
+    descriptor, details = _open_secure_file(path, boundary, owner_uid, label, max_bytes=max_bytes)
+    try:
+        data = bytearray()
+        while len(data) <= max_bytes:
+            block = os.read(descriptor, min(1024 * 1024, max_bytes + 1 - len(data)))
+            if not block:
+                break
+            data.extend(block)
+        if len(data) != details.st_size or len(data) > max_bytes:
+            raise BrowserManagerError("browser_runtime_unsafe", f"{label} changed or exceeds the size limit")
+        return bytes(data), details
+    except OSError as exc:
+        raise BrowserManagerError("browser_runtime_unsafe", f"{label} cannot be read safely") from exc
+    finally:
+        os.close(descriptor)
+
+
+def _hash_secure_file(
+    path: Path,
+    boundary: Path,
+    owner_uid: int,
+    label: str,
+    *,
+    max_bytes: int,
+) -> tuple[str, os.stat_result]:
+    descriptor, details = _open_secure_file(path, boundary, owner_uid, label, max_bytes=max_bytes)
     digest = hashlib.sha256()
-    with path.open("rb") as handle:
-        for chunk in iter(lambda: handle.read(1024 * 1024), b""):
-            digest.update(chunk)
-    return digest.hexdigest()
+    observed = 0
+    try:
+        while True:
+            block = os.read(descriptor, 1024 * 1024)
+            if not block:
+                break
+            observed += len(block)
+            if observed > max_bytes:
+                raise BrowserManagerError("browser_runtime_unsafe", f"{label} exceeds the size limit")
+            digest.update(block)
+        if observed != details.st_size:
+            raise BrowserManagerError("browser_runtime_unsafe", f"{label} changed during verification")
+        return digest.hexdigest(), details
+    except OSError as exc:
+        raise BrowserManagerError("browser_runtime_unsafe", f"{label} cannot be read safely") from exc
+    finally:
+        os.close(descriptor)
 
 
 def _read_os_release() -> tuple[str, str]:
@@ -181,12 +267,10 @@ def _object_pairs(pairs: list[tuple[str, object]]) -> dict[str, object]:
     return payload
 
 
-def _json_object(path: Path, error_code: str, label: str) -> dict[str, object]:
+def _json_object(data: bytes, error_code: str, label: str) -> dict[str, object]:
     try:
-        payload = json.loads(path.read_text(encoding="utf-8"), object_pairs_hook=_object_pairs)
-    except FileNotFoundError as exc:
-        raise BrowserManagerError(error_code, f"{label} is missing") from exc
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
+        payload = json.loads(data.decode("utf-8"), object_pairs_hook=_object_pairs)
+    except (UnicodeDecodeError, json.JSONDecodeError, ValueError) as exc:
         raise BrowserManagerError(error_code, f"{label} is invalid") from exc
     if not isinstance(payload, dict):
         raise BrowserManagerError(error_code, f"{label} must be a JSON object")
@@ -194,12 +278,18 @@ def _json_object(path: Path, error_code: str, label: str) -> dict[str, object]:
 
 
 def _relative_path(value: object, label: str) -> Path:
-    if not isinstance(value, str) or not value or len(value) > 512:
+    if (
+        not isinstance(value, str)
+        or not value
+        or len(value) > 512
+        or "\\" in value
+        or any(ord(character) < 32 for character in value)
+    ):
         raise BrowserManagerError("browser_receipt_invalid", f"{label} is invalid")
-    path = Path(value)
-    if path.is_absolute() or any(part in {"", ".", ".."} for part in path.parts):
-        raise BrowserManagerError("browser_receipt_invalid", f"{label} must be a safe relative path")
-    return path
+    path = PurePosixPath(value)
+    if path.is_absolute() or path.as_posix() != value or any(part in {"", ".", ".."} for part in path.parts):
+        raise BrowserManagerError("browser_receipt_invalid", f"{label} must be a safe canonical relative path")
+    return Path(*path.parts)
 
 
 def _secure_directory(path: Path, boundary: Path, owner_uid: int, label: str) -> None:
@@ -226,16 +316,16 @@ def _schema_is_current(payload: dict[str, object]) -> bool:
     return type(value) is int and value == _SCHEMA_VERSION
 
 
-def _secure_file(path: Path, boundary: Path, owner_uid: int, label: str) -> os.stat_result:
-    _secure_directory(path.parent, boundary, owner_uid, label)
-    try:
-        details = path.stat(follow_symlinks=False)
-    except FileNotFoundError as exc:
-        raise BrowserManagerError("browser_runtime_missing", f"{label} is missing") from exc
-    if path.is_symlink() or not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
-        raise BrowserManagerError("browser_runtime_unsafe", f"{label} is not a private regular file")
-    if details.st_uid != owner_uid or details.st_mode & 0o022:
-        raise BrowserManagerError("browser_runtime_unsafe", f"{label} has unsafe ownership or permissions")
+def _secure_file(
+    path: Path,
+    boundary: Path,
+    owner_uid: int,
+    label: str,
+    *,
+    max_bytes: int = _MAX_MEMBER_BYTES,
+) -> os.stat_result:
+    descriptor, details = _open_secure_file(path, boundary, owner_uid, label, max_bytes=max_bytes)
+    os.close(descriptor)
     return details
 
 
@@ -259,14 +349,20 @@ def _verified_receipt_file(
 ) -> tuple[Path, str]:
     relative = _relative_path(receipt.get(relative_key), relative_key)
     path = generation_root / relative
-    details = _secure_file(path, generation_root, owner_uid, label)
+    observed_digest, details = _hash_secure_file(
+        path,
+        generation_root,
+        owner_uid,
+        label,
+        max_bytes=_MAX_MEMBER_BYTES,
+    )
     expected_size = receipt.get(size_key)
     if not isinstance(expected_size, int) or isinstance(expected_size, bool) or expected_size <= 0:
         raise BrowserManagerError("browser_receipt_invalid", f"browser receipt {size_key} is invalid")
     if details.st_size != expected_size:
         raise BrowserManagerError("browser_runtime_mismatch", f"{label} size does not match receipt")
     expected_digest = _string(receipt, digest_key, _SHA256, "browser_receipt_invalid")
-    if _sha256(path) != expected_digest:
+    if observed_digest != expected_digest:
         raise BrowserManagerError("browser_runtime_mismatch", f"{label} digest does not match receipt")
     expected_mode = 0o555 if executable else 0o444
     if stat.S_IMODE(details.st_mode) != expected_mode:
@@ -391,11 +487,12 @@ class BrowserRuntimeAuthority:
 
         selector_boundary = self.__policy.selector.parent
         try:
-            selector_details = _secure_file(
+            selector_data, selector_details = _read_secure_file(
                 self.__policy.selector,
                 selector_boundary,
                 self.__policy.owner_uid,
                 "browser runtime selector",
+                max_bytes=_MAX_SELECTOR_BYTES,
             )
             if stat.S_IMODE(selector_details.st_mode) != 0o444:
                 raise BrowserManagerError("browser_runtime_selector_invalid", "browser runtime selector mode is invalid")
@@ -404,7 +501,7 @@ class BrowserRuntimeAuthority:
                 raise BrowserManagerError("browser_runtime_selector_missing", "browser runtime selector is missing") from exc
             raise BrowserManagerError("browser_runtime_selector_invalid", str(exc)) from exc
         selector = _json_object(
-            self.__policy.selector,
+            selector_data,
             "browser_runtime_selector_invalid",
             "browser runtime selector",
         )
@@ -424,11 +521,12 @@ class BrowserRuntimeAuthority:
             raise BrowserManagerError("browser_runtime_unsafe", "browser runtime generation mode is invalid")
         receipt_path = generation_root / "installation-receipt.json"
         try:
-            receipt_details = _secure_file(
+            receipt_data, receipt_details = _read_secure_file(
                 receipt_path,
                 generation_root,
                 self.__policy.owner_uid,
                 "browser installation receipt",
+                max_bytes=_MAX_RECEIPT_BYTES,
             )
             if stat.S_IMODE(receipt_details.st_mode) != 0o444:
                 raise BrowserManagerError("browser_receipt_invalid", "browser installation receipt mode is invalid")
@@ -436,10 +534,10 @@ class BrowserRuntimeAuthority:
             if exc.code == "browser_runtime_missing":
                 raise BrowserManagerError("browser_receipt_missing", "browser installation receipt is missing") from exc
             raise BrowserManagerError("browser_receipt_invalid", str(exc)) from exc
-        actual_receipt_sha256 = _sha256(receipt_path)
+        actual_receipt_sha256 = hashlib.sha256(receipt_data).hexdigest()
         if actual_receipt_sha256 != expected_receipt_sha256:
             raise BrowserManagerError("browser_receipt_mismatch", "browser installation receipt digest does not match selector")
-        receipt = _json_object(receipt_path, "browser_receipt_invalid", "browser installation receipt")
+        receipt = _json_object(receipt_data, "browser_receipt_invalid", "browser installation receipt")
         if frozenset(receipt) != _RECEIPT_KEYS or not _schema_is_current(receipt):
             raise BrowserManagerError("browser_receipt_invalid", "browser installation receipt schema is invalid")
         receipt_generation = _string(receipt, "generation", _GENERATION, "browser_receipt_invalid")
@@ -519,14 +617,20 @@ class BrowserRuntimeAuthority:
 
         executable_relative = _relative_path(receipt.get("executable_relative_path"), "executable_relative_path")
         executable = generation_root / executable_relative
-        executable_details = _secure_file(executable, generation_root, self.__policy.owner_uid, "Chromium executable")
+        observed_executable_sha256, executable_details = _hash_secure_file(
+            executable,
+            generation_root,
+            self.__policy.owner_uid,
+            "Chromium executable",
+            max_bytes=_MAX_MEMBER_BYTES,
+        )
         executable_size = receipt.get("executable_size")
         if not isinstance(executable_size, int) or isinstance(executable_size, bool) or executable_size <= 0:
             raise BrowserManagerError("browser_receipt_invalid", "browser receipt executable_size is invalid")
         if executable_details.st_size != executable_size:
             raise BrowserManagerError("browser_executable_mismatch", "Chromium executable size does not match receipt")
         executable_sha256 = _string(receipt, "executable_sha256", _SHA256, "browser_receipt_invalid")
-        if _sha256(executable) != executable_sha256:
+        if observed_executable_sha256 != executable_sha256:
             raise BrowserManagerError("browser_executable_mismatch", "Chromium executable digest does not match receipt")
         if stat.S_IMODE(executable_details.st_mode) != 0o555:
             raise BrowserManagerError("browser_runtime_unsafe", "Chromium executable mode is invalid")
@@ -535,13 +639,20 @@ class BrowserRuntimeAuthority:
 
         tree_relative = _relative_path(receipt.get("tree_manifest_relative_path"), "tree_manifest_relative_path")
         tree_manifest = generation_root / tree_relative
-        tree_details = _secure_file(tree_manifest, generation_root, self.__policy.owner_uid, "browser tree manifest")
+        tree_data, tree_details = _read_secure_file(
+            tree_manifest,
+            generation_root,
+            self.__policy.owner_uid,
+            "browser tree manifest",
+            max_bytes=_MAX_TREE_BYTES,
+        )
         if stat.S_IMODE(tree_details.st_mode) != 0o444:
             raise BrowserManagerError("browser_tree_invalid", "browser tree manifest mode is invalid")
         tree_manifest_sha256 = _string(receipt, "tree_manifest_sha256", _SHA256, "browser_receipt_invalid")
         _string(receipt, "source_manifest_sha256", _SHA256, "browser_receipt_invalid")
-        if _sha256(tree_manifest) != tree_manifest_sha256:
+        if hashlib.sha256(tree_data).hexdigest() != tree_manifest_sha256:
             raise BrowserManagerError("browser_tree_mismatch", "browser tree manifest digest does not match receipt")
+        tree_payload = _json_object(tree_data, "browser_tree_invalid", "browser tree manifest")
 
         for key in ("os_dependencies_verified", "sandbox_verified", "launch_probe_passed"):
             if receipt.get(key) is not True:
@@ -551,7 +662,7 @@ class BrowserRuntimeAuthority:
             raise BrowserManagerError("browser_receipt_mismatch", "browser sandbox policy is not approved")
 
         if full_tree:
-            self._verify_tree(generation_root, tree_manifest, receipt_path)
+            self._verify_tree(generation_root, tree_manifest, receipt_path, tree_payload)
 
         return VerifiedBrowserInstallation(
             identity=BrowserRuntimeIdentity(
@@ -572,8 +683,13 @@ class BrowserRuntimeAuthority:
             playwright_driver_cli=playwright_driver_cli,
         )
 
-    def _verify_tree(self, generation_root: Path, tree_manifest: Path, receipt_path: Path) -> None:
-        payload = _json_object(tree_manifest, "browser_tree_invalid", "browser tree manifest")
+    def _verify_tree(
+        self,
+        generation_root: Path,
+        tree_manifest: Path,
+        receipt_path: Path,
+        payload: dict[str, object],
+    ) -> None:
         if frozenset(payload) != _TREE_KEYS or not _schema_is_current(payload):
             raise BrowserManagerError("browser_tree_invalid", "browser tree manifest schema is invalid")
         files = payload.get("files")
@@ -594,8 +710,14 @@ class BrowserRuntimeAuthority:
             if mode not in {"0444", "0555"}:
                 raise BrowserManagerError("browser_tree_invalid", "browser tree member mode is invalid")
             member = generation_root / relative
-            details = _secure_file(member, generation_root, self.__policy.owner_uid, "browser tree member")
-            if details.st_size != size or _sha256(member) != digest or stat.S_IMODE(details.st_mode) != int(mode, 8):
+            observed_digest, details = _hash_secure_file(
+                member,
+                generation_root,
+                self.__policy.owner_uid,
+                "browser tree member",
+                max_bytes=_MAX_MEMBER_BYTES,
+            )
+            if details.st_size != size or observed_digest != digest or stat.S_IMODE(details.st_mode) != int(mode, 8):
                 raise BrowserManagerError("browser_tree_mismatch", "browser tree member does not match manifest")
             expected_paths.add(relative.as_posix())
 

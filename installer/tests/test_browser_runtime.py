@@ -391,9 +391,34 @@ def test_uncertain_selector_publication_is_preserved_and_reconciled(
     assert uncertain.value.code == "browser_selector_publish_uncertain"
     assert layout.browser_selector.exists()
 
+    with pytest.raises(InstallerError) as still_uncertain:
+        activate_browser_generation(layout, generation)
+    assert still_uncertain.value.code == "browser_selector_publish_uncertain"
+
     monkeypatch.setattr(browser_runtime_module, "_fsync_directory", real_fsync)
     assert activate_browser_generation(layout, generation)["reused"] is True
     assert inspect_browser_runtime(layout)["generation"] == generation
+
+
+def test_new_authority_directory_requires_parent_durability(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = _layout(tmp_path)
+    parent = layout.browser_selector.parent.parent
+    real_fsync = browser_runtime_module._fsync_directory
+
+    def fail_new_entry(path: Path) -> None:
+        if path == parent and layout.browser_selector.parent.exists():
+            raise OSError("injected authority parent fsync failure")
+        real_fsync(path)
+
+    monkeypatch.setattr(browser_runtime_module, "_fsync_directory", fail_new_entry)
+    with pytest.raises(InstallerError) as uncertain:
+        browser_runtime_module._prepare_authority_roots(layout, os.geteuid())
+
+    assert uncertain.value.code == "browser_authority_create_uncertain"
+    assert layout.browser_selector.parent.is_dir()
 
 
 @pytest.mark.skipif(os.geteuid() == 0, reason="non-root privilege boundary")

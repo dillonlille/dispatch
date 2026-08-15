@@ -43,7 +43,7 @@ python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin-policy/plugin_conformance.py 
 8. Provide executable `scripts/test`, `scripts/build`, `scripts/verify`, and `scripts/health` commands. Tests must discover a nonzero count without undocumented import paths.
 9. Build deterministic immutable releases, use one activation authority, retain rollback, and verify all installed selectors converge.
 10. Never place secrets, credentials, cookies, browser profiles, connection strings, or sensitive business rows in manifests, tests, documentation, skills, or receipts.
-11. Keep plugin source under `plugins/<owner>/` in the source monorepo, but build, version, verify, and release each plugin independently from Core.
+11. Keep Dispatch-owned built-in plugin source under `plugins/<owner>/`. External plugin source belongs in separate repositories. Build, version, verify, and release every plugin independently from Core.
 12. Do not claim conformance until the conformance command passes and the real build/test/verify/health commands have been exercised.
 
 ## Required workflow

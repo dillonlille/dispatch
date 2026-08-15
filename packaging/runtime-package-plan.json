@@ -47,7 +47,7 @@
         },
         {
           "path": "dispatch_core/browser_manager/runtime_authority.py",
-          "sha256": "a5ac17ca4625087f2ec5e66b5062d06f9a6049e211f979f0b0865fb58683950a",
+          "sha256": "bacec89b43e9ea76898ff1efffb3840f37b8b614fb4e3a2f89bc4d5b9a47ba58",
           "source": "dispatch-core/browser-manager/src/dispatch_core/browser_manager/runtime_authority.py"
         },
         {

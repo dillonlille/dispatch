@@ -1,6 +1,6 @@
 # Dispatch
 
-Dispatch is being rebuilt as a clean-installable, per-user Linux product. This directory is a **sanitized private source monorepo candidate**, not a published release. It contains Dispatch Core, the installer, and independently packaged plugin source together, plus a fail-closed Phase 5 installer foundation that is not yet a complete production installer.
+Dispatch is being rebuilt as a clean-installable, per-user Linux product. This directory is a **sanitized private product-source repository candidate**, not a published release. It contains Dispatch Core, the installer, and independently packaged Dispatch-owned built-in plugin source. External plugins live in separate repositories. The fail-closed Phase 5 installer foundation is not yet a complete production installer.
 
 The repository is prepared for private GitHub development and GitHub-hosted source verification. Product installation, browser, and authorized-account acceptance remain reserved for a separate clean test system.
 
@@ -25,11 +25,11 @@ plugins/
 
 Every Core feature owns its directory. `browser-manager` implements private profiles, durable leases, process-safe locking, tracked temporary Chromium lifecycle, timeout/crash handling, and reconciliation. `authentication` implements encrypted credential storage and a bounded Amazon/Paycom login workflow. `collection-manager` implements bounded registration, a transactional durable queue, retries, cancellation, reconciliation, fixed-interval schedules, durable receipts, and synchronous Browser/Authentication coordination. Domain integrations remain under `plugins/`.
 
-## Monorepo and installation boundary
+## Repository and installation boundary
 
-The Git checkout is a development source boundary, not an installation payload. A developer clone contains Core, installer, and plugin source. The default product installer must instead consume an exact digest-bound Core release manifest and separately built Core wheel. It must never clone this repository, download its source archive, enumerate release assets, scan `plugins/`, or infer installable packages from neighboring directories.
+The Git checkout is a development source boundary, not an installation payload. A developer clone contains Core, installer, and built-in plugin source. External plugin source remains in separate repositories. The default product installer must instead consume an exact digest-bound Core release manifest and separately built Core wheel. It must never clone this repository, download its source archive, enumerate release assets, scan `plugins/`, or infer installable packages from neighboring directories.
 
-Core builds only from `dispatch-core/`; the installer builds only from `installer/`. Each future plugin builds independently from `plugins/<owner>/` and is installed only through an explicit plugin operation. Core must start, report health, and execute its control-plane behavior with zero installed plugins. `packaging/runtime-package-plan.json` defines the exact Core package closure; `policy/public-source-scope.json` defines the larger reviewed monorepo source closure and is never installer authority.
+Core builds only from `dispatch-core/`; the installer builds only from `installer/`. Each built-in plugin builds independently from `plugins/<owner>/`; external plugins build from their own repositories. Every plugin is installed only through an explicit plugin operation. Core must start, report health, and execute its control-plane behavior with zero installed plugins. `packaging/runtime-package-plan.json` defines the exact Core package closure; `policy/public-source-scope.json` defines the larger reviewed repository source closure and is never installer authority.
 
 The GitHub workflows under `.github/workflows/` build only explicit project roots and verify the Core wheel against the exact runtime plan. The manual artifact workflow produces short-lived review artifacts only; it does not publish a production release or mark the installation manifest ready.
 

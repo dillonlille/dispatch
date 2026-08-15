@@ -391,6 +391,40 @@ def test_boolean_selector_schema_version_fails_closed(tmp_path: Path) -> None:
     assert rejected.value.code == "browser_runtime_selector_invalid"
 
 
+@pytest.mark.parametrize(
+    "relative_path",
+    ["chrome-linux64//chrome", "chrome-linux64\\chrome"],
+)
+def test_noncanonical_receipt_paths_fail_closed(tmp_path: Path, relative_path: str) -> None:
+    authority, receipt, _ = install_fixture(tmp_path)
+    receipt["executable_relative_path"] = relative_path
+    refresh_receipt(authority, receipt)
+
+    with pytest.raises(BrowserManagerError) as rejected:
+        authority.load()
+
+    assert rejected.value.code == "browser_receipt_invalid"
+
+
+def test_selector_fifo_and_oversized_file_fail_closed(tmp_path: Path) -> None:
+    authority, _, _ = install_fixture(tmp_path / "fifo")
+    selector = authority_policy(authority).selector
+    selector.unlink()
+    os.mkfifo(selector, mode=0o444)
+    with pytest.raises(BrowserManagerError) as fifo:
+        authority.load()
+    assert fifo.value.code == "browser_runtime_selector_invalid"
+
+    authority, _, _ = install_fixture(tmp_path / "oversized")
+    selector = authority_policy(authority).selector
+    selector.chmod(0o644)
+    selector.write_bytes(b"x" * 4097)
+    selector.chmod(0o444)
+    with pytest.raises(BrowserManagerError) as oversized:
+        authority.load()
+    assert oversized.value.code == "browser_runtime_selector_invalid"
+
+
 def test_public_manager_constructor_has_no_runtime_or_realm_override() -> None:
     parameters = inspect.signature(BrowserManager).parameters
 

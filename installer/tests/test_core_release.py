@@ -364,6 +364,28 @@ def test_doctor_rejects_absolute_release_identity_outside_layout(tmp_path: Path)
     assert inspect_installation(target_layout)["checks"]["core"]["status"] == "unsafe"
 
 
+def test_doctor_rejects_fifo_duplicate_and_oversized_core_selectors(tmp_path: Path) -> None:
+    layout = layout_for(tmp_path)
+    layout.prepare()
+    selector = layout.active_release_selector
+
+    os.mkfifo(selector, mode=0o600)
+    assert inspect_installation(layout)["checks"]["core"]["status"] == "unsafe"
+    selector.unlink()
+
+    selector.write_text(
+        '{"schema_version":1,"schema_version":1,"release_id":"invalid",'
+        '"tree_manifest_sha256":"invalid","release_receipt_sha256":"invalid"}\n',
+        encoding="utf-8",
+    )
+    selector.chmod(0o600)
+    assert inspect_installation(layout)["checks"]["core"]["status"] == "unsafe"
+
+    selector.write_bytes(b"x" * 4097)
+    selector.chmod(0o600)
+    assert inspect_installation(layout)["checks"]["core"]["status"] == "unsafe"
+
+
 def test_failed_replacement_does_not_change_active_selector(tmp_path: Path) -> None:
     layout = layout_for(tmp_path)
     wheel = make_wheel(tmp_path / "dispatch_core-1.0.0-py3-none-any.whl")

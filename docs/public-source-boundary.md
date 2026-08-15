@@ -1,6 +1,6 @@
 # Public source, data, and privacy boundary
 
-The private monorepo candidate is constructed from an exact reviewed scope. Unknown paths, stale declarations, and digest changes fail verification rather than becoming source implicitly. This source scope includes deferred plugins and therefore must never be reused as the default Core installation payload.
+The private product-repository candidate is constructed from an exact reviewed scope. It includes Dispatch-owned built-in plugins; external plugins remain in separate repositories. Unknown paths, stale declarations, and digest changes fail verification rather than becoming source implicitly. This source scope includes deferred built-in plugins and therefore must never be reused as the default Core installation payload.
 
 ## Ownership planes
 

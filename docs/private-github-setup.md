@@ -1,12 +1,12 @@
 # Private GitHub repository setup
 
-This source tree is prepared for a private GitHub monorepo. Creating the repository does not make Dispatch installable or production-ready.
+This source tree is prepared for a private GitHub product repository containing Core, the installer, and Dispatch-owned built-in plugins. External plugins use separate repositories. Creating the repository does not make Dispatch installable or production-ready.
 
 ## Repository settings
 
 1. Create the repository as **private**.
 2. Keep the default workflow token permission at **read repository contents**.
-3. Protect the default branch and require the `Monorepo CI` checks before merge.
+3. Protect the default branch and require the `Dispatch CI` checks before merge.
 4. Require pull-request review for changes to Core, installer, packaging policy, workflows, and plugin contracts.
 5. Do not permit force pushes or branch deletion on the protected default branch.
 6. Create the `core-artifact-review` environment and configure a required reviewer before using the manual artifact workflow.
