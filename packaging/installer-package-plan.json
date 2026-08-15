@@ -44,8 +44,8 @@
     },
     {
       "path": "installer/src/dispatch_installer/layout.py",
-      "sha256": "abc52215f3277ea9dd80e3889325f399ce7f93884298e511184d2d56949f88e5",
-      "size": 18042
+      "sha256": "7ed5617f9820460931077fc58d60451b63cac1c95b019c7f484287bbc23a6d3f",
+      "size": 18263
     },
     {
       "path": "installer/src/dispatch_installer/manifest.py",

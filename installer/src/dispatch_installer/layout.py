@@ -205,58 +205,59 @@ def installation_transaction_lock(
         lock_directory_fd = -1
         lock_fd = -1
         try:
-            root_details = os.fstat(root_fd)
-            if (
-                not stat.S_ISDIR(root_details.st_mode)
-                or root_details.st_uid != os.geteuid()
-                or stat.S_IMODE(root_details.st_mode) != 0o700
-            ):
-                raise InstallerError("install_root_unsafe", "pinned DISPATCH_HOME is unsafe for transaction locking")
             try:
-                state_fd = os.open("state", directory_flags, dir_fd=root_fd)
-            except FileNotFoundError:
-                if not allow_state_creation:
-                    raise InstallerError("install_state_missing", "installation state root is missing")
-                os.mkdir("state", 0o700, dir_fd=root_fd)
-                state_fd = os.open("state", directory_flags, dir_fd=root_fd)
+                root_details = os.fstat(root_fd)
+                if (
+                    not stat.S_ISDIR(root_details.st_mode)
+                    or root_details.st_uid != os.geteuid()
+                    or stat.S_IMODE(root_details.st_mode) != 0o700
+                ):
+                    raise InstallerError("install_root_unsafe", "pinned DISPATCH_HOME is unsafe for transaction locking")
+                try:
+                    state_fd = os.open("state", directory_flags, dir_fd=root_fd)
+                except FileNotFoundError:
+                    if not allow_state_creation:
+                        raise InstallerError("install_state_missing", "installation state root is missing")
+                    os.mkdir("state", 0o700, dir_fd=root_fd)
+                    state_fd = os.open("state", directory_flags, dir_fd=root_fd)
+                except OSError as exc:
+                    raise InstallerError("install_state_unsafe", "installation state root is unsafe") from exc
+                state_details = os.fstat(state_fd)
+                if (
+                    not stat.S_ISDIR(state_details.st_mode)
+                    or state_details.st_uid != os.geteuid()
+                    or stat.S_IMODE(state_details.st_mode) != 0o700
+                ):
+                    raise InstallerError("install_state_unsafe", "installation state root is unsafe")
+                try:
+                    lock_directory_fd = os.open("install", directory_flags, dir_fd=state_fd)
+                except FileNotFoundError:
+                    os.mkdir("install", 0o700, dir_fd=state_fd)
+                    lock_directory_fd = os.open("install", directory_flags, dir_fd=state_fd)
+                except OSError as exc:
+                    raise InstallerError("install_lock_unsafe", "installer lock directory is unsafe") from exc
+                lock_directory_details = os.fstat(lock_directory_fd)
+                if (
+                    not stat.S_ISDIR(lock_directory_details.st_mode)
+                    or lock_directory_details.st_uid != os.geteuid()
+                    or stat.S_IMODE(lock_directory_details.st_mode) != 0o700
+                ):
+                    raise InstallerError("install_lock_unsafe", "installer lock directory is unsafe")
+                lock_flags = os.O_CREAT | os.O_RDWR
+                if hasattr(os, "O_NOFOLLOW"):
+                    lock_flags |= os.O_NOFOLLOW
+                lock_fd = os.open("installer.lock", lock_flags, 0o600, dir_fd=lock_directory_fd)
+                lock_details = os.fstat(lock_fd)
+                if (
+                    not stat.S_ISREG(lock_details.st_mode)
+                    or lock_details.st_uid != os.geteuid()
+                    or stat.S_IMODE(lock_details.st_mode) != 0o600
+                ):
+                    raise InstallerError("install_lock_unsafe", "installer lock ownership or mode is unsafe")
+                fcntl.flock(lock_fd, fcntl.LOCK_EX)
             except OSError as exc:
-                raise InstallerError("install_state_unsafe", "installation state root is unsafe") from exc
-            state_details = os.fstat(state_fd)
-            if (
-                not stat.S_ISDIR(state_details.st_mode)
-                or state_details.st_uid != os.geteuid()
-                or stat.S_IMODE(state_details.st_mode) != 0o700
-            ):
-                raise InstallerError("install_state_unsafe", "installation state root is unsafe")
-            try:
-                lock_directory_fd = os.open("install", directory_flags, dir_fd=state_fd)
-            except FileNotFoundError:
-                os.mkdir("install", 0o700, dir_fd=state_fd)
-                lock_directory_fd = os.open("install", directory_flags, dir_fd=state_fd)
-            except OSError as exc:
-                raise InstallerError("install_lock_unsafe", "installer lock directory is unsafe") from exc
-            lock_directory_details = os.fstat(lock_directory_fd)
-            if (
-                not stat.S_ISDIR(lock_directory_details.st_mode)
-                or lock_directory_details.st_uid != os.geteuid()
-                or stat.S_IMODE(lock_directory_details.st_mode) != 0o700
-            ):
-                raise InstallerError("install_lock_unsafe", "installer lock directory is unsafe")
-            lock_flags = os.O_CREAT | os.O_RDWR
-            if hasattr(os, "O_NOFOLLOW"):
-                lock_flags |= os.O_NOFOLLOW
-            lock_fd = os.open("installer.lock", lock_flags, 0o600, dir_fd=lock_directory_fd)
-            lock_details = os.fstat(lock_fd)
-            if (
-                not stat.S_ISREG(lock_details.st_mode)
-                or lock_details.st_uid != os.geteuid()
-                or stat.S_IMODE(lock_details.st_mode) != 0o600
-            ):
-                raise InstallerError("install_lock_unsafe", "installer lock ownership or mode is unsafe")
-            fcntl.flock(lock_fd, fcntl.LOCK_EX)
+                raise InstallerError("install_lock_unsafe", "cannot acquire pinned installation transaction lock") from exc
             yield
-        except OSError as exc:
-            raise InstallerError("install_lock_unsafe", "cannot acquire pinned installation transaction lock") from exc
         finally:
             for descriptor in (lock_fd, lock_directory_fd, state_fd, root_fd):
                 if descriptor >= 0:

@@ -512,17 +512,26 @@ def test_purge_rechecks_root_identity_after_final_plan_before_apply(tmp_path: Pa
         *,
         purge: bool,
         resume_journal: dict | None = None,
+        authority_layout: InstallLayout | None = None,
+        root_descriptor: int | None = None,
     ) -> dict[str, object]:
         nonlocal replacement_marker, resume_plans
-        result = original_plan(target, purge=purge, resume_journal=resume_journal)
+        result = original_plan(
+            target,
+            purge=purge,
+            resume_journal=resume_journal,
+            authority_layout=authority_layout,
+            root_descriptor=root_descriptor,
+        )
         if resume_journal is not None:
             resume_plans += 1
             if resume_plans == 2:
-                target.dispatch_home.rename(displaced)
-                target.dispatch_home.mkdir(mode=0o700)
-                target.config.mkdir(mode=0o700)
-                target.data.mkdir(mode=0o700)
-                replacement_marker = target.data / "replacement.db"
+                authority = authority_layout or target
+                authority.dispatch_home.rename(displaced)
+                authority.dispatch_home.mkdir(mode=0o700)
+                authority.config.mkdir(mode=0o700)
+                authority.data.mkdir(mode=0o700)
+                replacement_marker = authority.data / "replacement.db"
                 replacement_marker.write_text("preserve", encoding="utf-8")
         return result
 
@@ -706,7 +715,7 @@ def test_authority_appearing_during_final_transaction_cleanup_cannot_report_succ
     def add_authority_during_final_fsync(path: Path) -> None:
         nonlocal injected
         original(path)
-        if path == transaction.parent and not transaction.exists() and not injected:
+        if path.name == transaction.parent.name and not transaction.exists() and not injected:
             injected = True
             layout.browser_selector.parent.mkdir(parents=True, exist_ok=True)
             layout.browser_selector.write_text("{}", encoding="utf-8")

@@ -388,7 +388,7 @@
     "installer/src/dispatch_installer/layout.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "abc52215f3277ea9dd80e3889325f399ce7f93884298e511184d2d56949f88e5"
+      "sha256": "7ed5617f9820460931077fc58d60451b63cac1c95b019c7f484287bbc23a6d3f"
     },
     "installer/src/dispatch_installer/manifest.py": {
       "kind": "file",
@@ -428,7 +428,7 @@
     "installer/tests/test_uninstall.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "84719b27f4150787c511c49a2b8c65a50b1330203f682ef5c0613d53eb45e7ac"
+      "sha256": "d0e47b03fbaa3703484e6d3114a5373ab389722e0eb69b1d41fd756d84d401a8"
     },
     "packaging/browser-runtime-plan.json": {
       "kind": "file",
@@ -448,7 +448,7 @@
     "packaging/installer-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "9d85cf812e2ed48d937af1900edb5a8af652d6d35867b39d994241f2a9d58f58"
+      "sha256": "3e9009daafe43b5fbe8b8491d8774e08d27e1ee40ba29e8f48f52510accb2b16"
     },
     "packaging/runtime-package-plan.json": {
       "kind": "file",
