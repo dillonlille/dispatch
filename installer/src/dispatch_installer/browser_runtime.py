@@ -324,7 +324,7 @@ def _hash_regular(
     owner_uid: int,
     max_bytes: int,
     code: str,
-    allowed_modes: set[int],
+    allowed_modes: set[int] | None = None,
 ) -> tuple[str, os.stat_result]:
     flags = os.O_RDONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -341,7 +341,7 @@ def _hash_regular(
             or details.st_nlink != 1
             or details.st_mode & 0o022
             or details.st_size > max_bytes
-            or stat.S_IMODE(details.st_mode) not in allowed_modes
+            or (allowed_modes is not None and stat.S_IMODE(details.st_mode) not in allowed_modes)
         ):
             raise InstallerError(code, f"browser authority file is unsafe: {path}")
         digest = hashlib.sha256()
