@@ -398,7 +398,7 @@
     "installer/deploy/cloudflare/public/_headers": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "270f965375abae12adf850bf59eeeabbd767bb56fe33ceeb31de3dac10828c1f"
+      "sha256": "dafcfde3397c87f9d2efe8ede9be64636b992293cd1129c1b334f36bc0b93310"
     },
     "installer/deploy/cloudflare/public/install.sh": {
       "kind": "file",
