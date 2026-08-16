@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 import shutil
-import stat
+
 import subprocess
 from collections.abc import Callable, Sequence
 from pathlib import Path
@@ -24,7 +24,7 @@ from .service import (
     remove_user_service,
     service_unit_is_owned,
 )
-from .user_command import launcher_script, remove_user_command
+from .user_command import inspect_user_command, remove_user_command
 
 RunCommand = Callable[[Sequence[str], Path | None], subprocess.CompletedProcess[str]]
 AuthorityVerifier = Callable[[dict[str, object]], bool]
@@ -130,20 +130,7 @@ def _uninstall_blockers(
         blockers.append(f"installation lock is unsafe: {layout.lock_path}")
 
     if layout.command_path.exists() or layout.command_path.is_symlink():
-        try:
-            details = layout.command_path.stat()
-            command_owned = (
-                not layout.command_path.is_symlink()
-                and layout.command_path.is_file()
-                and details.st_uid == os.geteuid()
-                and details.st_nlink == 1
-                and details.st_size <= 64 * 1024
-                and stat.S_IMODE(details.st_mode) == 0o700
-                and layout.command_path.read_bytes() == launcher_script(layout)
-            )
-        except OSError:
-            command_owned = False
-        if not command_owned:
+        if inspect_user_command(layout).get("status") != "ready":
             blockers.append(f"launcher is not Dispatch-owned: {layout.command_path}")
 
     if layout.service_path.exists() or layout.service_path.is_symlink():

@@ -35,6 +35,7 @@ def service_unit(layout: InstallLayout) -> bytes:
         "After=network-online.target\n\n"
         "[Service]\n"
         "Type=simple\n"
+        "UMask=0077\n"
         f"ExecStart={_quote_systemd(str(layout.command_path))} service\n"
         f"Environment=DISPATCH_HOME={_quote_systemd(str(layout.dispatch_home))}\n"
         f"Environment=PLAYWRIGHT_BROWSERS_PATH={_quote_systemd(str(layout.cache / 'browser'))}\n"
@@ -43,6 +44,10 @@ def service_unit(layout: InstallLayout) -> bytes:
         "[Install]\n"
         "WantedBy=default.target\n"
     ).encode("utf-8")
+
+
+def _previous_service_unit(layout: InstallLayout) -> bytes:
+    return service_unit(layout).replace(b"UMask=0077\n", b"", 1)
 
 
 def legacy_service_unit(layout: InstallLayout) -> bytes:
@@ -110,7 +115,7 @@ def service_unit_is_owned(layout: InstallLayout) -> bool:
         and details.st_nlink == 1
         and stat.S_IMODE(details.st_mode) == 0o600
         and details.st_size <= 64 * 1024
-        and content == service_unit(layout)
+        and content in {service_unit(layout), _previous_service_unit(layout)}
         and _record_matches(layout, content)
     )
 

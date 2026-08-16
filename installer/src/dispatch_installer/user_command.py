@@ -15,9 +15,14 @@ def launcher_script(layout: InstallLayout) -> bytes:
     return (
         "#!/bin/sh\n"
         "set -eu\n"
+        "umask 077\n"
         f"export DISPATCH_HOME={shlex.quote(str(layout.dispatch_home))}\n"
         f"exec {shlex.quote(str(layout.venv_python))} -I -B -m dispatch_installer.launcher \"$@\"\n"
     ).encode("utf-8")
+
+
+def _previous_launcher_script(layout: InstallLayout) -> bytes:
+    return launcher_script(layout).replace(b"umask 077\n", b"", 1)
 
 
 def _legacy_launcher_script(layout: InstallLayout) -> bytes:
@@ -40,7 +45,7 @@ def install_user_command(layout: InstallLayout) -> dict[str, object]:
         if details.st_uid != os.geteuid() or details.st_nlink != 1 or details.st_size > 64 * 1024:
             raise InstallerError("command_conflict", f"existing command is not Dispatch-owned: {path}")
         current = path.read_bytes()
-        if current == _legacy_launcher_script(layout):
+        if current in {_legacy_launcher_script(layout), _previous_launcher_script(layout)}:
             path.unlink()
         elif current != desired:
             raise InstallerError("command_conflict", f"existing command is not Dispatch-owned: {path}")
@@ -83,7 +88,11 @@ def inspect_user_command(layout: InstallLayout) -> dict[str, object]:
             or stat.S_IMODE(details.st_mode) != 0o700
         ):
             raise InstallerError("command_unsafe", "Dispatch launcher ownership or mode is unsafe")
-        status = "ready" if path.read_bytes() == launcher_script(layout) else "unsafe"
+        status = (
+            "ready"
+            if path.read_bytes() in {launcher_script(layout), _previous_launcher_script(layout)}
+            else "unsafe"
+        )
         return {"status": status, "command": str(path)}
     except (OSError, InstallerError) as exc:
         return {"status": "unsafe", "command": str(path), "error": str(exc)[:256]}
@@ -102,7 +111,7 @@ def remove_user_command(layout: InstallLayout) -> None:
         or details.st_nlink != 1
         or details.st_size > 64 * 1024
         or stat.S_IMODE(details.st_mode) != 0o700
-        or path.read_bytes() != launcher_script(layout)
+        or path.read_bytes() not in {launcher_script(layout), _previous_launcher_script(layout)}
     ):
         raise InstallerError("command_conflict", "Dispatch launcher changed and will not be removed")
     path.unlink()

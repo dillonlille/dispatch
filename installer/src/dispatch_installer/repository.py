@@ -169,20 +169,37 @@ def clone_repository(
     return destination
 
 
+def assert_checkout_clean(clone: Path, *, run: RunCommand = run_command) -> None:
+    status = _checked(
+        (
+            "git",
+            "-C",
+            str(clone),
+            "status",
+            "--porcelain",
+            "--untracked-files=all",
+            "--ignored=matching",
+        ),
+        run=run,
+    )
+    if status.stdout.strip():
+        raise InstallerError("clone_dirty", "the Dispatch checkout contains local or ignored files")
+
+
 def checkout_existing(
     clone: Path,
     *,
     channel: str,
     ref: str,
     repository_url: str = REPOSITORY_URL,
+    preflight: bool = True,
     run: RunCommand = run_command,
 ) -> None:
     metadata = clone / ".git"
     if clone.is_symlink() or not clone.is_dir() or metadata.is_symlink() or not metadata.is_dir():
         raise InstallerError("clone_missing", "Dispatch clone is missing or unsafe")
-    dirty = _checked(("git", "-C", str(clone), "status", "--porcelain"), run=run)
-    if dirty.stdout.strip():
-        raise InstallerError("clone_dirty", "the Dispatch checkout has local changes; update refused")
+    if preflight:
+        assert_checkout_clean(clone, run=run)
     if channel == "stable":
         ref = validate_ref(ref)
         _checked(
@@ -330,9 +347,7 @@ def verify_checkout_authority(
     metadata = clone / ".git"
     if clone.is_symlink() or not clone.is_dir() or metadata.is_symlink() or not metadata.is_dir():
         raise InstallerError("clone_missing", "Dispatch clone is missing or unsafe")
-    status = _checked(("git", "-C", str(clone), "status", "--porcelain"), run=run)
-    if status.stdout.strip():
-        raise InstallerError("clone_dirty", "the staged Dispatch checkout has local changes")
+    assert_checkout_clean(clone, run=run)
     head = current_commit(clone, run=run)
     if channel == "stable":
         ref = validate_ref(ref)
@@ -368,6 +383,7 @@ def verify_checkout_authority(
 __all__ = [
     "REPOSITORY_API",
     "REPOSITORY_URL",
+    "assert_checkout_clean",
     "checkout_existing",
     "clone_repository",
     "current_commit",
