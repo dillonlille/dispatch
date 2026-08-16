@@ -1,65 +1,55 @@
 # Dispatch Core
 
-Dispatch Core is the root-level, feature-oriented control plane for Dispatch. It is not a plugin and does not live under `plugins/`.
-
-Core runtime implementation lives under the single `src/dispatch_core/` package tree. Each feature retains an owner directory for documentation and focused tests. The current source contains implemented `paths`, `health`, `command-interface`, `plugin-policy`, `lifecycle`, and `browser-manager` features. Authentication has encrypted credential storage and a bounded Amazon/Paycom login workflow; authorized live-account acceptance remains pending. Collection Manager has bounded registration, a transactional SQLite task queue, retries, cancellation, reconciliation, schedules, receipts, and spawned worker-process supervision with hard deadlines, heartbeats, process-tree cleanup, and startup orphan recovery. Persistent OS service installation remains deferred to the installer.
+Dispatch Core is the directly executable application inside the Dispatch repository. It is not built or installed as a wheel.
 
 ## Layout
 
 ```text
 dispatch-core/
-├── src/dispatch_core/
-│   ├── paths/
-│   ├── health/
-│   ├── command_interface/
-│   ├── collection_manager/
-│   ├── authentication/
-│   └── browser_manager/
-├── paths/
-├── health/
-├── command-interface/
-├── plugin-policy/
-├── lifecycle/
-├── collection-manager/
+├── __main__.py
 ├── authentication/
-└── browser-manager/
+├── browser_manager/
+├── collection_manager/
+├── command_interface/
+├── health/
+├── paths/
+├── plugin_runtime.py
+├── plugin_policy.py
+├── tests/
+├── docs/
+├── scripts/
+├── requirements.txt
+└── requirements-dev.txt
 ```
 
-Domain integrations remain under [`../plugins/`](../plugins/). Core features may provide bounded infrastructure to reviewed plugins. Authentication owns only fixed provider login fields; domain collection selectors and business rules remain outside Core.
+There is deliberately no `src/` directory and no nested `dispatch_core` package. Imports inside Core use the feature names directly, such as `from paths import DispatchPaths`.
 
-## Commands
+## Run from source
+
+From the repository root:
 
 ```bash
-./scripts/test
-./scripts/build
-./scripts/verify
-./scripts/health
+python3 dispatch-core --help
+python3 dispatch-core health
 ```
 
-`build` writes deterministic immutable output beneath validated `DISPATCH_BUILD_OUTPUT` when set, otherwise beneath the resolved per-user cache root. It never writes releases into the source checkout.
+An installed Dispatch launcher uses `~/.dispatch/venv/bin/python` and the cloned application at `~/.dispatch/dispatch/dispatch-core`.
 
-The Core runtime wheel exposes:
+## Dependencies
+
+Runtime dependencies are pinned in `requirements.txt`. Test and development dependencies are pinned in `requirements-dev.txt`.
 
 ```bash
-dispatch-core verify
-dispatch-core health
-dispatch-core browser-doctor
-dispatch-core paths --owner example-plugin
-dispatch-core plugin list
-dispatch-core plugin health handbook
-dispatch-core plugin invoke handbook --request '{"action":"overview"}'
-dispatch-core auth status
-dispatch-core auth enroll amazon-operations
-dispatch-core auth remove amazon-operations --yes
-dispatch-core collection status
-dispatch-core collection worker-once
-dispatch-core collection reconcile
-dispatch-core collection cancel TASK_ID
-dispatch-core collection resume TASK_ID
+python3 -m venv .venv
+.venv/bin/python -m pip install -r dispatch-core/requirements-dev.txt
 ```
 
-Installed execution requires an explicit `DISPATCH_CODE_ROOT` naming the installed code or release authority. Every command preserves the exact seven-field response envelope. Plugin discovery uses the standard `dispatch.plugins` package entry-point group and only the active IDs and paths verified by the installer; adding a plugin requires no Core-specific registry code. Read-only commands create no private roots; explicit authentication enrollment and removal may create or update the private encrypted credential store.
+## Verification
 
-Browser Manager creates private state only when explicitly instantiated by a Core service or test. It uses persistent isolated profiles with temporary Chromium processes and typed internal leases rather than generic browser commands. Collection Manager likewise creates its private database only when explicitly opened; health and `collection status` inspection do not create an empty store. A zero-collector worker exits successfully without claiming queued work it cannot execute.
+```bash
+dispatch-core/scripts/test
+dispatch-core/scripts/verify
+dispatch-core/scripts/health
+```
 
-See [`../docs/path-configuration.md`](../docs/path-configuration.md).
+Core resolves durable user data outside the checkout under `~/.dispatch/`. Code updates replace the cloned source and virtual environment without replacing configuration, secrets, databases, browser profiles, or logs.

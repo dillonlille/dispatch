@@ -1,138 +1,41 @@
-# Preparing and publishing a Dispatch version
+# Releasing Dispatch source
 
-Dispatch separates source integration, version preparation, merging, and production publication.
+Dispatch releases are reviewed Git source tags. A release does not build a wheel catalog, generate an installation manifest, select a runtime tree, or publish installer receipts.
 
-- `dev` contains active development and release preparation.
-- `main` contains production-ready source.
-- A published immutable tag and the stable bootstrap determine what users install.
-- Merging into `main` does not publish or install a version.
+## Branches and authority
 
-## Authority boundaries
+- `dev` is the integration channel.
+- `main` is the stable source channel.
+- A version tag identifies the exact source released to users.
+- Merging into `main` does not publish a release or change an installed checkout.
 
-Dillon gives approval directly in the active conversation. GitHub review state is not release authority.
+Release publication requires explicit approval in the active conversation. A passing pull request, a GitHub review, or a successful CI run is not release approval.
 
-These are separate approvals:
+## Prepare the source
 
-1. approval of proposed product and component versions;
-2. approval to merge the exact version-preparation PR head;
-3. approval to tag, publish, and promote the exact accepted `main` commit and version.
+1. Make and test changes on `dev`.
+2. Run source safety, all source/Core/installer/Handbook tests, ShellCheck, and `python dispatch-core --help`.
+3. Open the reviewed pull request from `dev` to `main`.
+4. After the exact commit is approved and merged, resolve the resulting `main` commit.
+5. Create the proposed version tag on that exact commit only after receiving separate release approval.
 
-A later source change invalidates approval for the earlier head.
+The tag is the release identity. Do not rewrite an existing tag or move a stable checkout by replacing files without first reviewing the target commit.
 
-## 1. Preview a version plan
+## Manual release workflow
 
-Run from a clean `dev` branch with the full published tag history available:
+Run **Publish Dispatch release** with an existing tag in the GitHub Actions UI. The workflow:
 
-```bash
-./scripts/prepare-release \
-  --product-version X.Y.Z \
-  --installer-version X.Y.Z \
-  --core-version X.Y.Z
-```
+1. checks out the requested tag with full history;
+2. verifies that the checked-out `HEAD` is exactly both the tag target and current `main`, and that the worktree is clean;
+3. installs the development requirements and editable installer/Handbook components;
+4. reruns the source safety scan and all source/Core/installer/Handbook tests;
+5. Shell-checks the canonical root `install.sh` and smoke-runs `python dispatch-core --help`;
+6. creates a published GitHub Release with GitHub-generated notes.
 
-The default is preview-only. It compares the complete distributable closure with the exact immutable production baseline, verifies the tracked production bootstrap byte-for-byte, and reports which component sources changed.
+The workflow is manual-only. It has no push, tag, schedule, or automatic-release trigger. It uploads no wheel, archive, manifest, checksum list, or installer file. The GitHub-generated source archives are provider output, not Dispatch-managed installation assets.
 
-Rules enforced by the command:
+## Promotion and rollback
 
-- the product version must be newer than the published product;
-- a changed component must receive a newer component version;
-- an unchanged component must retain its published component version;
-- an existing product tag cannot be reused;
-- the production bootstrap is not changed.
+After publication, stable bootstrap promotion is a separate approved deployment operation. Run **Publish Dispatch bootstrap** with the exact approved 40-character `main` commit. The workflow refuses any commit other than current `origin/main`, requires the latest published stable release tag to point to that exact commit, reruns source and shell verification, stages the canonical root `install.sh` only inside CI, and deploys it with defensive headers. A failed release is corrected by a new source commit and new tag; never overwrite an existing tag or silently substitute a different checkout.
 
-Use `--json` for one machine-readable result.
-
-## 2. Apply approved version metadata
-
-After the proposed versions are approved:
-
-```bash
-./scripts/prepare-release \
-  --product-version X.Y.Z \
-  --installer-version X.Y.Z \
-  --core-version X.Y.Z \
-  --apply
-```
-
-Application is allowed only on `dev` with a clean worktree. The command updates canonical product, installer, and Core identities; rebuilds package plans from declared package roots and project metadata; rebuilds the draft manifest's Core file declarations; clears all draft artifact identities; keeps `ready` false; and refreshes the exact public-source scope. Writes are transactional and restricted to the documented preparation outputs; a failure restores their original bytes.
-
-It does not commit, push, tag, build, publish, deploy, or modify the production bootstrap.
-
-## 3. Verify prepared metadata
-
-```bash
-./scripts/verify-release-readiness --phase prepared
-```
-
-Run this immediately after preparation and again after committing it. The prepared phase verifies:
-
-- product and component version consistency;
-- changed-component version policy against the published tag;
-- package-plan source hashes and sizes;
-- Core runtime-plan source hashes;
-- draft manifest/package-plan consistency;
-- empty artifact identities and `ready: false` before finalization;
-- absence of mutable production-approval state in source metadata;
-- complete source closure reconstructed from `pyproject.toml`, including newly added files omitted from stale plans;
-- exact production-bootstrap bytes and baseline ancestry.
-
-Prepared status permits a dirty worktree containing only the version-preparation changes. It is not lifecycle acceptance and is not permission to publish.
-
-## 4. Build and accept the exact candidate
-
-Build deterministically from the exact pushed `dev` commit. Keep outputs outside the repository. Finalize candidate artifacts with `scripts/finalize-installation-release --acceptance-candidate`, publish them only under an immutable commit-qualified development path, and run all real install/setup/service/uninstall acceptance on `dispatch-testing`.
-
-Do not add candidate wheels, manifests, checksums, acceptance evidence, release evidence, logs, databases, or downloaded runtime material to Git.
-
-## 5. Merge approval
-
-Open a `dev` to `main` PR and report:
-
-- exact PR head;
-- proposed product and component versions;
-- local and hosted tests;
-- exact candidate artifact identities;
-- `dispatch-testing` acceptance;
-- risks and deferred work.
-
-Ask Dillon in the active conversation whether to merge that exact PR head. Merge approval does not authorize publication.
-
-## 6. Post-merge acceptance
-
-Resolve the resulting `main` commit and verify that its tree contains the approved source. Rebuild deterministically from that exact commit and repeat final acceptance on `dispatch-testing`. Production finalization requires acceptance evidence whose source commit and product version exactly match the release source.
-
-At the exact clean release tag, run the release phase with that evidence:
-
-```bash
-./scripts/verify-release-readiness \
-  --phase release \
-  --acceptance-evidence /path/to/acceptance-evidence.json
-```
-
-The release phase requires a clean worktree and evidence from `dispatch-testing` whose product version, full source commit, required checks, and no-secrets declaration all match. The release finalizer uses the same evidence validator.
-
-`production_install_ready` is intentionally not stored in source metadata. Exact acceptance evidence is the production-readiness authority; a mutable boolean could become stale after any source change.
-
-## 7. Release and promotion approval
-
-Before publishing, report:
-
-- exact accepted `main` commit;
-- exact product and component versions;
-- final manifest, installer, and Core digests;
-- post-merge CI and acceptance results;
-- current production version and proposed production changes.
-
-Ask Dillon in the active conversation whether to tag, publish, and promote that exact version.
-
-Only after approval:
-
-1. create the immutable product tag on the accepted `main` commit;
-2. run the tag-qualified release workflow;
-3. publish immutable versioned manifest and component artifacts;
-4. verify all hosted sizes and SHA-256 digests;
-5. create the GitHub Release with only its reviewed `install.sh` asset;
-6. update the stable bootstrap only after the immutable release exists;
-7. verify the literal stable installation on `dispatch-testing`.
-
-Never overwrite a published version path or silently substitute a different commit, version, or artifact.
+For a local or test stable installation, rollback means running `dispatch update --channel stable --version <previous-published-tag>` after reviewing the change. The lifecycle keeps private `config`, `secrets`, `data`, `state`, and `logs` outside the source checkout and restores the previous checkout/environment automatically if activation fails.

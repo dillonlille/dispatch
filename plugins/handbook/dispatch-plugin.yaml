@@ -9,12 +9,7 @@ owner:
 paths:
   source: src
   tests: tests
-  databases:
-    handbook: db/handbook
-  state: plugins/handbook/state
-  staging: plugins/handbook/staging
-  locks: plugins/handbook/locks
-  receipts: plugins/handbook/receipts
+  data: plugins/handbook/data
 commands:
   test: ./scripts/test
   build: ./scripts/build
@@ -23,7 +18,7 @@ commands:
 components:
   - id: handbook-tool
     kind: hermes-tool
-    source: integration/hermes-plugins/dispatch_handbook
+    source: src/dispatch_handbook
     capabilities:
       read_local_data: true
       mutate_data: false
@@ -38,11 +33,6 @@ components:
       adapter: integration/hermes-plugins/dispatch_handbook/__init__.py
       tool: dispatch_handbook
       toolset: dispatch_handbook
-    runtime:
-      releases: runtime/releases
-      current_pointer: runtime/current
-      activation_record: config/activation.json
-      launcher_manifest: integration/hermes-plugins/dispatch_handbook/launcher-manifest.json
     actions:
       - {name: lookup, privilege: read}
       - {name: overview, privilege: read}
@@ -59,7 +49,3 @@ components:
       authentication: false
       direct_delivery: false
       long_running: false
-retention:
-  keep_current: true
-  keep_rollback: 1
-  preserve_pinned: true

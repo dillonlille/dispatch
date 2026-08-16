@@ -1,65 +1,47 @@
 #!/usr/bin/env python3
+"""Run the source-owned Dispatch conformance audit for the Handbook."""
 from __future__ import annotations
 
 import importlib.util
 import json
-import os
-import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = ROOT.parents[1]
-SOURCE = ROOT / "src"
+POLICY = WORKSPACE / "dispatch-core" / "plugin_policy.py"
 
 
-def load(path: Path, name: str):
-    spec = importlib.util.spec_from_file_location(name, path)
+def load_policy():
+    spec = importlib.util.spec_from_file_location("dispatch_source_plugin_policy", POLICY)
     if spec is None or spec.loader is None:
-        raise RuntimeError(f"{name}_import_failed")
+        raise RuntimeError("plugin_policy_import_failed")
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
-def main(argv: list[str] | None = None) -> int:
-    argv = list(sys.argv[1:] if argv is None else argv)
-    try:
-        conformance = load(
-            WORKSPACE / "dispatch-core" / "plugin-policy" / "plugin_conformance.py",
-            "public_plugin_conformance",
-        )
-        audit = conformance.audit_owner(ROOT)
-        if audit.failures:
-            raise RuntimeError("; ".join(audit.failures))
-        builder = load(ROOT / "scripts" / "build_release.py", "public_handbook_builder")
-        builder.entries()
-        release = None
-        release_value = argv[0] if argv else os.environ.get("DISPATCH_VERIFY_RELEASE")
-        if release_value:
-            release = builder.verify(Path(release_value).resolve(), builder.entries())
-        data = {"owner": "handbook", "conformance_checks": len(audit.passes)}
-        if release is not None:
-            data["release_id"] = release["release_id"]
-    except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as exc:
-        print(json.dumps({
-            "ok": False,
-            "action": "verify",
-            "status": "error",
-            "data": {},
-            "freshness": None,
-            "delivery": None,
-            "error": {"code": "verification_failed", "message": str(exc)[:512]},
-        }, sort_keys=True))
-        return 1
-    print(json.dumps({
-        "ok": True,
+def envelope(ok: bool, status: str, data: dict, error: dict | None = None) -> dict:
+    return {
+        "ok": ok,
         "action": "verify",
-        "status": "ready",
+        "status": status,
         "data": data,
         "freshness": None,
         "delivery": None,
-        "error": None,
-    }, sort_keys=True))
+        "error": error,
+    }
+
+
+def main() -> int:
+    try:
+        policy = load_policy()
+        audit = policy.audit_owner(ROOT)
+        if audit.failures:
+            raise RuntimeError("; ".join(audit.failures))
+    except (OSError, RuntimeError, TypeError, ValueError) as exc:
+        print(json.dumps(envelope(False, "error", {}, {"code": "source_conformance_failed", "message": str(exc)[:512]}), sort_keys=True))
+        return 1
+    print(json.dumps(envelope(True, "ready", {"owner": "handbook", "checks": len(audit.passes), "source_only": True}), sort_keys=True))
     return 0
 
 

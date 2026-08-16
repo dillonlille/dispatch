@@ -11,10 +11,7 @@ artifacts/
 db/
 safety-data/
 SKILLS/
-**/runtime/
-**/releases/
 **/state/
-**/staging/
 **/receipts/
 **/logs/
 **/locks/
@@ -69,13 +66,7 @@ Thumbs.db
 
 # Local build, acceptance, and release outputs
 /.worktrees/
-/candidate/
-/reviewed/
-/wheelhouse/
 .wrangler/
-acceptance-evidence.json
-release-evidence.json
-SHA256SUMS*
 *.sha256
 
 # Operational files
@@ -92,9 +83,6 @@ SHA256SUMS*
 *.pid
 *.sock
 .hermes-tmp.*
-install-receipt.json
-launcher-manifest.json
-release-retention.json
 Cookies
 History
 Login Data

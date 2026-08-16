@@ -9,7 +9,7 @@ description = "Portable read-only local handbook retrieval for Dispatch"
 requires-python = ">=3.11,<3.14"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-dependencies = ["dispatch-core==1.0.0"]
+dependencies = []
 
 [project.optional-dependencies]
 dev = ["pytest==9.1.1"]
@@ -19,6 +19,10 @@ dispatch-handbook = "dispatch_handbook.cli:main"
 
 [project.entry-points."dispatch.plugins"]
 handbook = "dispatch_handbook.service:handle"
+
+[tool.dispatch]
+id = "handbook"
+capabilities = ["read_local_data"]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

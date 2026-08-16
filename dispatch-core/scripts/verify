@@ -2,4 +2,4 @@
 set -eu
 cd -- "$(dirname -- "$0")/.."
 export PYTHONDONTWRITEBYTECODE=1
-exec python3 -B lifecycle/verify_component.py "$@"
+exec python3 -B . verify "$@"

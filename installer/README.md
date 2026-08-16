@@ -1,72 +1,54 @@
-# Dispatch installer
+# Dispatch clone installer
 
-This standard-library-only component owns the Phase 5 installation boundary. It is separate from Dispatch Core and Browser Manager.
+The installer is a standard-library runtime package carried by the Dispatch
+checkout. The canonical `install.sh` bootstrap selects a channel, resolves a
+stable GitHub Release when requested, clones `dillonlille/dispatch`, and runs
+this package from the staged clone through `PYTHONPATH`.
 
-## Intended user flow
+## Channels
 
-After final publication, a user will copy a versioned, digest-pinned install command into a terminal. The bootstrap will retrieve the approved installer and product release manifest, verify them, install only the mandatory Core/dependency artifacts, and create the `dispatch` launcher. Built-in plugin artifacts remain optional declarations for `dispatch setup`; external plugins remain separate. The installer never clones source repositories, enumerates release assets, or infers packages from source layout.
+- **Latest Stable** resolves the newest published, non-draft, non-prerelease
+  GitHub Release and checks out its tag detached.
+- **Dev Branch** clones and tracks the `dev` branch.
+- `--version TAG` selects an explicit stable tag. The dev channel always tracks
+  `dev` and rejects `--version`.
 
-GitHub publication and the copy-and-paste command are deliberately deferred until the complete release passes licensing, security, CI, clean-machine, and acceptance gates.
-
-## Implemented foundation
-
-- resolves the per-user installation under `${DISPATCH_HOME}`, defaulting to `${HOME}/.dispatch`;
-- keeps browser authority fixed at `/etc/dispatch/browser-runtime-active.json` and `/opt/dispatch/browser-runtimes/`;
-- prepares private user directories and a secret-free layout receipt idempotently;
-- validates the fail-closed release-planning manifest;
-- provides a strict GitHub HTTPS downloader with host allowlisting, redirect revalidation, exact size/SHA-256 verification, bounded streaming, private staging, and atomic publication, plus a Core-specific policy that accepts only an immutable versioned Core wheel URL;
-- verifies a Dispatch Core wheel's identity, exact approved package-member hashes and dependency metadata, generated metadata closure, console entry point, top-level package, and complete `RECORD` before extraction;
-- rejects aliased, hard-linked, or group/world-writable artifacts;
-- binds release reuse to verified wheel bytes and reconciles safe interrupted staging/publication;
-- stages Core into an immutable content-addressed release and activates it with an atomic selector;
-- publishes `${HOME}/.local/bin/dispatch` only when absent or already bound to this installation by an exact receipt;
-- verifies the complete active Core release tree and detects tampering;
-- provides non-mutating `doctor` and `verify` inspection.
-- provides receipt-bound uninstall planning, keep-data removal, explicit purge, lifecycle locking, and interruption recovery;
-- refuses user-scope removal when browser/runtime quiescence is unproven or privileged browser authority is present.
+The active checkout is `~/.dispatch/dispatch`. The bootstrap creates a
+per-user virtual environment at `~/.dispatch/venv` and installs this package
+editable from the active checkout. No wheel, release manifest, browser
+artifact, or Hermes inspection is involved.
 
 ## Commands
 
 ```text
-dispatch-installer layout
-dispatch-installer prepare --yes
-dispatch-installer doctor
-dispatch-installer verify
-dispatch-installer plan --manifest <path> --manifest-sha256 <digest>
+dispatch install --yes
+dispatch update
+dispatch repair --yes
+dispatch channel stable
+dispatch doctor
+dispatch verify
+dispatch setup --plugin handbook --yes
 dispatch uninstall --plan
 dispatch uninstall --yes
 dispatch uninstall --purge --yes
 ```
 
-`prepare` creates directories only. `dispatch uninstall` routes to the installer module before loading Core. Standard uninstall preserves `config` and `data`; `--purge` is the separately confirmed destructive mode. Unknown top-level files and unknown release entries are not silently deleted. Shared system packages and Hermes are always preserved. See [`../docs/uninstallation.md`](../docs/uninstallation.md).
-
-None of these commands configures accounts, credentials, authentication, browser sessions, collection, scheduling, delivery, or setup answers.
-
-## Hermes boundary
-
-Hermes is a user-supplied prerequisite. The installer does not install, configure, inspect, create profiles for, or otherwise mutate Hermes. No Hermes path or profile declaration appears in the installation manifest or installer layout.
-
-## Setup boundary
-
-Setup is a separate explicit phase. After a complete installation, the bootstrap offers **Start Setup** or **Skip for Now**. A skipped setup can later be started with:
+The final layout is:
 
 ```text
-dispatch setup
+~/.dispatch/{dispatch,venv,config,secrets,data,state,cache,logs,run}
+~/.dispatch/installation.json
+~/.local/bin/dispatch
+~/.config/systemd/user/dispatch.service
 ```
 
-## Current production block
-
-`packaging/installation-release-manifest.json` deliberately has `ready: false`, and planning schema version 1 rejects every `ready: true` declaration. Private GitHub source preparation does not create a public bootstrap URL or production `install` command. Approved online artifact URLs, a complete direct/transitive dependency closure, exact sizes/hashes, signature authority, authenticated private-asset transport or public distribution authority, browser generation payload, Ubuntu dependency receipt, sandbox/AppArmor receipt, privileged browser install/uninstall helper, launcher, service shutdown integration, and clean Ubuntu 24.04 acceptance remain required.
-
-The staging API already requires exact path-to-SHA-256 and dependency-metadata policies and rejects all extra Core or `.dist-info` members. The future production manifest version must carry or digest-bind those policies from `packaging/runtime-package-plan.json`; planning schema v1 intentionally cannot authorize them.
-
-## Ownership
-
-```text
-~/.dispatch/                         user-owned Dispatch installation and mutable roots
-${XDG_RUNTIME_DIR}/dispatch/          transient user sockets and locks
-/etc/dispatch/                        root-owned browser selector
-/opt/dispatch/browser-runtimes/       root-owned immutable browser generations
-```
-
-Receipts contain versions, hashes, sizes, paths, and policy state only. Business credentials, provider secrets, cookies, and browser sessions are never installation material.
+Default uninstall removes code, the virtual environment, cache, runtime,
+launcher, service, and installation record while preserving `config`, `secrets`, `data`,
+`state`, and `logs`. `--purge` removes the complete `~/.dispatch` tree.
+Setup installs selected built-in plugins editable from `dispatch/plugins` and
+writes `config/plugins.json`. Installation and repair install the pinned Core
+requirements plus Playwright Chromium system dependencies, then place Chromium
+under `~/.dispatch/cache/browser`; no root-owned browser runtime hierarchy is
+created. On a fresh Linux host, Playwright may request administrator
+authorization for its approved shared system libraries; denial fails the
+installation explicitly. Hermes is never inspected or modified.
