@@ -8,7 +8,7 @@ This repository is a source repository. GitHub visibility does not make an arbit
 2. Protect `main` and require the `Dispatch CI` checks before merge.
 3. Require pull-request review for Core, installer, workflows, path/security contracts, and plugin boundaries.
 4. Do not permit force pushes or branch deletion on `main` or `dev`.
-5. Require review of changes to `.github/workflows/`, Cloudflare deployment files, and `SECURITY.md`.
+5. Keep Cloudflare deployment configuration, credentials, and promotion tooling outside this source repository.
 
 Source CI needs no repository, environment, browser, account, or production secrets. It installs test dependencies and editable source components from the checkout.
 
@@ -24,7 +24,7 @@ Source CI needs no repository, environment, browser, account, or production secr
 
 `.github/workflows/release.yml` is manual-only. The operator supplies an existing tag. The job checks out that exact tag, verifies that `HEAD` equals both the tag target and current `main`, reruns source safety and tests, and creates a published GitHub Release with generated notes. It has no automatic trigger and uploads no wheels, manifests, checksums, installer files, or other Dispatch assets.
 
-`.github/workflows/deploy-bootstrap.yml` is also manual-only and uses the protected `production` environment. The operator supplies an exact approved 40-character commit. The job requires that commit to equal current `origin/main`, verifies source safety and the canonical bootstrap, copies root `install.sh` into the Cloudflare asset directory only in the runner workspace, and deploys it. Repository production secrets are available only to this deployment job.
+There is intentionally no Cloudflare deployment workflow or Cloudflare provider configuration in this source repository. Bootstrap promotion is an explicitly approved operator action performed from a private workspace using the exact latest immutable Release. GitHub Actions therefore requires no Cloudflare account identifier or API token.
 
 ## Distribution and Cloudflare authority
 
