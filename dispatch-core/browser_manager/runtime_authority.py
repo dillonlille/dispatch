@@ -8,15 +8,14 @@ owned process tree.
 """
 from __future__ import annotations
 
-from contextlib import contextmanager
+
 from dataclasses import dataclass
 import importlib.metadata
 import json
 import os
 from pathlib import Path
 import stat
-import threading
-from typing import Any, Callable, Iterator
+
 
 from .models import BrowserManagerError
 
@@ -70,8 +69,6 @@ class VerifiedBrowserInstallation:
     playwright_module: Path
     browsers_path: Path
 
-
-_PLAYWRIGHT_ENVIRONMENT_LOCK = threading.Lock()
 
 
 def user_browser_cache() -> Path:
@@ -130,23 +127,13 @@ def installed_playwright_version() -> str:
     return version
 
 
-def _load_sync_playwright() -> Callable[[], Any]:
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError as exc:
-        raise BrowserManagerError(
-            "playwright_missing",
-            "Playwright Sync API is not installed",
-        ) from exc
-    return sync_playwright
-
 
 def _driver_executable(module: Path) -> Path:
     name = "node.exe" if os.name == "nt" else "node"
     return (module.parent / "driver" / name).resolve(strict=False)
 
 
-def _chromium_version(module: Path) -> str | None:
+def _chromium_descriptor(module: Path) -> tuple[str, str | None] | None:
     manifest = module.parent / "driver" / "package" / "browsers.json"
     try:
         payload = json.loads(manifest.read_text(encoding="utf-8"))
@@ -158,9 +145,17 @@ def _chromium_version(module: Path) -> str | None:
     for browser in browsers:
         if not isinstance(browser, dict) or browser.get("name") != BROWSER_FAMILY:
             continue
+        revision = browser.get("revision")
         version = browser.get("browserVersion")
-        return version if isinstance(version, str) and version else None
+        if not isinstance(revision, str) or not revision.isdigit():
+            return None
+        return revision, version if isinstance(version, str) and version else None
     return None
+
+
+def _chromium_version(module: Path) -> str | None:
+    descriptor = _chromium_descriptor(module)
+    return None if descriptor is None else descriptor[1]
 
 
 def _cache_directory(path: Path) -> Path:
@@ -228,54 +223,17 @@ def _runtime_file(path: Path, boundary: Path, label: str, *, executable: bool) -
     return resolved
 
 
-@contextmanager
-def _playwright_cache_environment(path: Path) -> Iterator[None]:
-    """Make Playwright resolve browsers only from the Dispatch user cache."""
-
-    with _PLAYWRIGHT_ENVIRONMENT_LOCK:
-        original = os.environ.get("PLAYWRIGHT_BROWSERS_PATH")
-        os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(path)
-        try:
-            yield
-        finally:
-            if original is None:
-                os.environ.pop("PLAYWRIGHT_BROWSERS_PATH", None)
-            else:
-                os.environ["PLAYWRIGHT_BROWSERS_PATH"] = original
-
-
-def _resolve_chromium(cache: Path) -> Path:
-    factory = _load_sync_playwright()
-    context = factory()
-    playwright: Any | None = None
-    try:
-        playwright = context.start()
-        try:
-            candidate = Path(playwright.chromium.executable_path)
-        except (AttributeError, TypeError, ValueError) as exc:
-            raise BrowserManagerError(
-                "browser_runtime_missing",
-                "Playwright did not provide a Chromium executable",
-            ) from exc
-        return _runtime_file(candidate, cache, "Chromium executable", executable=True)
-    except BrowserManagerError:
-        raise
-    except Exception as exc:
-        raise BrowserManagerError(
-            "browser_runtime_missing",
-            "Playwright Chromium is not installed",
-        ) from exc
-    finally:
-        if playwright is not None:
-            try:
-                playwright.stop()
-            except Exception:
-                pass
-        elif hasattr(context, "__exit__"):
-            try:
-                context.__exit__(None, None, None)
-            except Exception:
-                pass
+def _resolve_chromium(cache: Path, module: Path) -> Path:
+    descriptor = _chromium_descriptor(module)
+    if descriptor is None:
+        raise BrowserManagerError("browser_runtime_missing", "Playwright Chromium metadata is invalid")
+    revision, _version = descriptor
+    root = cache / f"chromium-{revision}"
+    for relative in (("chrome-linux64", "chrome"), ("chrome-linux", "chrome")):
+        candidate = root.joinpath(*relative)
+        if candidate.exists() or candidate.is_symlink():
+            return _runtime_file(candidate, cache, "Chromium executable", executable=True)
+    raise BrowserManagerError("browser_runtime_missing", "Playwright Chromium is not installed")
 
 
 class BrowserRuntimeAuthority:
@@ -301,8 +259,7 @@ class BrowserRuntimeAuthority:
         module = installed_playwright_module()
         version = installed_playwright_version()
         cache = _cache_directory(self.__policy.browsers_path)
-        with _playwright_cache_environment(cache):
-            executable = _resolve_chromium(cache)
+        executable = _resolve_chromium(cache, module)
         control_executable = _runtime_file(
             _driver_executable(module),
             module.parent,

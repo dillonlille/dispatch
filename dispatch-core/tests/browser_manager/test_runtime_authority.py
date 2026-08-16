@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
@@ -16,31 +15,10 @@ from browser_manager.runtime_authority import (
 )
 
 
-class FakePlaywright:
-    def __init__(self, executable: Path) -> None:
-        self.chromium = SimpleNamespace(executable_path=str(executable))
-        self.stopped = False
-
-    def stop(self) -> None:
-        self.stopped = True
-
-
-class FakePlaywrightContext:
-    def __init__(self, playwright: FakePlaywright, observed: list[str | None]) -> None:
-        self.playwright = playwright
-        self.observed = observed
-
-    def start(self) -> FakePlaywright:
-        self.observed.append(os.environ.get("PLAYWRIGHT_BROWSERS_PATH"))
-        return self.playwright
-
-
 def fixture(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
-    *,
-    executable: Path | None = None,
-) -> tuple[BrowserRuntimeAuthority, Path, FakePlaywright, list[str | None]]:
+) -> tuple[BrowserRuntimeAuthority, Path, Path]:
     cache = tmp_path / "home" / ".dispatch" / "cache" / "browser"
     chromium = cache / "chromium-1234" / "chrome-linux64" / "chrome"
     chromium.parent.mkdir(parents=True)
@@ -61,32 +39,28 @@ def fixture(
         json.dumps(
             {
                 "browsers": [
-                    {"name": BROWSER_FAMILY, "browserVersion": "151.0.7922.34"}
+                    {
+                        "name": BROWSER_FAMILY,
+                        "revision": "1234",
+                        "browserVersion": "151.0.7922.34",
+                    }
                 ]
             }
         ),
         encoding="utf-8",
     )
 
-    selected = executable or chromium
-    playwright = FakePlaywright(selected)
-    observed: list[str | None] = []
     monkeypatch.setattr(authority_module, "user_browser_cache", lambda: cache)
     monkeypatch.setattr(authority_module, "installed_playwright_module", lambda: module)
     monkeypatch.setattr(authority_module, "installed_playwright_version", lambda: "1.62.0")
-    monkeypatch.setattr(
-        authority_module,
-        "_load_sync_playwright",
-        lambda: lambda: FakePlaywrightContext(playwright, observed),
-    )
-    return BrowserRuntimeAuthority(), chromium, playwright, observed
+    return BrowserRuntimeAuthority(), chromium, module
 
 
-def test_authority_resolves_user_cache_and_reports_versions(
+def test_authority_resolves_user_cache_without_starting_playwright(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    authority, chromium, playwright, observed = fixture(tmp_path, monkeypatch)
+    authority, chromium, _module = fixture(tmp_path, monkeypatch)
     monkeypatch.setenv("PLAYWRIGHT_BROWSERS_PATH", "/tmp/untrusted-playwright")
 
     installation = authority.load()
@@ -100,8 +74,6 @@ def test_authority_resolves_user_cache_and_reports_versions(
             tmp_path / "venv" / "site-packages" / "playwright" / "driver" / "node"
         ).resolve(),
     )
-    assert observed == [str((tmp_path / "home" / ".dispatch" / "cache" / "browser").resolve())] * 2
-    assert playwright.stopped is True
     assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == "/tmp/untrusted-playwright"
     assert inspection["ready"] is True
     assert inspection["browser_family"] == "chromium"
@@ -113,10 +85,13 @@ def test_authority_rejects_symlinked_runtime_file(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    authority, chromium, playwright, _observed = fixture(tmp_path, monkeypatch)
-    linked = chromium.with_name("chrome-link")
-    linked.symlink_to(chromium)
-    playwright.chromium.executable_path = str(linked)
+    authority, chromium, _module = fixture(tmp_path, monkeypatch)
+    outside = tmp_path / "outside-chrome"
+    outside.write_text("not a browser\n", encoding="utf-8")
+    outside.chmod(0o700)
+    chromium.unlink()
+    chromium.symlink_to(outside)
+
     with pytest.raises(BrowserManagerError) as error:
         authority.load()
     assert error.value.code == "browser_runtime_unsafe"
@@ -155,38 +130,31 @@ def test_browser_cache_rejects_symlink_before_resolution(
     assert error.value.code == "browser_runtime_unsafe"
 
 
-def test_authority_rejects_missing_or_non_executable_chromium(
+def test_authority_rejects_missing_non_executable_and_invalid_manifest(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    authority, chromium, _, _ = fixture(tmp_path, monkeypatch, executable=tmp_path / "missing-chrome")
-
+    authority, chromium, module = fixture(tmp_path, monkeypatch)
+    chromium.unlink()
     with pytest.raises(BrowserManagerError) as missing:
         authority.load()
     assert missing.value.code == "browser_runtime_missing"
 
+    authority, chromium, _module = fixture(tmp_path / "not-executable", monkeypatch)
     chromium.chmod(0o600)
-    authority, _, _, _ = fixture(tmp_path / "not-executable", monkeypatch)
-    executable = authority_module.user_browser_cache() / "chromium-1234" / "chrome-linux64" / "chrome"
-    executable.chmod(0o600)
     with pytest.raises(BrowserManagerError) as non_executable:
         authority.load()
     assert non_executable.value.code == "browser_runtime_missing"
 
-
-def test_authority_rejects_playwright_executable_outside_user_cache(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    authority, _, _, _ = fixture(tmp_path, monkeypatch, executable=tmp_path / "outside-chrome")
-    outside = tmp_path / "outside-chrome"
-    outside.write_text("not a browser\n", encoding="utf-8")
-    outside.chmod(0o700)
-
-    with pytest.raises(BrowserManagerError) as rejected:
+    authority, _chromium, module = fixture(tmp_path / "invalid-manifest", monkeypatch)
+    manifest = module.parent / "driver" / "package" / "browsers.json"
+    manifest.write_text(
+        json.dumps({"browsers": [{"name": BROWSER_FAMILY, "revision": "../escape"}]}),
+        encoding="utf-8",
+    )
+    with pytest.raises(BrowserManagerError) as invalid:
         authority.load()
-
-    assert rejected.value.code == "browser_runtime_unsafe"
+    assert invalid.value.code == "browser_runtime_missing"
 
 
 def test_inspect_reports_missing_playwright_without_mutating_environment(
