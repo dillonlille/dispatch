@@ -1,29 +1,24 @@
 schema_version: 1
-id: example-plugin
+id: example
 display_name: Example Plugin
 version: 0.1.0
-summary: Bounded read-only example showing the canonical Dispatch plugin manifest.
+summary: Bounded example showing the source-owned Dispatch plugin contract.
 owner:
-  data: example-plugin
-  team: Dispatch
+  data: example
+  team: Dispatch Maintainers
 paths:
   source: src
   tests: tests
-  database: db/example-plugin
-  artifacts: artifacts/example-plugin
-  state: plugins/example-plugin/state
-  staging: plugins/example-plugin/staging
-  locks: plugins/example-plugin/locks
-  receipts: plugins/example-plugin/receipts
+  data: plugins/example/data
 commands:
   test: ./scripts/test
   build: ./scripts/build
   verify: ./scripts/verify
   health: ./scripts/health
 components:
-  - id: query
+  - id: example-tool
     kind: hermes-tool
-    source: src/dispatch_example_plugin
+    source: src/dispatch_example
     capabilities:
       read_local_data: true
       mutate_data: false
@@ -33,22 +28,11 @@ components:
       direct_delivery: false
       long_running: false
     hermes:
-      package: dispatch_example_plugin
-      manifest: integration/hermes-plugins/dispatch_example_plugin/plugin.yaml
-      adapter: integration/hermes-plugins/dispatch_example_plugin/__init__.py
-      tool: dispatch_example_plugin
-      toolset: dispatch_example_plugin
+      package: dispatch_example
+      manifest: integration/hermes-plugins/dispatch_example/plugin.yaml
+      adapter: integration/hermes-plugins/dispatch_example/__init__.py
+      tool: dispatch_example
+      toolset: dispatch_example
     actions:
-      - name: health
-        privilege: health
-      - name: summary
-        privilege: read
-    runtime:
-      releases: runtime/releases
-      current_pointer: runtime/current
-      activation_record: config/release-manifests/dispatch-example-plugin.yaml
-      launcher_manifest: integration/hermes-plugins/dispatch_example_plugin/launcher-manifest.json
-retention:
-  keep_current: true
-  keep_rollback: 1
-  preserve_pinned: true
+      - {name: health, privilege: health}
+      - {name: summary, privilege: read}

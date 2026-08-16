@@ -4,17 +4,17 @@
 
 | Class | Use when | Must not be confused with |
 |---|---|---|
-| `hermes-tool` | The model invokes a bounded local tool | A service or script that has no Hermes registration |
-| `collector` | The component acquires and publishes data | A model read action |
-| `service` | A long-running bridge or broker is installed | A request/response tool |
+| `hermes-tool` | The model invokes a bounded local tool | A service or script with no Hermes registration |
+| `collector` | The component acquires and validates data | A model read action |
+| `service` | A long-running bridge or broker is needed | A request/response tool |
 | `auth-provider` | Privileged authentication is isolated | A domain collector |
-| `library` | Code is imported by another component | A deployable plugin |
-| `control-plane` | It schedules, queues, retries, or enforces shared policy | Domain collection implementation |
-| `retired` | Compatibility is retained but new activation is forbidden | An active fallback |
+| `library` | Code is imported by another component | A separately exposed plugin |
+| `control-plane` | It schedules, queues, retries, or reconciles work | Domain collection implementation |
+| `retired` | Compatibility is retained but new use is forbidden | An active fallback |
 
-## Preferred domain split
+## Preferred capability split
 
-For data-backed plugins, use separate components:
+For data-backed plugins:
 
 ```text
 query (hermes-tool)
@@ -22,9 +22,7 @@ query (hermes-tool)
 
 collector
   -> auth/browser/network
-  -> staging
-  -> domain validation
-  -> atomic publication
+  -> validation and publication
 
 coordinator
   -> schedule/queue/retry/reconciliation
@@ -33,25 +31,23 @@ delivery service
   -> Slack/Discord credentials and posting
 ```
 
-A query must not collect because data is absent or stale. It should report `not_loaded` or `stale` and let the caller explicitly request collection through the approved control plane.
+A query must not collect because data is absent or stale. It reports `not_configured`, `not_loaded`, or `stale` and leaves collection to an explicitly approved boundary.
 
-## Capability declaration
+## Metadata and data
 
-Declare all seven booleans for every component:
+Declare the plugin identity and effective capability labels in `pyproject.toml`:
 
-- `read_local_data`
-- `mutate_data`
-- `collect`
-- `network`
-- `authentication`
-- `direct_delivery`
-- `long_running`
+```toml
+[tool.dispatch]
+id = "example"
+capabilities = ["read_local_data"]
+```
 
-The declaration describes effective behavior, not intent. A subprocess that posts to Slack means `network` and `direct_delivery` are true even when the adapter itself contains no HTTP client.
+Keep the cloned source and tests under `plugins/<owner>`. Keep owner-managed data under `plugins/<owner>/data` or a documented operator-owned private root. Do not store secrets or private records in source-controlled files.
 
 ## Hermes actions
 
-Use generic action names within a namespaced tool. Assign one privilege to every action:
+Use generic action names within a namespaced tool. Assign a privilege to every action:
 
 - `read`
 - `health`
@@ -59,4 +55,4 @@ Use generic action names within a namespaced tool. Assign one privilege to every
 - `administration`
 - `direct-delivery`
 
-Mutation and direct delivery require corresponding capability declarations. Keep action count small enough for exact per-action input and output validation.
+Mutation and direct delivery require corresponding capability declarations. Keep action count small enough for exact per-action input and output validation. Require `action`, close the schema with `additionalProperties: false`, and bound every string, row count, byte count, range, and timeout.

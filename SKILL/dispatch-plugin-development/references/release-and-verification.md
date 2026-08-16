@@ -1,51 +1,48 @@
-# Release and verification workflow
+# Source test, verification, and health workflow
 
-## Build direction
+This reference keeps the historical filename for links, but the workflow is source-owned. There is no plugin artifact builder, immutable runtime copy, activation record, generation selector, or release receipt.
 
-```text
-src + package metadata + build script
-        -> staged candidate
-        -> deterministic member inventory
-        -> immutable runtime/releases/<digest>
+## Verification order
+
+From the plugin clone:
+
+```bash
+./scripts/test
+./scripts/build
+./scripts/verify
+./scripts/health
+python3 dispatch-core/plugin_policy.py .
 ```
 
-Do not include logs, locks, caches, bytecode, SQLite sidecars, browser state, editable virtualenv metadata, or temporary files in release identity.
+The commands must run against the maintained clone and use the plugin's own dependencies. `build` may compile or import source in memory; it must not publish files outside the clone. `health` is read-only and reports configuration, data, freshness, and capability readiness honestly.
 
-## Activation
+## Shared-environment setup
 
-One activation record declares:
+Install the clone editable into the shared Dispatch virtual environment:
 
-- active release;
-- rollback release;
-- launcher and launcher-manifest identities;
-- query/collector/service interfaces;
-- installed profile projections;
-- service units when applicable.
+```bash
+python -m pip install -e plugins/<owner>
+DISPATCH_ACTIVE_PLUGINS=<owner> dispatch plugin health <owner>
+```
 
-For owners with multiple independently released components, use one authority with an `interfaces` object. Every interface records its active runtime and SHA-256, exact rollback path/release/SHA-256, launcher manifest, and manager or service projections. Verify old rollback directories by explicit identity rather than assuming their names are digest prefixes.
+Core discovers the installed `dispatch.plugins` entry point and selects only IDs named by `DISPATCH_ACTIVE_PLUGINS`. Do not configure source paths or repository scans. `DISPATCH_PLUGIN_PATHS` is obsolete.
 
-A single-file interface records the launcher/artifact path and its digest. A directory-bundle interface records the release directory, release identity, and digest of its sealed member manifest; rollback uses the same shape. Directory identity is the directory name plus a verified member manifest—not a hash of the directory node itself. Launchers remain separate hash-bound selectors into the bundle.
+## Proof gates
 
-When projection directories are sealed read-only, activation may temporarily add owner write permission only around atomic leaf replacement. Restore the restrictive directory mode in `finally` and write the root activation authority after all hash-bound leaves. A failed or interrupted activation must leave either the old converged projection or secondary files that fail closed until the authority is repaired.
-
-`runtime/current`, manager executables, adjacent manager records, Hermes launcher manifests, installed profile links/copies, and effective service units must agree with it. Matching hashes are insufficient when the referenced JSON has the wrong semantic schema.
-
-## Required proof gates
-
-1. Source tests pass and discover a nonzero count.
-2. Build is deterministic for the same inputs.
-3. Release member set, modes, sizes, and hashes verify.
-4. Release contains no volatile members.
-5. Standard health command is read-only and succeeds honestly.
-6. Hermes registration and availability succeed when applicable.
-7. Every advertised action is exercised through the adapter.
-8. Installed projections match canonical integration bytes.
-9. All activation selectors converge.
-10. Rollback remains present and verified.
+1. Tests discover and pass a nonzero test count.
+2. Source syntax/build checks pass without generating a runtime copy.
+3. pyproject identity, capabilities, and entry point are valid.
+4. An optional root manifest ID matches pyproject metadata.
+5. Lifecycle scripts are executable and not group/world writable.
+6. The entry-point health response uses the exact seven-field envelope.
+7. Every Hermes projection registers exactly one tool with a closed action schema.
+8. Invalid input fails closed and health remains a valid readiness response.
+9. Owner data stays outside source and below its documented private root.
+10. The selected editable install responds through Core with the expected plugin ID.
 
 ## Readiness reporting
 
-Report separately:
+Report independently:
 
 - registration;
 - runtime integrity;
@@ -55,6 +52,6 @@ Report separately:
 - collector;
 - authentication;
 - delivery;
-- service health.
+- overall status.
 
-A safe fail-closed collector can still be unavailable. A healthy query plane can coexist with a degraded producer. State both facts.
+A healthy query plane may coexist with an unavailable collector. State both facts and never claim readiness from metadata alone.

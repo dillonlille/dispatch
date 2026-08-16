@@ -2,5 +2,4 @@
 set -eu
 cd -- "$(dirname -- "$0")/.."
 export PYTHONDONTWRITEBYTECODE=1
-export PYTHONPATH="$PWD/src:$PWD/paths/src:$PWD/health/src:$PWD/command-interface/src:$PWD/collection-manager/src:$PWD/authentication/src:$PWD/browser-manager/src"
-exec python3 -B -m dispatch_core.command_interface health
+exec python3 -B . health

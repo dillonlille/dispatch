@@ -1,67 +1,79 @@
-# Online installation and runtime dependencies
+# Online installation from Git
 
-Dispatch installation, upgrades, and repair require an online system. There is no offline bundle, wheelhouse, or offline acceptance contract.
+Dispatch installs from the reviewed Git repository. It does not download Core or installer wheels, release manifests, generated runtime trees, or package catalogs.
 
-## Current status
+## Recommended installation
 
-The standard-library installer foundation is implemented under `installer/`. It resolves and prepares the private `${HOME}/.dispatch` layout, verifies digest-pinned product manifests, transactionally stages and verifies content-addressed Core releases, publishes an internal stable launcher plus a receipt-owned `${HOME}/.local/bin/dispatch` command, and provides non-mutating doctor/verify inspection. It refuses to overwrite an unrelated command at that path. Hermes is assumed to be preinstalled; the installer does not inspect or configure it.
-
-The reviewed source manifest remains a fail-closed draft with `ready: false`; production finalization validates acceptance evidence, inserts the exact Core and installer artifact identities, and emits a separate immutable ready manifest. Version `0.0.7` is Core-only: its built-in plugin catalog is empty, while the generic installed-plugin contract remains available for a later release. User-service activation, Core-only setup, command publication and recovery, and clean-machine lifecycle acceptance are complete.
-
-The public domain serves the digest-pinned `0.0.7` bootstrap generated from `installer/deploy/cloudflare/install.sh.in`. `scripts/render-bootstrap` renders it only from a ready manifest and the exact installer wheel named by that manifest. The rendered script pins the manifest and installer bytes, then hands Core installation to the manifest-authorized installer.
-
-The private product-source repository is never an installation payload. It contains only Dispatch-owned built-in plugin source; external plugin source lives in separate repositories. Installation must not use `git clone`, a GitHub source ZIP, archive/zipball/tarball endpoints, raw plugin paths, moving `latest` aliases, or release-asset enumeration. One immutable product manifest identifies the exact mandatory Core closure and the optional built-in plugin catalog. Core has no mandatory third-party runtime dependency. Initial installation downloads only the installer and Core artifacts. `dispatch setup` downloads only selected, manifest-declared built-in plugin artifacts, verifies their exact dependency declaration and wheel contents, activates immutable plugin releases, and records a non-secret setup receipt. A plugin with an unimplemented capability or dependency closure fails closed rather than resolving it dynamically.
-
-Setup is a separate explicit phase. Once Core is active and setup-independent health succeeds, the bootstrap offers **Start Setup** or **Skip for Now**. `dispatch setup` supports interactive selection, repeatable `--plugin ID` selection, `--list`, and non-interactive Core-only completion with `--yes`. The `0.0.7` catalog is empty, so setup completes without downloading optional artifacts. Skipping leaves health at `setup_incomplete`; explicit Core-only setup changes health to `ready`. In future releases with selected plugins, Core requires every selected `dispatch.plugins` entry point to load and report ready before overall health becomes `ready`. Setup never records credentials, account configuration, MFA values, CAPTCHA answers, or provider secrets.
-
-## Core runtime
-
-The immediate distribution remains one package:
-
-```text
-dispatch-core==1.0.0
-Python >=3.11,<3.14
+```bash
+curl -fsSL https://dispatch.dillonlille.com/install.sh | bash
 ```
 
-Browser Manager adds the setup-time `browser` capability extra:
+When a controlling terminal is available, the bootstrap reads its prompts from `/dev/tty` and offers:
 
-```text
-playwright==1.62.0
-Chromium 151.0.7922.34 (Playwright revision 1234)
+1. **Latest Stable** — resolves the newest published, non-draft, non-prerelease GitHub Release, clones that release tag, and leaves the checkout detached at the tag.
+2. **Dev Branch** — clones the complete `dev` branch and leaves the checkout attached to `dev`.
+
+For automation or any process without a controlling terminal, select the channel explicitly:
+
+```bash
+curl -fsSL https://dispatch.dillonlille.com/install.sh | bash -s -- --channel stable
+curl -fsSL https://dispatch.dillonlille.com/install.sh | bash -s -- --channel dev
 ```
 
-Authentication adds the setup-time `authentication` capability extra:
+An omitted channel fails in noninteractive use. A specific stable version may be selected only when it is an existing published, non-draft, non-prerelease GitHub Release:
 
-```text
-cryptography==50.0.0
+```bash
+curl -fsSL https://dispatch.dillonlille.com/install.sh | bash -s -- --channel stable --version TAG
 ```
 
-The future production release manifest must identify every approved direct and transitive dependency artifact by immutable authority, size, and digest. Index resolution, dependency discovery, and repository-wide downloads are not an acceptable production closure.
+## Installed layout
 
-The online installer must acquire the approved Chromium artifact for the pinned package version, independently verify it, extract it into an immutable root-owned generation under `/opt/dispatch/browser-runtimes/`, verify required operating-system libraries, and run the bounded sandbox launch probe. Operating-system changes require explicit user approval whenever administrative privileges are needed. Per-user Core releases and mutable Dispatch roots live under `${DISPATCH_HOME}`, defaulting to `${HOME}/.dispatch`.
+The application checkout and dependency environment are separate from durable user data:
 
-Production Chromium must run with its sandbox enabled. On Linux hosts that restrict unprivileged user namespaces, the installer must provision and verify an approved AppArmor or Chromium sandbox configuration. Browser Manager fails closed and never silently retries with `--no-sandbox`. A development smoke test may use an explicit test-only executable wrapper on a restricted test host; that does not qualify as production sandbox evidence.
+```text
+~/.dispatch/
+├── dispatch/     selected Git checkout
+├── venv/         Python dependencies and editable installer/plugin adapters
+├── config/       durable private configuration
+├── secrets/      durable credentials and encryption material
+├── data/         durable application and plugin data
+├── state/        durable operational state
+├── cache/        disposable cache, including Playwright Chromium
+├── logs/         durable operational logs
+├── run/          disposable runtime files
+└── installation.json
+```
 
-`packaging/browser-runtime-plan.json` records the current development pin and executable proof. It remains explicitly incomplete until approved per-platform artifact URLs, archive sizes, SHA-256 digests, signature policy, and operating-system dependency receipts exist.
+Core runs directly from `~/.dispatch/dispatch/dispatch-core`; it is not installed as a wheel. The installer installs the pinned Core dependencies, selected built-in plugin dependencies, Playwright system dependencies, and a user-owned Chromium under `~/.dispatch/cache/browser`.
 
-After all checks pass, the installer reads three generation-bound receipts only from the fixed root-owned authority `/etc/dispatch/browser-runtime-evidence/<generation>/`: `os-dependencies.json`, `sandbox.json`, and `launch-probe.json`. It validates their closed shapes, ownership, modes, freshness, generation, source-manifest digest, executable digest, and approved sandbox policy; caller-supplied evidence paths or expected evidence digests are not accepted. The installer copies those verified receipts into the immutable generation, derives `installation-evidence.json` from them, binds all four evidence files into the mode-aware `tree-manifest.json`, and writes `installation-receipt.json`. The current synthetic tests create equivalent receipts only beneath temporary isolated authority paths; trusted production receipt producers are not implemented.
+On a fresh Linux host, Playwright's supported `install-deps` operation may invoke the host package manager and request normal administrator authorization for approved shared browser libraries. Its output remains visible; denial or an unavailable privilege path fails installation clearly rather than leaving a nominally ready browser.
 
-Activation atomically replaces only `/etc/dispatch/browser-runtime-active.json`. Rollback requires an explicit retained generation, re-verifies it completely, and uses that same one-selector atomic replacement; there is no independently updated `previous` selector that can diverge during interruption. The future install/upgrade transaction must durably record its explicit rollback target before activation. Browser Manager only reads and validates root-owned authority. It never downloads, extracts, activates, repairs, rolls back, or uninstalls browser assets and never executes from Hermes's or Playwright's shared cache.
+Sensitive roots and records are owner-only. The public launcher is `${HOME}/.local/bin/dispatch`, and the service is a systemd user service.
 
-The selected-generation Python bootstrap is also intentionally unimplemented. A release that declares a browser runtime remains blocked until a production launcher puts the selected generation's Python root and matching distribution metadata ahead of every ambient Playwright installation. This does not block the Core-only `0.0.7` release; installer doctor treats browser launch composition as not applicable when the installed release does not require a browser.
+## Setup and lifecycle
 
-## Download phases
+After installation, the bootstrap offers **Start Setup** or **Skip for Now**. Setup can also be run later:
 
-Network downloads are permitted only during:
+```text
+dispatch setup
+dispatch setup --plugin handbook --yes
+```
 
-- initial installation;
-- explicit upgrade;
-- explicit repair.
+Lifecycle commands are explicit:
 
-Authentication, collection, and uninstallation operations never download Python packages, browsers, drivers, or system dependencies. Missing, incomplete, unsafe, mismatched, or damaged installer authority produces a specific bounded error. Re-running the exact `0.0.7` bootstrap is the supported repair path: the installer re-verifies and reuses the immutable Core release, republishes the internal and public launchers plus manifest authority, retries service activation, and completes the durable install transaction. User-scope uninstall behavior is defined in [`uninstallation.md`](uninstallation.md); root-owned browser removal remains blocked pending the reviewed privileged helper.
+```text
+dispatch doctor
+dispatch update
+dispatch repair --yes
+dispatch channel stable
+dispatch channel dev
+dispatch uninstall --plan
+```
 
-## Verification
+A development update refuses a dirty checkout, fetches `origin/dev`, and merges with `--ff-only`. A stable update resolves a published release tag and checks it out detached. Channel switching uses a newly verified clone while preserving `config`, `secrets`, `data`, `state`, and `logs`.
 
-The installer must fail closed on an unsupported platform, incompatible Python, failed download, unexpected source, version mismatch, or digest mismatch. It stages a release before activation and preserves the previously activated application release for bounded rollback.
+## Boundaries
 
-Browser profiles and Authentication credentials are private state and are never part of installation artifacts, upgrade staging, package plans, or rollback releases.
+Installation may modify only the user-owned Dispatch layout, its launcher and systemd user unit, and approved Playwright operating-system dependencies. It never installs, modifies, inspects, or removes Hermes. Authentication and external integration setup remain explicit operations; installation does not read or import credentials.
+
+The canonical bootstrap is the repository-root `install.sh`. The manual production deployment workflow stages that exact reviewed file for Cloudflare; no second tracked bootstrap implementation exists.

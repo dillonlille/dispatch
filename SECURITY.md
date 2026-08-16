@@ -1,7 +1,9 @@
 # Security policy
 
-Dispatch is not yet a published release. Do not report vulnerabilities in public issues when they contain credentials, private data, or exploitable details.
+Do not report credentials, private data, or exploitable details in public issues. Until a formal security contact is published, contact the repository administrators through the approved private channel.
 
-Until a formal security contact is published, private-repository collaborators should contact the repository administrators through the approved internal channel. Do not place exploitable details in ordinary issues or discussions. Do not attach live databases, browser profiles, environment files, cookies, tokens, receipts, or business documents.
+Never attach live databases, browser profiles, environment files, cookies, tokens, private documents, logs, or business records to an issue, pull request, or repository checkout. Remove secrets from command output before sharing it.
 
-The public source boundary is enforced by `scripts/verify-source-export`, but automated scanning does not replace manual staged-file review.
+Dispatch source is installed from a reviewed Git ref. Stable and development channels are separate; do not make a production installation follow an unreviewed branch or mutable local copy. The repository contains no package, wheel, or release-manifest authority. The manual release workflow verifies the exact tag and reruns source tests before publishing release notes.
+
+`scripts/verify-source-export` scans the candidate tree for private data, secret-shaped values, unsafe paths, generated runtime state, and undeclared fixture data. It is a defense-in-depth check, not a substitute for reviewing `git diff --cached` and the final staged path list. Synthetic fixtures must be declared with provenance and a matching digest in `synthetic-data.json`.

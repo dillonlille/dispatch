@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -10,43 +9,6 @@ import unittest
 from pathlib import Path
 
 VERIFIER = Path(__file__).resolve().parents[1] / "scripts" / "verify-source-export"
-
-
-def write_scope(root: Path) -> None:
-    files: dict[str, dict[str, str]] = {}
-    manifest = root / "policy" / "public-source-scope.json"
-    for directory, dirnames, filenames in os.walk(root, followlinks=False):
-        current = Path(directory)
-        for name in dirnames:
-            path = current / name
-            if path.is_symlink():
-                files[path.relative_to(root).as_posix()] = {
-                    "kind": "symlink",
-                    "origin": "generated_public",
-                    "target": os.readlink(path),
-                }
-        for name in filenames:
-            path = current / name
-            if path == manifest:
-                continue
-            relative = path.relative_to(root).as_posix()
-            if path.is_symlink():
-                files[relative] = {
-                    "kind": "symlink",
-                    "origin": "generated_public",
-                    "target": os.readlink(path),
-                }
-            else:
-                files[relative] = {
-                    "kind": "file",
-                    "origin": "generated_public",
-                    "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
-                }
-    manifest.parent.mkdir(parents=True, exist_ok=True)
-    manifest.write_text(
-        json.dumps({"schema_version": 1, "files": files}, sort_keys=True),
-        encoding="utf-8",
-    )
 
 
 def invoke_verifier(root: Path) -> subprocess.CompletedProcess[str]:
@@ -59,7 +21,6 @@ def invoke_verifier(root: Path) -> subprocess.CompletedProcess[str]:
 
 
 def run_verifier(root: Path) -> subprocess.CompletedProcess[str]:
-    write_scope(root)
     return invoke_verifier(root)
 
 
@@ -78,15 +39,14 @@ class VerifySourceExportTests(unittest.TestCase):
         result = run_verifier(root)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
-    def test_unknown_path_outside_scope_fails(self) -> None:
+    def test_unlisted_source_file_is_checked_without_scope_manifest(self) -> None:
         temporary, root = self.make_root()
         self.addCleanup(temporary.cleanup)
-        write_scope(root)
         (root / "unreviewed.py").write_text("VALUE = 1\n", encoding="utf-8")
-        result = invoke_verifier(root)
-        self.assertNotEqual(result.returncode, 0)
+        result = run_verifier(root)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         payload = json.loads(result.stdout)
-        self.assertTrue(any("outside exact public source scope" in item for item in payload["errors"]))
+        self.assertEqual(payload["synthetic_declarations_checked"], 0)
 
     def test_database_and_environment_files_fail(self) -> None:
         temporary, root = self.make_root()

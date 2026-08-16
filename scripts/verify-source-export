@@ -14,7 +14,7 @@ from pathlib import Path
 
 MAX_FILE_SIZE = 2 * 1024 * 1024
 SYNTHETIC_MANIFEST = "synthetic-data.json"
-SOURCE_SCOPE_MANIFEST = "policy/public-source-scope.json"
+
 
 FORBIDDEN_DIR_NAMES = {
     ".mypy_cache",
@@ -171,62 +171,8 @@ def load_synthetic_manifest(root: Path, errors: list[str]) -> dict[str, dict]:
     return payload["files"]
 
 
-def load_source_scope(root: Path, errors: list[str]) -> dict[str, dict]:
-    path = root / SOURCE_SCOPE_MANIFEST
-    if not path.is_file() or path.is_symlink():
-        errors.append(f"{SOURCE_SCOPE_MANIFEST}: exact public source scope is required")
-        return {}
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
-        errors.append(f"{SOURCE_SCOPE_MANIFEST}: invalid JSON: {exc}")
-        return {}
-    files = payload.get("files")
-    if payload.get("schema_version") != 1 or not isinstance(files, dict):
-        errors.append(f"{SOURCE_SCOPE_MANIFEST}: requires schema_version=1 and an object named files")
-        return {}
-    for key, entry in files.items():
-        relative = Path(key) if isinstance(key, str) else Path("/")
-        if (
-            not isinstance(key, str)
-            or not key
-            or relative.is_absolute()
-            or any(part in {"", ".", ".."} for part in relative.parts)
-            or relative.as_posix() != key
-            or key == SOURCE_SCOPE_MANIFEST
-            or not isinstance(entry, dict)
-            or entry.get("kind") not in {"file", "symlink"}
-            or entry.get("origin") not in {"generated_public", "live_allowlist", "sanitized_live_source"}
-        ):
-            errors.append(f"{SOURCE_SCOPE_MANIFEST}: invalid scope entry: {key!r}")
-    return files
-
-
 def is_fixture(path: Path) -> bool:
     return bool(set(path.parts) & FIXTURE_DIR_NAMES) or path.suffix.lower() in DATA_SUFFIXES_REQUIRING_DECLARATION
-
-
-def validate_scope_entry(
-    relative: Path,
-    path: Path,
-    scope: dict[str, dict],
-    seen: set[str],
-    errors: list[str],
-) -> None:
-    key = relative.as_posix()
-    if key == SOURCE_SCOPE_MANIFEST:
-        return
-    entry = scope.get(key)
-    if not isinstance(entry, dict):
-        errors.append(f"{key}: unknown path outside exact public source scope")
-        return
-    seen.add(key)
-    if path.is_symlink():
-        if entry.get("kind") != "symlink" or entry.get("target") != os.readlink(path):
-            errors.append(f"{key}: symlink differs from public source scope")
-        return
-    if entry.get("kind") != "file" or entry.get("sha256") != sha256(path):
-        errors.append(f"{key}: file digest differs from public source scope")
 
 
 def validate_synthetic_declaration(
@@ -321,8 +267,7 @@ def verify(root: Path, max_file_size: int = MAX_FILE_SIZE) -> dict:
     symlinks_checked = 0
     declarations = load_synthetic_manifest(root, errors)
     declared_seen: set[str] = set()
-    scope = load_source_scope(root, errors)
-    scope_seen: set[str] = set()
+
 
     if not root.is_dir():
         return {"ok": False, "root": str(root), "errors": ["root is not a directory"]}
@@ -335,7 +280,6 @@ def verify(root: Path, max_file_size: int = MAX_FILE_SIZE) -> dict:
             path = current / name
             relative = path.relative_to(root)
             if path.is_symlink():
-                validate_scope_entry(relative, path, scope, scope_seen, errors)
                 symlinks_checked += 1
                 target = os.readlink(path)
                 resolved = (path.parent / target).resolve(strict=False)
@@ -356,7 +300,6 @@ def verify(root: Path, max_file_size: int = MAX_FILE_SIZE) -> dict:
             relative = path.relative_to(root)
             key = relative.as_posix()
             if path.is_symlink():
-                validate_scope_entry(relative, path, scope, scope_seen, errors)
                 symlinks_checked += 1
                 target = os.readlink(path)
                 resolved = (path.parent / target).resolve(strict=False)
@@ -369,7 +312,6 @@ def verify(root: Path, max_file_size: int = MAX_FILE_SIZE) -> dict:
                 continue
 
             files_checked += 1
-            validate_scope_entry(relative, path, scope, scope_seen, errors)
             lower_name = name.lower()
             suffix = path.suffix.lower()
             try:
@@ -406,9 +348,6 @@ def verify(root: Path, max_file_size: int = MAX_FILE_SIZE) -> dict:
     for key in declarations:
         if key not in declared_seen:
             errors.append(f"{SYNTHETIC_MANIFEST}: declaration is stale or points outside fixture/data scope: {key}")
-    for key in scope:
-        if key not in scope_seen:
-            errors.append(f"{SOURCE_SCOPE_MANIFEST}: declared path is missing from the candidate: {key}")
 
     if not (root / "README.md").is_file():
         warnings.append("README.md is missing")
@@ -421,7 +360,6 @@ def verify(root: Path, max_file_size: int = MAX_FILE_SIZE) -> dict:
         "files_checked": files_checked,
         "symlinks_checked": symlinks_checked,
         "synthetic_declarations_checked": len(declared_seen),
-        "scope_entries_checked": len(scope_seen),
         "errors": sorted(set(errors)),
         "warnings": sorted(set(warnings)),
     }

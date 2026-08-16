@@ -1,54 +1,41 @@
 #!/usr/bin/env python3
+"""Check that the Handbook source is directly buildable without artifacts."""
 from __future__ import annotations
 
-import importlib.util
 import json
-import tempfile
 from pathlib import Path
+import sys
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
-BUILDER = ROOT / "scripts" / "build_release.py"
+SOURCE = ROOT / "src"
 
 
-def load_builder():
-    spec = importlib.util.spec_from_file_location("public_handbook_builder", BUILDER)
-    if spec is None or spec.loader is None:
-        raise RuntimeError("builder_import_failed")
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
-    return module
+def envelope(ok: bool, status: str, data: dict, error: dict | None = None) -> dict:
+    return {
+        "ok": ok,
+        "action": "build",
+        "status": status,
+        "data": data,
+        "freshness": None,
+        "delivery": None,
+        "error": error,
+    }
 
 
 def main() -> int:
     try:
-        builder = load_builder()
-        with tempfile.TemporaryDirectory(prefix="handbook-a-") as left, tempfile.TemporaryDirectory(prefix="handbook-b-") as right:
-            first = builder.build(Path(left))
-            second = builder.build(Path(right))
-            if first["release_id"] != second["release_id"]:
-                raise RuntimeError("nondeterministic_release")
-        result = builder.build(builder.default_output())
-    except (OSError, RuntimeError, ValueError) as exc:
-        payload = {
-            "ok": False,
-            "action": "build",
-            "status": "error",
-            "data": {},
-            "freshness": None,
-            "delivery": None,
-            "error": {"code": "build_failed", "message": str(exc)[:512]},
-        }
-        print(json.dumps(payload, sort_keys=True))
+        project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+        plugin_id = project["tool"]["dispatch"]["id"]
+        files = sorted(SOURCE.rglob("*.py"))
+        if not files:
+            raise RuntimeError("source_tree_empty")
+        for path in files:
+            compile(path.read_text(encoding="utf-8"), str(path), "exec")
+    except (KeyError, OSError, SyntaxError, tomllib.TOMLDecodeError, TypeError, UnicodeError, ValueError, RuntimeError) as exc:
+        print(json.dumps(envelope(False, "error", {}, {"code": "source_check_failed", "message": str(exc)[:512]}), sort_keys=True))
         return 1
-    print(json.dumps({
-        "ok": True,
-        "action": "build",
-        "status": "ready",
-        "data": {"deterministic": True, **result},
-        "freshness": None,
-        "delivery": None,
-        "error": None,
-    }, sort_keys=True))
+    print(json.dumps(envelope(True, "ready", {"id": plugin_id, "source_files": len(files), "editable": True}), sort_keys=True))
     return 0
 
 

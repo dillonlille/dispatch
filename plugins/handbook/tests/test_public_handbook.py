@@ -140,19 +140,23 @@ def test_index_integrity_is_verified(tmp_path: Path) -> None:
     assert verified["chunk_count"] == 3
 
 
-def test_runtime_release_excludes_tests_and_synthetic_fixture() -> None:
-    build_path = ROOT / "scripts" / "build_release.py"
-    spec = importlib.util.spec_from_file_location("public_handbook_build", build_path)
-    assert spec is not None and spec.loader is not None
-    build_release = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(build_release)
-    members = {path.as_posix() for path in build_release.inputs(ROOT)}
-    assert "examples/synthetic-handbook.json" not in members
-    assert not any(member.startswith("tests/") for member in members)
+def test_source_scripts_do_not_build_or_verify_runtime_artifacts() -> None:
+    assert not (ROOT / "scripts" / "build_release.py").exists()
+    build = (ROOT / "scripts" / "build_component.py").read_text(encoding="utf-8")
+    verify = (ROOT / "scripts" / "verify_component.py").read_text(encoding="utf-8")
+    assert "runtime/releases" not in build
+    assert "build_release" not in build
+    assert "build_release" not in verify
 
 
-def test_package_publishes_the_simple_core_discovery_entry_point() -> None:
-    project = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+def test_package_metadata_declares_source_plugin_identity_and_capabilities() -> None:
+    payload = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
+    project = payload["project"]
+    assert project["dependencies"] == []
     assert project["entry-points"]["dispatch.plugins"] == {
         "handbook": "dispatch_handbook.service:handle"
+    }
+    assert payload["tool"]["dispatch"] == {
+        "id": "handbook",
+        "capabilities": ["read_local_data"],
     }

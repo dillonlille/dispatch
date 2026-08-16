@@ -1,707 +1,808 @@
+"""Explicit built-in plugin setup from the checked-out source tree."""
 from __future__ import annotations
 
 import argparse
-import configparser
+import base64
+import csv
 import hashlib
+import io
 import json
 import os
 import re
-import shutil
 import stat
 import subprocess
-import tempfile
-import zipfile
-from email.parser import BytesParser
-from pathlib import Path, PurePosixPath
-from typing import Iterable
+import sys
+import tomllib
+import uuid
+from collections.abc import Callable, Sequence
+from pathlib import Path
 
-from .core_release import _safe_members, _verify_record, sha256_file
-from .download import download_release_artifact
-from .layout import InstallLayout, InstallerError, atomic_json
-from .manifest import BuiltinPlugin, InstallationManifest, load_manifest
-from .output import emit
+from .layout import (
+    InstallLayout,
+    InstallerError,
+    assert_user_owned_directory,
+    atomic_json,
+    read_json,
+)
+from .service import service_unit_is_owned
+
+RunCommand = Callable[[Sequence[str], Path | None], subprocess.CompletedProcess[str]]
 
 
-_MAX_PLUGIN_WHEEL_FILES = 512
-_MAX_PLUGIN_WHEEL_MEMBER_BYTES = 64 * 1024 * 1024
-_APACHE_2_LICENSE_SHA256 = "c71d239df91726fc519c6eb72d318ec65820627232b2f796219e87dcf35d0ab4"
+def _run(command: Sequence[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(command, cwd=cwd, check=False, capture_output=True, text=True)
 
 
-def _fsync_directory(path: Path) -> None:
-    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+def _editable_metadata(source: Path) -> set[Path]:
+    roots = (source, source / "src")
+    return {
+        candidate
+        for root in roots
+        if root.is_dir() and not root.is_symlink()
+        for candidate in root.glob("*.egg-info")
+    }
+
+
+def _assert_editable_source_safe(source: Path) -> Path:
+    absolute = Path(os.path.abspath(source))
     try:
-        os.fsync(descriptor)
-    finally:
+        resolved = source.resolve(strict=True)
+    except OSError as exc:
+        raise InstallerError("editable_source_unsafe", "editable source is missing or unsafe") from exc
+    if resolved != absolute or source.is_symlink() or not source.is_dir():
+        raise InstallerError("editable_source_unsafe", "editable source aliases are not allowed")
+    for candidate in (source, *source.rglob("*")):
+        details = candidate.lstat()
+        if details.st_uid != os.geteuid() or candidate.is_symlink():
+            raise InstallerError("editable_source_unsafe", "editable source entries are unsafe")
+        if candidate != source and not (
+            stat.S_ISDIR(details.st_mode)
+            or (stat.S_ISREG(details.st_mode) and details.st_nlink == 1)
+        ):
+            raise InstallerError("editable_source_unsafe", "editable source entries are unsafe")
+    return absolute
+
+
+def _site_packages_for_python(python: Path) -> tuple[Path, tuple[int, int]]:
+    venv = python.parent.parent
+    try:
+        venv_resolved = venv.resolve(strict=True)
+    except OSError as exc:
+        raise InstallerError("editable_site_packages_unsafe", "virtual environment path is unsafe") from exc
+    if venv.is_symlink() or venv_resolved != Path(os.path.abspath(venv)):
+        raise InstallerError("editable_site_packages_unsafe", "virtual environment path is aliased")
+    candidates = sorted((python.parent.parent / "lib").glob("python*/site-packages"))
+    if len(candidates) != 1 or candidates[0].is_symlink() or not candidates[0].is_dir():
+        raise InstallerError("editable_site_packages_unsafe", "editable install site-packages is unsafe")
+    site_packages = candidates[0]
+    for ancestor in (venv, site_packages.parent.parent, site_packages.parent, site_packages):
+        try:
+            details = ancestor.lstat()
+            resolved = ancestor.resolve(strict=True)
+        except OSError as exc:
+            raise InstallerError("editable_site_packages_unsafe", "site-packages ancestors are unsafe") from exc
+        if (
+            ancestor.is_symlink()
+            or not stat.S_ISDIR(details.st_mode)
+            or details.st_uid != os.geteuid()
+            or stat.S_IMODE(details.st_mode) & 0o022
+            or not resolved.is_relative_to(venv.resolve(strict=True))
+        ):
+            raise InstallerError("editable_site_packages_unsafe", "site-packages ancestors are unsafe")
+    site_details = site_packages.lstat()
+    return site_packages, (site_details.st_dev, site_details.st_ino)
+
+
+def _canonical_distribution(value: str) -> str:
+    return re.sub(r"[-_.]+", "-", value).lower()
+
+
+def _reject_stale_direct_artifacts(site_packages: Path, name: str, normalized: str) -> None:
+    canonical = _canonical_distribution(name)
+    variants = {
+        name.lower(),
+        normalized.lower(),
+        canonical,
+        canonical.replace("-", "_"),
+        canonical.replace("-", "."),
+    }
+    suspects: set[Path] = set()
+    for artifact in site_packages.iterdir():
+        lowered = artifact.name.lower()
+        if lowered.endswith(".egg-link"):
+            suspects.add(artifact)
+        if lowered.endswith(".dist-info") and any(
+            lowered.startswith(f"{variant}-") for variant in variants
+        ):
+            suspects.add(artifact)
+        if lowered.endswith(".pth") and lowered.startswith("__editable__."):
+            suspects.add(artifact)
+        if lowered.endswith(".py") and lowered.startswith("__editable___"):
+            suspects.add(artifact)
+        if lowered.endswith(".dist-info") and artifact.is_symlink():
+            suspects.add(artifact)
+        elif lowered.endswith(".dist-info") and artifact.is_dir():
+            metadata = artifact / "METADATA"
+            if metadata.is_file() and not metadata.is_symlink():
+                try:
+                    lines = metadata.read_text(encoding="utf-8", errors="strict").splitlines()
+                except (OSError, UnicodeError):
+                    suspects.add(artifact)
+                    continue
+                for line in lines:
+                    if line.startswith("Name: ") and _canonical_distribution(line[6:].strip()) == canonical:
+                        suspects.add(artifact)
+                        break
+    existing = [path for path in suspects if path.exists() or path.is_symlink()]
+    if existing:
+        raise InstallerError(
+            "editable_stale_metadata",
+            "legacy or duplicate editable metadata must be removed by replacement-environment repair",
+        )
+
+
+def _direct_generation_owned(path: Path, name: str, source: Path) -> bool:
+    if path.is_symlink() or not path.is_dir():
+        return False
+    for candidate in (path, *path.rglob("*")):
+        details = candidate.lstat()
+        if (
+            details.st_uid != os.geteuid()
+            or candidate.is_symlink()
+            or stat.S_IMODE(details.st_mode) & 0o022
+            or (
+                candidate != path
+                and not (
+                    stat.S_ISDIR(details.st_mode)
+                    or (stat.S_ISREG(details.st_mode) and details.st_nlink == 1)
+                )
+            )
+        ):
+            return False
+    receipt = path / ".dispatch-direct.json"
+    try:
+        payload = json.loads(receipt.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return payload == {
+        "contains_secrets": False,
+        "distribution": name,
+        "schema_version": 1,
+        "source": str(source),
+    }
+
+
+def _open_private_directory(path: Path, expected_identity: tuple[int, int]) -> int:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    try:
+        descriptor = os.open(path, flags)
+    except OSError as exc:
+        raise InstallerError("editable_site_packages_unsafe", "private directory could not be pinned") from exc
+    try:
+        opened = os.fstat(descriptor)
+        current = path.lstat()
+        if (
+            not stat.S_ISDIR(opened.st_mode)
+            or opened.st_uid != os.geteuid()
+            or stat.S_IMODE(opened.st_mode) & 0o022
+            or (opened.st_dev, opened.st_ino) != expected_identity
+            or (opened.st_dev, opened.st_ino) != (current.st_dev, current.st_ino)
+        ):
+            raise InstallerError("editable_site_packages_unsafe", "private directory identity changed")
+    except BaseException:
         os.close(descriptor)
+        raise
+    return descriptor
 
 
-def _atomic_bytes(path: Path, content: bytes, *, mode: int = 0o600) -> None:
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
+def _directory_identity_matches(path: Path, descriptor: int) -> bool:
     try:
-        os.fchmod(descriptor, mode)
+        current = path.lstat()
+        opened = os.fstat(descriptor)
+    except OSError:
+        return False
+    return (
+        not path.is_symlink()
+        and stat.S_ISDIR(current.st_mode)
+        and (current.st_dev, current.st_ino) == (opened.st_dev, opened.st_ino)
+    )
+
+
+def _atomic_private_bytes_at(directory: int, name: str, payload: bytes) -> None:
+    temporary_name = f".{name}.{uuid.uuid4().hex}"
+    flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+    descriptor = os.open(temporary_name, flags, 0o600, dir_fd=directory)
+    try:
+        os.fchmod(descriptor, 0o600)
         with os.fdopen(descriptor, "wb") as stream:
             descriptor = -1
-            stream.write(content)
+            stream.write(payload)
             stream.flush()
             os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        _fsync_directory(path.parent)
+        os.replace(temporary_name, name, src_dir_fd=directory, dst_dir_fd=directory)
+        os.fsync(directory)
     finally:
         if descriptor >= 0:
             os.close(descriptor)
-        temporary.unlink(missing_ok=True)
+        try:
+            os.unlink(temporary_name, dir_fd=directory)
+        except FileNotFoundError:
+            pass
 
 
-def persist_release_manifest(
-    layout: InstallLayout,
-    source: Path,
-    *,
-    expected_sha256: str,
-    product_version: str,
-) -> Path:
-    content = source.read_bytes()
-    observed = hashlib.sha256(content).hexdigest()
-    if observed != expected_sha256:
-        raise InstallerError("manifest_digest_mismatch", "installation manifest SHA-256 differs")
-    destination = layout.state / "install" / "release-manifest.json"
-    _atomic_bytes(destination, content)
-    atomic_json(
-        layout.state / "install" / "release.json",
-        {
-            "schema_version": 1,
-            "product_version": product_version,
-            "manifest": str(destination),
-            "manifest_sha256": observed,
-            "contains_secrets": False,
-        },
-        mode=0o600,
-    )
-    return destination
-
-
-def load_installed_manifest(layout: InstallLayout) -> InstallationManifest:
-    receipt_path = layout.state / "install" / "release.json"
-    if receipt_path.is_symlink() or not receipt_path.is_file() or receipt_path.stat().st_size > 8192:
-        raise InstallerError("setup_release_receipt_missing", "installed release receipt is missing or unsafe")
+def _read_bytes_at(directory: int, name: str) -> bytes:
+    descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=directory)
     try:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise InstallerError("setup_release_receipt_invalid", "installed release receipt is invalid") from exc
-    manifest_path = layout.state / "install" / "release-manifest.json"
-    if (
-        set(receipt) != {
-            "schema_version",
-            "product_version",
-            "manifest",
-            "manifest_sha256",
-            "contains_secrets",
-        }
-        or receipt.get("schema_version") != 1
-        or receipt.get("manifest") != str(manifest_path)
-        or receipt.get("contains_secrets") is not False
-        or not isinstance(receipt.get("manifest_sha256"), str)
-        or re.fullmatch(r"[0-9a-f]{64}", receipt["manifest_sha256"]) is None
-    ):
-        raise InstallerError("setup_release_receipt_invalid", "installed release receipt is invalid")
-    manifest = load_manifest(manifest_path, expected_sha256=receipt["manifest_sha256"])
-    if not manifest.ready or manifest.product_version != receipt.get("product_version"):
-        raise InstallerError("setup_release_authority_invalid", "installed release authority is not ready")
-    return manifest
-
-
-_SETUP_RECEIPT_FIELDS = {
-    "schema_version",
-    "status",
-    "product_version",
-    "selected_plugins",
-    "plugins",
-    "contains_secrets",
-}
-
-
-def _safe_json_receipt(path: Path, *, maximum: int, code: str) -> tuple[dict[str, object], bytes]:
-    try:
-        details = path.lstat()
+        details = os.fstat(descriptor)
         if (
             not stat.S_ISREG(details.st_mode)
             or details.st_uid != os.geteuid()
             or details.st_nlink != 1
-            or stat.S_IMODE(details.st_mode) != 0o600
-            or details.st_size > maximum
+            or stat.S_IMODE(details.st_mode) & 0o022
         ):
-            raise InstallerError(code, f"receipt is unsafe: {path}")
-        content = path.read_bytes()
-        payload = json.loads(content)
-    except InstallerError:
-        raise
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise InstallerError(code, f"receipt is invalid: {path}") from exc
-    if not isinstance(payload, dict):
-        raise InstallerError(code, f"receipt is invalid: {path}")
-    return payload, content
+            raise InstallerError("editable_site_packages_unsafe", "direct-source file is unsafe")
+        with os.fdopen(descriptor, "rb") as stream:
+            descriptor = -1
+            return stream.read()
+    finally:
+        if descriptor >= 0:
+            os.close(descriptor)
 
 
-def prepare_core_only_setup_migration(layout: InstallLayout, target: InstallationManifest) -> bool:
-    """Durably authorize only an empty Core-only setup receipt for a new product manifest."""
-    setup_path = layout.state / "install" / "setup.json"
-    migration_path = layout.state / "install" / "setup-migration.json"
-    if migration_path.exists():
-        migration, _ = _safe_json_receipt(
-            migration_path, maximum=16 * 1024, code="setup_migration_invalid"
-        )
-        if (
-            set(migration)
-            != {
-                "schema_version",
-                "status",
-                "from_product_version",
-                "to_product_version",
-                "setup_sha256",
-                "migrated_setup",
-                "migrated_setup_sha256",
-                "contains_secrets",
-            }
-            or migration.get("schema_version") != 1
-            or migration.get("status") != "prepared"
-            or migration.get("to_product_version") != target.product_version
-            or migration.get("contains_secrets") is not False
-            or not isinstance(migration.get("migrated_setup"), dict)
-        ):
-            raise InstallerError("setup_migration_invalid", "setup migration receipt is invalid")
-        setup, content = _safe_json_receipt(setup_path, maximum=64 * 1024, code="setup_migration_invalid")
-        observed = hashlib.sha256(content).hexdigest()
-        if observed not in {migration.get("setup_sha256"), migration.get("migrated_setup_sha256")}:
-            raise InstallerError("setup_migration_invalid", "setup receipt differs from migration authority")
-        return True
-    if not setup_path.exists():
-        return False
-    previous = load_installed_manifest(layout)
-    setup, content = _safe_json_receipt(setup_path, maximum=64 * 1024, code="setup_migration_invalid")
-    if setup.get("product_version") == target.product_version:
-        return False
-    if (
-        set(setup) != _SETUP_RECEIPT_FIELDS
-        or setup.get("schema_version") != 1
-        or setup.get("status") != "complete"
-        or setup.get("contains_secrets") is not False
-        or setup.get("product_version") != previous.product_version
-        or setup.get("selected_plugins") != []
-        or setup.get("plugins") != []
-        or previous.builtin_plugins
-        or target.builtin_plugins
-    ):
-        raise InstallerError(
-            "setup_migration_unsupported",
-            "only an empty verified Core-only setup receipt can migrate between product manifests",
-        )
-    migrated = dict(setup)
-    migrated["product_version"] = target.product_version
-    migrated_content = (json.dumps(migrated, sort_keys=True, separators=(",", ":")) + "\n").encode("utf-8")
-    atomic_json(
-        migration_path,
-        {
-            "schema_version": 1,
-            "status": "prepared",
-            "from_product_version": previous.product_version,
-            "to_product_version": target.product_version,
-            "setup_sha256": hashlib.sha256(content).hexdigest(),
-            "migrated_setup": migrated,
-            "migrated_setup_sha256": hashlib.sha256(migrated_content).hexdigest(),
-            "contains_secrets": False,
-        },
-        mode=0o600,
-    )
-    return True
+def _open_child_private_directory(parent: int, name: str) -> int:
+    descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+    details = os.fstat(descriptor)
+    if details.st_uid != os.geteuid() or stat.S_IMODE(details.st_mode) & 0o022:
+        os.close(descriptor)
+        raise InstallerError("editable_site_packages_unsafe", "direct-source generation is unsafe")
+    return descriptor
 
 
-def complete_core_only_setup_migration(layout: InstallLayout, target: InstallationManifest) -> None:
-    migration_path = layout.state / "install" / "setup-migration.json"
-    if not migration_path.exists():
-        return
-    migration, _ = _safe_json_receipt(migration_path, maximum=16 * 1024, code="setup_migration_invalid")
-    migrated_setup = migration.get("migrated_setup")
-    if (
-        migration.get("schema_version") != 1
-        or migration.get("status") != "prepared"
-        or migration.get("to_product_version") != target.product_version
-        or migration.get("contains_secrets") is not False
-        or not isinstance(migrated_setup, dict)
-    ):
-        raise InstallerError("setup_migration_invalid", "setup migration receipt is invalid")
-    setup_path = layout.state / "install" / "setup.json"
-    _, content = _safe_json_receipt(setup_path, maximum=64 * 1024, code="setup_migration_invalid")
-    observed = hashlib.sha256(content).hexdigest()
-    if observed == migration.get("setup_sha256"):
-        atomic_json(setup_path, migrated_setup, mode=0o600)
-        _, migrated_content = _safe_json_receipt(
-            setup_path, maximum=64 * 1024, code="setup_migration_invalid"
-        )
-        observed = hashlib.sha256(migrated_content).hexdigest()
-    if observed != migration.get("migrated_setup_sha256"):
-        raise InstallerError("setup_migration_invalid", "migrated setup receipt differs from authority")
-    migration_path.unlink()
-    _fsync_directory(migration_path.parent)
-
-
-def active_plugins(layout: InstallLayout) -> list[tuple[str, Path]]:
-    setup_path = layout.state / "install" / "setup.json"
-    if not setup_path.exists():
-        return []
-    if setup_path.is_symlink() or not setup_path.is_file() or setup_path.stat().st_size > 64 * 1024:
-        raise InstallerError("setup_receipt_unsafe", "setup receipt is unsafe")
+def _remove_tree_at(parent: int, name: str) -> None:
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    child = os.open(name, flags, dir_fd=parent)
     try:
-        receipt = json.loads(setup_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise InstallerError("setup_receipt_invalid", "setup receipt is invalid") from exc
-    if (
-        set(receipt) != {
-            "schema_version",
-            "status",
-            "product_version",
-            "selected_plugins",
-            "plugins",
-            "contains_secrets",
-        }
-        or receipt.get("schema_version") != 1
-        or receipt.get("status") != "complete"
-        or receipt.get("contains_secrets") is not False
-        or not isinstance(receipt.get("selected_plugins"), list)
-        or not isinstance(receipt.get("plugins"), list)
-    ):
-        raise InstallerError("setup_receipt_invalid", "setup receipt is invalid")
-    manifest = load_installed_manifest(layout)
-    if receipt.get("product_version") != manifest.product_version:
-        raise InstallerError("setup_receipt_invalid", "setup product version differs from release authority")
-    catalog = {plugin.id: plugin for plugin in manifest.builtin_plugins}
-    plugins: list[tuple[str, Path]] = []
-    seen: set[str] = set()
-    for plugin in receipt["plugins"]:
-        if not isinstance(plugin, dict) or set(plugin) != {
-            "id",
-            "package",
-            "version",
-            "release_id",
-            "site_packages",
-            "capabilities",
-        }:
-            raise InstallerError("setup_receipt_invalid", "setup plugin receipt is invalid")
-        plugin_id = plugin.get("id")
-        release_id = plugin.get("release_id")
-        if (
-            not isinstance(plugin_id, str)
-            or plugin_id in seen
-            or re.fullmatch(r"[a-z0-9]+(?:-[a-z0-9]+)*", plugin_id) is None
-            or not isinstance(release_id, str)
-        ):
-            raise InstallerError("setup_receipt_invalid", "setup plugin identity is invalid")
-        expected = layout.plugins / plugin_id / "releases" / release_id / "site-packages"
-        authority = catalog.get(plugin_id)
-        if (
-            authority is None
-            or plugin.get("package") != authority.package
-            or plugin.get("version") != authority.version
-            or plugin.get("capabilities") != list(authority.capabilities)
-            or plugin.get("site_packages") != str(expected)
-            or expected.is_symlink()
-            or not expected.is_dir()
-        ):
-            raise InstallerError("setup_plugin_release_invalid", "active plugin release is missing or unsafe")
-        selector = layout.plugins / plugin_id / "active.json"
+        for entry in os.listdir(child):
+            details = os.stat(entry, dir_fd=child, follow_symlinks=False)
+            if stat.S_ISDIR(details.st_mode):
+                _remove_tree_at(child, entry)
+            else:
+                os.unlink(entry, dir_fd=child)
+    finally:
+        os.close(child)
+    os.rmdir(name, dir_fd=parent)
+
+
+def _remove_tree_at_deferred(parent: int, name: str) -> None:
+    interruption: BaseException | None = None
+    while True:
         try:
-            selector_payload = json.loads(selector.read_text(encoding="utf-8"))
-        except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-            raise InstallerError("setup_plugin_selector_invalid", "active plugin selector is invalid") from exc
-        if (
-            selector.is_symlink()
-            or selector_payload.get("active") != release_id
-            or selector_payload.get("artifact_sha256") != authority.artifact.sha256
-        ):
-            raise InstallerError("setup_plugin_selector_invalid", "active plugin selector differs from setup receipt")
-        _verify_plugin_release(expected.parent, authority)
-        seen.add(plugin_id)
-        plugins.append((plugin_id, expected))
-    if receipt["selected_plugins"] != [plugin["id"] for plugin in receipt["plugins"]]:
-        raise InstallerError("setup_receipt_invalid", "setup plugin selection differs from installed plugins")
-    return plugins
-
-
-def active_plugin_paths(layout: InstallLayout) -> list[Path]:
-    return [path for _plugin_id, path in active_plugins(layout)]
-
-
-def _plugin_wheel_identity(wheel: Path, plugin: BuiltinPlugin, core_version: str) -> dict[str, zipfile.ZipInfo]:
-    try:
-        archive = zipfile.ZipFile(wheel)
-    except (OSError, zipfile.BadZipFile) as exc:
-        raise InstallerError("plugin_wheel_invalid", "built-in plugin artifact is not a valid wheel") from exc
-    with archive:
-        members = _safe_members(archive)
-        metadata_names = [name for name in members if name.endswith(".dist-info/METADATA")]
-        record_names = [name for name in members if name.endswith(".dist-info/RECORD")]
-        wheel_names = [name for name in members if name.endswith(".dist-info/WHEEL")]
-        top_level_names = [name for name in members if name.endswith(".dist-info/top_level.txt")]
-        entry_point_names = [name for name in members if name.endswith(".dist-info/entry_points.txt")]
-        license_names = [name for name in members if name.endswith(".dist-info/licenses/LICENSE")]
-        if not all(
-            len(names) == 1
-            for names in (
-                metadata_names,
-                record_names,
-                wheel_names,
-                top_level_names,
-                entry_point_names,
-                license_names,
-            )
-        ):
-            raise InstallerError("plugin_wheel_metadata", "built-in plugin wheel metadata set is invalid")
-        metadata_root = metadata_names[0].removesuffix("METADATA")
-        if any(
-            not name.startswith(metadata_root)
-            for name in (
-                record_names[0],
-                wheel_names[0],
-                top_level_names[0],
-                entry_point_names[0],
-                license_names[0],
-            )
-        ):
-            raise InstallerError("plugin_wheel_metadata", "built-in plugin metadata roots differ")
-        metadata = BytesParser().parsebytes(archive.read(members[metadata_names[0]]))
-        name = metadata.get("Name", "").lower().replace("_", "-")
-        version = metadata.get("Version", "")
-        expected_root = f"{plugin.package.replace('-', '_')}-{plugin.version}.dist-info/"
-        if name != plugin.package or version != plugin.version or metadata_root != expected_root:
-            raise InstallerError("plugin_wheel_identity", "built-in plugin wheel identity differs from release authority")
-        if metadata.get("License-Expression") != "Apache-2.0" or hashlib.sha256(
-            archive.read(members[license_names[0]])
-        ).hexdigest() != _APACHE_2_LICENSE_SHA256:
-            raise InstallerError("plugin_wheel_license", "built-in plugin wheel license differs from Apache-2.0 policy")
-        if metadata.get("Requires-Python") != "<3.14,>=3.11":
-            raise InstallerError("plugin_wheel_python", "built-in plugin Python requirement differs from policy")
-        if (
-            metadata.get_all("Requires-Dist", []) != list(plugin.requires_dist)
-            or f"dispatch-core=={core_version}" not in plugin.requires_dist
-        ):
-            raise InstallerError("plugin_wheel_dependencies", "built-in plugin dependency closure differs from policy")
-        top_levels = archive.read(members[top_level_names[0]]).decode("utf-8").splitlines()
-        if len(top_levels) != 1 or re.fullmatch(r"dispatch_[a-z0-9_]+", top_levels[0]) is None:
-            raise InstallerError("plugin_wheel_top_level", "built-in plugin top-level package is invalid")
-        package_root = f"{top_levels[0]}/"
-        entry_points = configparser.ConfigParser(interpolation=None, strict=True)
+            os.stat(name, dir_fd=parent, follow_symlinks=False)
+        except FileNotFoundError:
+            break
         try:
-            entry_points.read_string(archive.read(members[entry_point_names[0]]).decode("utf-8"))
-        except (configparser.Error, UnicodeError) as exc:
-            raise InstallerError("plugin_wheel_entry_point", "built-in plugin entry point metadata is invalid") from exc
-        if not entry_points.has_section("dispatch.plugins") or set(entry_points["dispatch.plugins"]) != {plugin.id}:
-            raise InstallerError(
-                "plugin_wheel_entry_point",
-                "built-in plugin must publish one dispatch.plugins entry point matching its id",
-            )
-        target = entry_points["dispatch.plugins"][plugin.id].strip()
-        if re.fullmatch(
-            rf"{re.escape(top_levels[0])}(?:\.[a-zA-Z_][a-zA-Z0-9_]*)*:[a-zA-Z_][a-zA-Z0-9_]*",
-            target,
-        ) is None:
-            raise InstallerError("plugin_wheel_entry_point", "built-in plugin entry point target is invalid")
-        if any(
-            name.endswith(".pth")
-            or ".data/" in name
-            or (not name.startswith(package_root) and not name.startswith(metadata_root))
-            for name in members
-        ):
-            raise InstallerError("plugin_wheel_scope", "built-in plugin wheel contains unapproved members")
-        wheel_metadata = BytesParser().parsebytes(archive.read(members[wheel_names[0]]))
-        if wheel_metadata.get("Root-Is-Purelib", "").lower() != "true" or wheel_metadata.get_all("Tag", []) != [
-            "py3-none-any"
-        ]:
-            raise InstallerError("plugin_wheel_tag", "built-in plugin wheel platform tag differs from policy")
-        _verify_record(archive, members, record_names[0])
-        return members
+            _remove_tree_at(parent, name)
+        except (KeyboardInterrupt, SystemExit) as exc:
+            if interruption is None:
+                interruption = exc
+            continue
+    if interruption is not None:
+        raise interruption
 
 
-def _extract_plugin_wheel(wheel: Path, site_packages: Path, members: Iterable[str]) -> None:
-    site_packages.mkdir(mode=0o700)
-    with zipfile.ZipFile(wheel) as archive:
-        for name in sorted(members):
-            relative = PurePosixPath(name)
-            destination = site_packages.joinpath(*relative.parts)
-            destination.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
-            descriptor = os.open(destination, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o444)
-            try:
-                with archive.open(name) as source:
-                    while chunk := source.read(64 * 1024):
-                        remaining = memoryview(chunk)
-                        while remaining:
-                            written = os.write(descriptor, remaining)
-                            if written <= 0:
-                                raise InstallerError("plugin_extract_write", "built-in plugin extraction write failed")
-                            remaining = remaining[written:]
-                os.fsync(descriptor)
-            finally:
-                os.close(descriptor)
-    for directory in sorted((path for path in site_packages.rglob("*") if path.is_dir()), reverse=True):
-        directory.chmod(0o555)
-    site_packages.chmod(0o555)
-
-
-def _plugin_tree(site_packages: Path) -> list[dict[str, object]]:
-    entries: list[dict[str, object]] = []
-    count = 0
-    total_size = 0
-    for path in site_packages.rglob("*"):
-        if path.is_symlink():
-            raise InstallerError("plugin_release_symlink", "built-in plugin release contains a symlink")
-        if path.is_file():
-            size = path.stat().st_size
-            count += 1
-            total_size += size
-            if (
-                count > _MAX_PLUGIN_WHEEL_FILES
-                or size > _MAX_PLUGIN_WHEEL_MEMBER_BYTES
-                or total_size > 128 * 1024 * 1024
-            ):
-                raise InstallerError("plugin_release_bounds", "built-in plugin release exceeds verification bounds")
-            entries.append(
-                {
-                    "path": path.relative_to(site_packages).as_posix(),
-                    "size": size,
-                    "sha256": sha256_file(path),
-                    "mode": f"{stat.S_IMODE(path.stat().st_mode):04o}",
-                }
-            )
-    return sorted(entries, key=lambda item: str(item["path"]))
-
-
-def _verify_plugin_release(release: Path, plugin: BuiltinPlugin) -> Path:
-    if release.is_symlink() or not release.is_dir() or stat.S_IMODE(release.stat().st_mode) != 0o555:
-        raise InstallerError("plugin_release_invalid", "built-in plugin release root is unsafe")
-    receipt_path = release / "release-receipt.json"
-    tree_path = release / "tree-manifest.json"
-    site_packages = release / "site-packages"
-    for path in (receipt_path, tree_path):
-        if (
-            path.is_symlink()
-            or not path.is_file()
-            or path.stat().st_size > 1024 * 1024
-            or stat.S_IMODE(path.stat().st_mode) != 0o444
-        ):
-            raise InstallerError("plugin_release_invalid", "built-in plugin release metadata is unsafe")
-    try:
-        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        tree = json.loads(tree_path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
-        raise InstallerError("plugin_release_invalid", "built-in plugin release metadata is invalid") from exc
-    if (
-        set(receipt) != {
-            "schema_version",
-            "id",
-            "distribution",
-            "version",
-            "artifact",
-            "tree_sha256",
-            "contains_secrets",
-        }
-        or receipt.get("schema_version") != 1
-        or receipt.get("id") != plugin.id
-        or receipt.get("distribution") != plugin.package
-        or receipt.get("version") != plugin.version
-        or receipt.get("artifact") != {"sha256": plugin.artifact.sha256, "size": plugin.artifact.size}
-        or receipt.get("tree_sha256") != sha256_file(tree_path)
-        or receipt.get("contains_secrets") is not False
-        or not isinstance(tree, dict)
-        or set(tree) != {"schema_version", "files"}
-        or tree.get("schema_version") != 1
-        or tree.get("files") != _plugin_tree(site_packages)
-    ):
-        raise InstallerError("plugin_release_invalid", "built-in plugin release differs from its receipt")
-    return site_packages
-
-
-def install_plugin_wheel(
-    layout: InstallLayout,
-    plugin: BuiltinPlugin,
-    wheel: Path,
-    *,
-    core_version: str,
-) -> dict[str, object]:
-    artifact = plugin.artifact
-    if artifact.sha256 is None or artifact.size is None:
-        raise InstallerError("plugin_artifact_incomplete", "built-in plugin artifact identity is incomplete")
-    if wheel.stat().st_size != artifact.size or sha256_file(wheel) != artifact.sha256:
-        raise InstallerError("plugin_artifact_mismatch", "built-in plugin artifact differs from release authority")
-    members = _plugin_wheel_identity(wheel, plugin, core_version)
-    owner = layout.plugins / plugin.id
-    releases = owner / "releases"
-    for path in (owner, releases):
-        if path.exists() and (path.is_symlink() or not path.is_dir() or path.stat().st_uid != os.geteuid()):
-            raise InstallerError("plugin_release_root_unsafe", "built-in plugin release root is unsafe")
-        path.mkdir(mode=0o700, parents=True, exist_ok=True)
-    release_id = f"{plugin.package}-{plugin.version}-{artifact.sha256[:16]}"
-    release = releases / release_id
-    if release.exists():
-        _verify_plugin_release(release, plugin)
+def _direct_source_roots(source: Path, project: dict[str, object]) -> list[Path]:
+    tool = project.get("tool", {})
+    setuptools = tool.get("setuptools", {}) if isinstance(tool, dict) else {}
+    if not isinstance(setuptools, dict):
+        raise InstallerError("editable_manifest_invalid", "setuptools metadata is invalid")
+    package_dir = setuptools.get("package-dir", {})
+    roots: set[Path] = set()
+    if isinstance(package_dir, dict) and "" in package_dir:
+        value = package_dir[""]
+        if not isinstance(value, str):
+            raise InstallerError("editable_manifest_invalid", "package-dir is invalid")
+        roots.add(source / value)
+    elif isinstance(package_dir, dict) and package_dir:
+        for package, value in package_dir.items():
+            if not isinstance(package, str) or not isinstance(value, str) or not package:
+                raise InstallerError("editable_manifest_invalid", "package-dir is invalid")
+            root = source / value
+            for _ in package.split("."):
+                root = root.parent
+            roots.add(root)
     else:
-        stage = Path(tempfile.mkdtemp(prefix=f".plugin-{plugin.id}-", dir=layout.staging))
+        find = setuptools.get("packages", {})
+        if isinstance(find, dict):
+            where = find.get("find", {}).get("where", ["."]) if isinstance(find.get("find"), dict) else ["."]
+            if not isinstance(where, list) or any(not isinstance(value, str) for value in where):
+                raise InstallerError("editable_manifest_invalid", "package discovery roots are invalid")
+            roots.update(source / value for value in where)
+        else:
+            roots.add(source)
+    result = sorted(roots, key=str)
+    for root in result:
+        if any(character in str(root) for character in ("\x00", "\n", "\r")):
+            raise InstallerError("editable_manifest_invalid", "package source root contains unsafe characters")
         try:
-            site_packages = stage / "site-packages"
-            _extract_plugin_wheel(wheel, site_packages, members)
-            tree_path = stage / "tree-manifest.json"
-            atomic_json(tree_path, {"schema_version": 1, "files": _plugin_tree(site_packages)}, mode=0o444)
-            atomic_json(
-                stage / "release-receipt.json",
-                {
-                    "schema_version": 1,
-                    "id": plugin.id,
-                    "distribution": plugin.package,
-                    "version": plugin.version,
-                    "artifact": {"sha256": artifact.sha256, "size": artifact.size},
-                    "tree_sha256": sha256_file(tree_path),
-                    "contains_secrets": False,
-                },
-                mode=0o444,
-            )
-            os.replace(stage, release)
-            _fsync_directory(releases)
-            for directory in sorted((path for path in release.rglob("*") if path.is_dir()), reverse=True):
-                directory.chmod(0o555)
-            release.chmod(0o555)
-            _verify_plugin_release(release, plugin)
-        finally:
-            if stage.exists():
-                for path in stage.rglob("*"):
-                    if path.is_dir():
-                        path.chmod(0o700)
-                    elif path.is_file():
-                        path.chmod(0o600)
-                stage.chmod(0o700)
-                shutil.rmtree(stage)
-    selector_path = owner / "active.json"
-    rollback = None
-    if selector_path.exists() and not selector_path.is_symlink():
+            resolved = root.resolve(strict=True)
+        except OSError as exc:
+            raise InstallerError("editable_manifest_invalid", "package source root is missing") from exc
+        if not resolved.is_relative_to(source) or root.is_symlink() or not root.is_dir():
+            raise InstallerError("editable_manifest_invalid", "package source root is unsafe")
+    return result
+
+
+def _entry_points(project: dict[str, object]) -> bytes:
+    metadata = project.get("project", {})
+    if not isinstance(metadata, dict):
+        raise InstallerError("editable_manifest_invalid", "project metadata is invalid")
+    groups: list[tuple[str, dict[str, str]]] = []
+    scripts = metadata.get("scripts", {})
+    if not isinstance(scripts, dict):
+        raise InstallerError("editable_manifest_invalid", "project scripts are invalid")
+    if isinstance(scripts, dict) and scripts:
+        groups.append(("console_scripts", scripts))
+    declared = metadata.get("entry-points", {})
+    if not isinstance(declared, dict) or any(
+        not isinstance(group, str) or not isinstance(values, dict)
+        for group, values in declared.items()
+    ):
+        raise InstallerError("editable_manifest_invalid", "project entry-point groups are invalid")
+    groups.extend((group, values) for group, values in declared.items())
+    lines: list[str] = []
+    for group, values in sorted(groups):
+        if any(not isinstance(name, str) or not isinstance(value, str) for name, value in values.items()):
+            raise InstallerError("editable_manifest_invalid", "project entry points are invalid")
+        if any("\n" in value or "\r" in value for value in (group, *values, *values.values())):
+            raise InstallerError("editable_manifest_invalid", "project entry points contain unsafe characters")
+        lines.append(f"[{group}]")
+        lines.extend(f"{name} = {value}" for name, value in sorted(values.items()))
+        lines.append("")
+    return "\n".join(lines).encode()
+
+
+def install_editable_source(
+    python: Path,
+    source: Path,
+    *,
+    no_deps: bool = False,
+    run: RunCommand = _run,
+) -> subprocess.CompletedProcess[str]:
+    """Register controlled source directly without invoking a build backend."""
+
+    source = _assert_editable_source_safe(source)
+    existing = _editable_metadata(source)
+    if existing:
+        raise InstallerError(
+            "editable_metadata_exists",
+            "preexisting editable package metadata makes the checkout unsafe",
+        )
+    manifest = source / "pyproject.toml"
+    try:
+        configuration = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        raise InstallerError("editable_manifest_invalid", "project metadata cannot be read") from exc
+    project = configuration.get("project", {})
+    if not isinstance(project, dict):
+        raise InstallerError("editable_manifest_invalid", "project metadata is invalid")
+    name = project.get("name")
+    version = project.get("version")
+    dependencies = project.get("dependencies", [])
+    if not isinstance(name, str) or not isinstance(version, str) or not name or not version:
+        raise InstallerError("editable_manifest_invalid", "project name or version is invalid")
+    if not re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9._+-]*", version):
+        raise InstallerError("editable_manifest_invalid", "project version is unsafe")
+    if not isinstance(dependencies, list) or any(not isinstance(value, str) for value in dependencies):
+        raise InstallerError("editable_manifest_invalid", "project dependencies are invalid")
+    header_values = [*dependencies]
+    for key in ("description", "requires-python"):
+        value = project.get(key)
+        if value is not None and not isinstance(value, str):
+            raise InstallerError("editable_manifest_invalid", f"project {key} is invalid")
+        if isinstance(value, str):
+            header_values.append(value)
+    if any("\n" in value or "\r" in value for value in header_values):
+        raise InstallerError("editable_manifest_invalid", "project metadata contains unsafe characters")
+    if dependencies and not no_deps:
+        raise InstallerError("editable_dependencies_unsupported", "direct-source dependencies must be installed explicitly")
+    roots = _direct_source_roots(source, configuration)
+    site_packages, site_identity = _site_packages_for_python(python)
+    normalized = re.sub(r"[-_.]+", "_", name).strip("_")
+    if not normalized or not re.fullmatch(r"[A-Za-z0-9_]+", normalized):
+        raise InstallerError("editable_manifest_invalid", "project name is unsafe")
+    pth = site_packages / f"__dispatch__.{normalized}.pth"
+    _reject_stale_direct_artifacts(site_packages, name, normalized)
+    old_generations = list(site_packages.glob(f".dispatch-direct-{normalized}-*"))
+    if any(not _direct_generation_owned(path, name, source) for path in old_generations):
+        raise InstallerError("editable_stale_metadata", "prior direct-source generation is unsafe")
+
+    generation_name = f".dispatch-direct-{normalized}-{uuid.uuid4().hex}"
+    generation = site_packages / generation_name
+    dist_info_name = f"{normalized}-{version}.dist-info"
+    dist_info = generation / dist_info_name
+    receipt = {
+        "contains_secrets": False,
+        "distribution": name,
+        "schema_version": 1,
+        "source": str(source),
+    }
+    metadata_lines = [
+        "Metadata-Version: 2.4",
+        f"Name: {name}",
+        f"Version: {version}",
+    ]
+    if isinstance(project.get("description"), str):
+        metadata_lines.append(f"Summary: {project['description']}")
+    if isinstance(project.get("requires-python"), str):
+        metadata_lines.append(f"Requires-Python: {project['requires-python']}")
+    metadata_lines.extend(f"Requires-Dist: {value}" for value in dependencies)
+    pth_payload = "".join(f"{root}\n" for root in (*roots, generation)).encode()
+    generation_files = {
+        ".dispatch-direct.json": json.dumps(
+            receipt, sort_keys=True, separators=(",", ":")
+        ).encode()
+        + b"\n",
+    }
+    metadata_files = {
+        "METADATA": ("\n".join(metadata_lines) + "\n").encode(),
+        "entry_points.txt": _entry_points(configuration),
+        "direct_url.json": json.dumps(
+            {"dir_info": {"editable": True}, "url": source.as_uri()},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode()
+        + b"\n",
+        "INSTALLER": b"dispatch-direct-source\n",
+    }
+    record_payloads = {
+        generation / name: payload for name, payload in generation_files.items()
+    }
+    record_payloads.update({dist_info / name: payload for name, payload in metadata_files.items()})
+    record_payloads[pth] = pth_payload
+    record_rows: list[list[str]] = []
+    for path, payload in sorted(record_payloads.items(), key=lambda item: str(item[0])):
+        digest = base64.urlsafe_b64encode(hashlib.sha256(payload).digest()).rstrip(b"=").decode("ascii")
+        record_rows.append([os.path.relpath(path, generation), f"sha256={digest}", str(len(payload))])
+    record_rows.append([os.path.relpath(dist_info / "RECORD", generation), "", ""])
+    record_buffer = io.StringIO(newline="")
+    csv.writer(record_buffer, lineterminator="\n").writerows(record_rows)
+    metadata_files["RECORD"] = record_buffer.getvalue().encode()
+
+    site_descriptor = _open_private_directory(site_packages, site_identity)
+    generation_descriptor = -1
+    metadata_descriptor = -1
+    generation_created = False
+    previous_pth: bytes | None = None
+    committed = False
+    try:
+        if not _directory_identity_matches(site_packages, site_descriptor):
+            raise InstallerError("editable_site_packages_unsafe", "site-packages identity changed")
         try:
-            prior = json.loads(selector_path.read_text(encoding="utf-8"))
-            rollback = prior.get("active") if prior.get("active") != release_id else prior.get("rollback")
-        except (OSError, json.JSONDecodeError):
-            rollback = None
-    atomic_json(
-        selector_path,
-        {
-            "schema_version": 1,
-            "id": plugin.id,
-            "active": release_id,
-            "rollback": rollback,
-            "artifact_sha256": artifact.sha256,
-            "contains_secrets": False,
-        },
-        mode=0o600,
-    )
+            previous_pth = _read_bytes_at(site_descriptor, pth.name)
+        except FileNotFoundError:
+            previous_pth = None
+        except OSError as exc:
+            raise InstallerError("editable_site_packages_unsafe", "direct-source path record is unsafe") from exc
+        expected_existing = (
+            "".join(f"{root}\n" for root in (*roots, old_generations[0])).encode()
+            if len(old_generations) == 1
+            else None
+        )
+        if previous_pth is not None and (
+            expected_existing is None or previous_pth != expected_existing
+        ):
+            raise InstallerError("editable_stale_metadata", "direct-source path record is inconsistent")
+        if previous_pth is None and old_generations:
+            raise InstallerError("editable_stale_metadata", "direct-source generation has no path record")
+
+        try:
+            os.mkdir(generation_name, 0o700, dir_fd=site_descriptor)
+            generation_created = True
+            generation_descriptor = _open_child_private_directory(site_descriptor, generation_name)
+            os.mkdir(dist_info_name, 0o700, dir_fd=generation_descriptor)
+            metadata_descriptor = _open_child_private_directory(generation_descriptor, dist_info_name)
+            for filename, payload in generation_files.items():
+                _atomic_private_bytes_at(generation_descriptor, filename, payload)
+            for filename, payload in metadata_files.items():
+                _atomic_private_bytes_at(metadata_descriptor, filename, payload)
+        except BaseException as error:
+            if metadata_descriptor >= 0:
+                os.close(metadata_descriptor)
+                metadata_descriptor = -1
+            if generation_descriptor >= 0:
+                os.close(generation_descriptor)
+                generation_descriptor = -1
+            cleanup_error: BaseException | None = None
+            if generation_created:
+                try:
+                    _remove_tree_at_deferred(site_descriptor, generation_name)
+                    generation_created = False
+                except BaseException as exc:
+                    cleanup_error = exc
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise
+            if cleanup_error is not None:
+                raise InstallerError(
+                    "editable_metadata_cleanup_failed",
+                    "incomplete direct-source metadata could not be removed",
+                ) from cleanup_error
+            if isinstance(error, OSError):
+                raise InstallerError(
+                    "editable_metadata_write_failed",
+                    "direct-source metadata could not be written",
+                ) from error
+            raise
+        else:
+            os.close(metadata_descriptor)
+            metadata_descriptor = -1
+            os.close(generation_descriptor)
+            generation_descriptor = -1
+
+        try:
+            _atomic_private_bytes_at(site_descriptor, pth.name, pth_payload)
+            committed = _read_bytes_at(site_descriptor, pth.name) == pth_payload
+            if not committed:
+                raise InstallerError("editable_metadata_write_failed", "direct-source publication did not commit")
+        except BaseException as error:
+            try:
+                committed = _read_bytes_at(site_descriptor, pth.name) == pth_payload
+            except (FileNotFoundError, OSError):
+                committed = False
+            cleanup_error: BaseException | None = None
+            if not committed and generation_created:
+                try:
+                    _remove_tree_at_deferred(site_descriptor, generation_name)
+                    generation_created = False
+                except BaseException as exc:
+                    cleanup_error = exc
+            if isinstance(error, (KeyboardInterrupt, SystemExit)):
+                raise
+            if cleanup_error is not None:
+                raise InstallerError(
+                    "editable_metadata_cleanup_failed",
+                    "incomplete direct-source metadata could not be removed",
+                ) from cleanup_error
+            if isinstance(error, OSError):
+                raise InstallerError(
+                    "editable_metadata_write_failed",
+                    "direct-source metadata could not be written",
+                ) from error
+            raise
+
+        if not _directory_identity_matches(site_packages, site_descriptor):
+            if previous_pth is None:
+                os.unlink(pth.name, dir_fd=site_descriptor)
+            else:
+                _atomic_private_bytes_at(site_descriptor, pth.name, previous_pth)
+            _remove_tree_at_deferred(site_descriptor, generation_name)
+            generation_created = False
+            raise InstallerError("editable_site_packages_unsafe", "site-packages changed during publication")
+
+        for old_generation in old_generations:
+            try:
+                _remove_tree_at_deferred(site_descriptor, old_generation.name)
+            except OSError as exc:
+                raise InstallerError(
+                    "editable_metadata_cleanup_failed",
+                    "prior direct-source metadata could not be removed",
+                ) from exc
+        return subprocess.CompletedProcess(("dispatch-direct-source", str(source)), 0, "", "")
+    finally:
+        if metadata_descriptor >= 0:
+            os.close(metadata_descriptor)
+        if generation_descriptor >= 0:
+            os.close(generation_descriptor)
+        os.close(site_descriptor)
+
+
+def _plugin_id_map(layout: InstallLayout) -> dict[str, Path]:
+    root = layout.clone / "plugins"
+    if root.is_symlink() or (root.exists() and not root.is_dir()):
+        raise InstallerError("plugins_root_unsafe", "cloned plugins directory is unsafe")
+    if not root.exists():
+        return {}
+    result: dict[str, Path] = {}
+    for directory in sorted(root.iterdir(), key=lambda item: item.name):
+        manifest = directory / "pyproject.toml"
+        if directory.is_symlink() or not directory.is_dir() or manifest.is_symlink() or not manifest.is_file():
+            continue
+        try:
+            project = tomllib.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+            raise InstallerError("plugin_manifest_invalid", f"cannot read plugin metadata: {manifest}") from exc
+        entry_points = project.get("project", {}).get("entry-points", {}).get("dispatch.plugins", {})
+        if not isinstance(entry_points, dict):
+            raise InstallerError("plugin_manifest_invalid", f"plugin entry points are invalid: {manifest}")
+        ids = [value for value in entry_points if isinstance(value, str)]
+        if not ids:
+            ids = [directory.name]
+        for plugin_id in ids:
+            if plugin_id in result:
+                raise InstallerError("plugin_duplicate", f"built-in plugin ID is duplicated: {plugin_id}")
+            result[plugin_id] = directory
+    return result
+
+
+def available_plugins(layout: InstallLayout) -> list[str]:
+    return sorted(_plugin_id_map(layout))
+
+
+def _site_packages(layout: InstallLayout) -> Path:
+    candidates = sorted((layout.venv / "lib").glob("python*/site-packages")) if (layout.venv / "lib").exists() else []
+    if candidates:
+        return candidates[-1]
+    return layout.venv / "lib" / f"python{sys.version_info.major}.{sys.version_info.minor}" / "site-packages"
+
+
+def _plugin_config(layout: InstallLayout, selected: list[str]) -> dict[str, object]:
+    site_packages = _site_packages(layout)
+    catalog = _plugin_id_map(layout)
+    plugins: list[dict[str, object]] = []
+    for plugin_id in selected:
+        project = tomllib.loads((catalog[plugin_id] / "pyproject.toml").read_text(encoding="utf-8"))
+        metadata = project.get("tool", {}).get("dispatch", {})
+        capabilities = metadata.get("capabilities") if isinstance(metadata, dict) else None
+        if not isinstance(capabilities, list) or any(not isinstance(value, str) for value in capabilities):
+            raise InstallerError("plugin_manifest_invalid", f"plugin capabilities are invalid: {plugin_id}")
+        plugins.append(
+            {
+                "id": plugin_id,
+                "source": str(catalog[plugin_id]),
+                "site_packages": str(site_packages),
+                "capabilities": capabilities,
+            }
+        )
     return {
-        "id": plugin.id,
-        "package": plugin.package,
-        "version": plugin.version,
-        "release_id": release_id,
-        "site_packages": str(release / "site-packages"),
-        "capabilities": list(plugin.capabilities),
+        "schema_version": 1,
+        "status": "complete",
+        "selected_plugins": selected,
+        "plugins": plugins,
+        "contains_secrets": False,
     }
 
 
-def configure_plugins(layout: InstallLayout, selected: Iterable[str]) -> dict[str, object]:
-    manifest = load_installed_manifest(layout)
+def configure_plugins(
+    layout: InstallLayout,
+    selected: Sequence[str],
+    *,
+    run: RunCommand = _run,
+) -> dict[str, object]:
     selected_ids = list(selected)
     if len(selected_ids) != len(set(selected_ids)):
-        raise InstallerError("setup_plugin_duplicate", "built-in plugin selection contains duplicates")
-    catalog = {plugin.id: plugin for plugin in manifest.builtin_plugins}
+        raise InstallerError("plugin_duplicate", "a plugin cannot be selected twice")
+    catalog = _plugin_id_map(layout)
     unknown = sorted(set(selected_ids) - set(catalog))
     if unknown:
-        raise InstallerError("setup_plugin_unknown", f"unknown built-in plugin: {unknown[0]}")
-    unsupported = sorted({capability for plugin_id in selected_ids for capability in catalog[plugin_id].capabilities})
-    if unsupported:
-        raise InstallerError("setup_capability_unavailable", f"capability provisioning is not ready: {unsupported[0]}")
-    downloads = layout.staging / "setup-downloads"
-    downloads.mkdir(mode=0o700, exist_ok=True)
-    installed: list[dict[str, object]] = []
+        raise InstallerError("plugin_unknown", f"unknown built-in plugin: {unknown[0]}")
+    service_present = layout.service_path.exists() or layout.service_path.is_symlink()
+    if service_present and not service_unit_is_owned(layout):
+        raise InstallerError("service_unit_unsafe", "Dispatch service unit is not Dispatch-owned")
     for plugin_id in selected_ids:
-        plugin = catalog[plugin_id]
-        artifact = plugin.artifact
-        if artifact.url is None or artifact.size is None or artifact.sha256 is None:
-            raise InstallerError("plugin_artifact_incomplete", "built-in plugin artifact identity is incomplete")
-        wheel = downloads / artifact.url.rsplit("/", 1)[-1]
-        download_release_artifact(
-            artifact.url,
-            wheel,
-            expected_size=artifact.size,
-            expected_sha256=artifact.sha256,
+        source = catalog[plugin_id]
+        completed = install_editable_source(layout.venv_python, source, run=run)
+        if completed.returncode != 0:
+            raise InstallerError("plugin_install_failed", f"could not install built-in plugin: {plugin_id}")
+    config = _plugin_config(layout, selected_ids)
+    atomic_json(layout.config / "plugins.json", config)
+    if service_present:
+        completed = run(("systemctl", "--user", "restart", "dispatch.service"), None)
+        if completed.returncode != 0:
+            raise InstallerError("service_restart_failed", "Dispatch service could not be restarted after setup")
+    return {"status": "complete", "selected_plugins": selected_ids, "plugins": config["plugins"]}
+
+
+def load_plugin_config(layout: InstallLayout) -> dict[str, object]:
+    path = layout.config / "plugins.json"
+    if not path.exists():
+        return {"schema_version": 1, "plugins": [], "contains_secrets": False}
+    try:
+        payload = read_json(path)
+    except InstallerError as exc:
+        raise InstallerError("plugin_config_invalid", "plugin configuration is invalid") from exc
+    if (
+        not isinstance(payload, dict)
+        or payload.get("schema_version") != 1
+        or payload.get("contains_secrets") is not False
+        or payload.get("status") != "complete"
+        or not isinstance(payload.get("selected_plugins"), list)
+        or not isinstance(payload.get("plugins"), list)
+    ):
+        raise InstallerError("plugin_config_invalid", "plugin configuration is invalid")
+    return payload
+
+
+def migrate_legacy_plugin_config(layout: InstallLayout) -> bool:
+    """Import only a complete, non-secret legacy built-in selection."""
+    current = layout.config / "plugins.json"
+    legacy = layout.state / "install" / "setup.json"
+    try:
+        assert_user_owned_directory(legacy.parent, "legacy installation state")
+    except InstallerError:
+        return False
+    if current.exists() or not legacy.is_file() or legacy.is_symlink():
+        return False
+    try:
+        payload = read_json(legacy)
+    except InstallerError:
+        return False
+    if not isinstance(payload, dict):
+        return False
+    selected = payload.get("selected_plugins")
+    plugins = payload.get("plugins")
+    product_version = payload.get("product_version")
+    expected_fields = {
+        "schema_version",
+        "status",
+        "product_version",
+        "selected_plugins",
+        "plugins",
+        "contains_secrets",
+    }
+    plugin_fields = {"id", "package", "version", "release_id", "site_packages", "capabilities"}
+    if (
+        set(payload) != expected_fields
+        or payload.get("schema_version") != 1
+        or payload.get("status") != "complete"
+        or payload.get("contains_secrets") is not False
+        or not isinstance(product_version, str)
+        or not product_version
+        or len(product_version) > 128
+        or not isinstance(selected, list)
+        or not isinstance(plugins, list)
+        or any(not isinstance(item, str) for item in selected)
+        or len(selected) != len(set(selected))
+        or not set(selected).issubset(set(available_plugins(layout)))
+        or len(plugins) != len(selected)
+        or any(
+            not isinstance(item, dict)
+            or set(item) != plugin_fields
+            or not isinstance(item.get("id"), str)
+            or not isinstance(item.get("package"), str)
+            or not isinstance(item.get("version"), str)
+            or not isinstance(item.get("release_id"), str)
+            or not isinstance(item.get("site_packages"), str)
+            or not isinstance(item.get("capabilities"), list)
+            or any(not isinstance(capability, str) for capability in item.get("capabilities", []))
+            for item in plugins
         )
-        installed.append(install_plugin_wheel(layout, plugin, wheel, core_version=manifest.core_version))
-    setup_path = layout.state / "install" / "setup.json"
-    atomic_json(
-        setup_path,
-        {
-            "schema_version": 1,
-            "status": "configured",
-            "product_version": manifest.product_version,
-            "selected_plugins": selected_ids,
-            "plugins": installed,
-            "contains_secrets": False,
-        },
-        mode=0o600,
-    )
-    completed = subprocess.run(
-        ("systemctl", "--user", "restart", "dispatch-core.service"),
-        check=False,
-        capture_output=True,
-        text=True,
-    )
-    if completed.returncode != 0:
-        raise InstallerError("setup_service_restart", "Dispatch Core could not be restarted after setup")
-    receipt = json.loads(setup_path.read_text(encoding="utf-8"))
-    receipt["status"] = "complete"
-    atomic_json(setup_path, receipt, mode=0o600)
-    return {"status": "complete", "selected_plugins": selected_ids, "plugins": installed}
+        or selected != [item["id"] for item in plugins]
+    ):
+        return False
+    atomic_json(current, _plugin_config(layout, selected))
+    return True
 
 
-def run_setup(layout: InstallLayout, argv: list[str] | None = None, *, human: bool = False) -> int:
+def run_setup(layout: InstallLayout, argv: list[str] | None = None, *, human: bool = True, run: RunCommand = _run) -> int:
     parser = argparse.ArgumentParser(prog="dispatch setup")
     parser.add_argument("--plugin", action="append", default=[], help="built-in plugin ID; may be repeated")
-    parser.add_argument("--yes", action="store_true", help="accept the explicit plugin selection")
-    parser.add_argument("--list", action="store_true", help="list available built-in plugins without changing setup")
+    parser.add_argument("--list", action="store_true", help="list built-in plugins")
+    parser.add_argument("--yes", action="store_true", help="confirm the selected plugins")
     args = parser.parse_args(argv)
-    manifest = load_installed_manifest(layout)
-    catalog = list(manifest.builtin_plugins)
+    plugins = available_plugins(layout)
     if args.list:
-        payload = {"ok": True, "action": "setup", "status": "available", "plugins": [plugin.id for plugin in catalog]}
-        emit(payload, json_output=not human)
+        payload = {"ok": True, "action": "setup", "status": "available", "plugins": plugins}
+        print(json.dumps(payload, sort_keys=True))
         return 0
     selected = list(args.plugin)
     if not args.yes:
         if not human:
-            emit(
-                {
-                    "ok": False,
-                    "action": "setup",
-                    "status": "error",
-                    "data": {},
-                    "error": {
-                        "code": "confirmation_required",
-                        "message": "setup requires --yes or --list in JSON mode",
-                    },
-                },
-                json_output=True,
-            )
+            print(json.dumps({"ok": False, "action": "setup", "status": "error", "error": {"code": "confirmation_required"}}))
             return 1
         print("Available built-in plugins:")
-        for index, plugin in enumerate(catalog, start=1):
-            print(f"  {index}. {plugin.id}")
-        response = input("Select plugin numbers separated by commas, or press Enter for Core only: ").strip()
-        if response:
+        for index, plugin_id in enumerate(plugins, start=1):
+            print(f"  {index}. {plugin_id}")
+        answer = input("Select plugin numbers separated by commas, or press Enter for Core only: ").strip()
+        if answer:
             try:
-                indexes = [int(value.strip()) for value in response.split(",")]
-                if any(index < 1 or index > len(catalog) for index in indexes):
+                indexes = [int(value.strip()) for value in answer.split(",")]
+                if any(index < 1 or index > len(plugins) for index in indexes):
                     raise ValueError
+                selected = [plugins[index - 1] for index in indexes]
             except ValueError as exc:
-                raise InstallerError("setup_selection_invalid", "plugin selection is invalid") from exc
-            selected = [catalog[index - 1].id for index in indexes]
-    result = configure_plugins(layout, selected)
-    emit({"ok": True, "action": "setup", **result}, json_output=not human)
+                raise InstallerError("plugin_selection_invalid", "plugin selection is invalid") from exc
+    result = configure_plugins(layout, selected, run=run)
+    print(json.dumps({"ok": True, "action": "setup", **result}, sort_keys=True))
     return 0
+
+
+__all__ = ["available_plugins", "configure_plugins", "load_plugin_config", "migrate_legacy_plugin_config", "run_setup"]

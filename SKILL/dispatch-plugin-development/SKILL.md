@@ -1,133 +1,104 @@
 ---
 name: dispatch-plugin-development
-description: "Create or migrate Dispatch plugins to the canonical v1 lifecycle and conformance standard."
-version: 1.0.0
+description: "Create, migrate, test, and review source-owned Dispatch plugins."
+version: 2.0.0
 metadata:
   hermes:
-    tags: [dispatch, plugins, development, architecture, testing, release]
+    tags: [dispatch, plugins, development, architecture, testing]
 ---
 
 # Dispatch Plugin Development
 
-Use this skill whenever creating, migrating, packaging, testing, installing, or reviewing a Dispatch plugin or component in `${DISPATCH_CODE_ROOT}`.
+Use this skill when creating, migrating, testing, installing, or reviewing a Dispatch plugin under `${DISPATCH_CODE_ROOT}`.
 
-The canonical standard is:
+The canonical public contract is:
 
 ```text
 ${DISPATCH_CODE_ROOT}/docs/dispatch-plugin-standard-v1.md
 ```
 
-The root manifest schema is:
-
-```text
-${DISPATCH_CODE_ROOT}/docs/schemas/dispatch-plugin-v1.schema.json
-```
-
-The conformance command is:
+The source conformance audit is:
 
 ```bash
-python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin-policy/plugin_conformance.py \
+python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin_policy.py \
   ${DISPATCH_CODE_ROOT}/plugins/<owner>
 ```
 
 ## Non-negotiable rules
 
-1. Classify every component before choosing its layout: `hermes-tool`, `collector`, `service`, `auth-provider`, `library`, `control-plane`, or `retired`.
-2. Keep one canonical editable source tree. Never treat `runtime/releases/*` as the only source and never edit an active immutable release.
-3. Add `README.md` and `dispatch-plugin.yaml` at the owner root.
-4. Put each database under `db/<component>/`, each artifact store under `artifacts/<component>/`, and mutable operational state under `plugins/<owner>/`.
-   For a single-component owner, the component ID normally equals the owner ID. When one owner has multiple independently released components, declare named `databases` or `artifact_stores` maps keyed by component ID. Do not hide a store, collapse live data, or force every store beneath the umbrella owner ID merely to fit singular fields.
-5. Separate model-facing reads from collection, authentication, browser use, mutation, and platform delivery. Reads never trigger collection implicitly.
-6. Keep Hermes adapters narrow. Shared infrastructure verifies releases, executes launchers, and delivers messages; domain behavior remains owner-local.
-7. Require strict bounded schemas: required `action`, closed enum, `additionalProperties: false`, exact per-action fields, and bounded strings/rows/ranges/timeouts.
-8. Provide executable `scripts/test`, `scripts/build`, `scripts/verify`, and `scripts/health` commands. Tests must discover a nonzero count without undocumented import paths.
-9. Build deterministic immutable releases, use one activation authority, retain rollback, and verify all installed selectors converge.
-10. Never place secrets, credentials, cookies, browser profiles, connection strings, or sensitive business rows in manifests, tests, documentation, skills, or receipts.
-11. Keep Dispatch-owned built-in plugin source under `plugins/<owner>/`. External plugin source belongs in separate repositories. Build, version, verify, and release every plugin independently from Core.
-12. Do not claim conformance until the conformance command passes and the real build/test/verify/health commands have been exercised.
-13. Keep Core discovery minimal: an installable wheel publishes one `dispatch.plugins` entry point whose name matches the plugin ID and whose callable accepts one bounded request object and returns the standard envelope. Never add package-specific registry code to Core.
+1. Keep one canonical, editable source tree under `plugins/<owner>/` for a built-in plugin. External plugins remain in their own cloned repositories.
+2. Declare the plugin ID and effective capabilities in `pyproject.toml`:
 
-## Required workflow
+   ```toml
+   [tool.dispatch]
+   id = "example"
+   capabilities = ["read_local_data"]
+   ```
 
-### 1. Discover and classify
+3. Publish exactly one `[project.entry-points."dispatch.plugins"]` entry whose name equals that ID. Its callable accepts one bounded JSON object and returns the exact seven-field response envelope.
+4. Install the cloned source editable into the shared Dispatch virtual environment:
 
-Read the owner README and root manifest if present. Inventory canonical source, generated releases, activation selectors, installed projections, operational state, external dependencies, and historical evidence. Do not infer authority from directory names.
+   ```bash
+   python -m pip install -e ${DISPATCH_CODE_ROOT}/plugins/<owner>
+   export DISPATCH_ACTIVE_PLUGINS=<owner>
+   ```
 
-### 2. Design capability boundaries
+   Core discovers installed `dispatch.plugins` entry points from that environment and filters them only by `DISPATCH_ACTIVE_PLUGINS`. `DISPATCH_PLUGIN_PATHS` is obsolete.
+5. Keep owner-managed data outside source, normally under `plugins/<owner>/data` or an explicitly documented private data root. Never put secrets, cookies, credentials, or private business rows in source, manifests, tests, skills, or receipts.
+6. Keep query, collection, authentication, browser, mutation, service, and delivery capabilities separate. A read action never collects implicitly.
+7. Use bounded schemas: required `action`, a closed action enum, `additionalProperties: false`, exact action fields, and bounded strings/rows/ranges/timeouts.
+8. Provide executable `scripts/test`, `scripts/build`, `scripts/verify`, and `scripts/health` commands. They operate on source and local configuration; they do not build, publish, activate, or verify generated plugin artifacts.
+9. Keep the Hermes adapter narrow. Its tool name, toolset, action schema, availability check, and response envelopes must agree with the source entry point and optional `dispatch-plugin.yaml`.
+10. Do not claim conformance until the real source tests, build check, verification audit, and health check have run.
 
-Declare capabilities explicitly. Prefer:
-
-- a local read-only Hermes query component;
-- a separate collector for browser/network/authenticated production;
-- Collector Coordinator for scheduling, retries, and reconciliation;
-- a shared delivery interface for Slack/Discord posting;
-- a separate service or auth-provider component when privileges require it.
-
-Only expose collection to the model when a documented interactive product requirement and separate security review explicitly approve model initiation. Scheduled, queued, background, browser-authenticated, or long-running collection defaults to Collector Coordinator only; an owner CLI `collect` command does not authorize a Hermes `collect` action.
-
-### 3. Create the canonical files
-
-At minimum:
+## Required source layout
 
 ```text
-plugins/<owner>/README.md
-plugins/<owner>/dispatch-plugin.yaml
-plugins/<owner>/src/
-plugins/<owner>/tests/
-plugins/<owner>/scripts/{test,build,verify,health}
+plugins/<owner>/
+├── README.md
+├── pyproject.toml
+├── dispatch-plugin.yaml       # optional; if present, id must match pyproject
+├── SKILL.md                   # when a model-facing tool exists
+├── src/
+├── tests/
+├── references/                # only when domain contracts are needed
+├── integration/hermes-plugins/<package>/  # only when a Hermes projection exists
+└── scripts/{test,build,verify,health}
 ```
 
-Add Hermes integration, runtime, service, config, references, state, locks, staging, and receipts only when the declared component uses them. Do not create meaningless empty directories.
+Do not create `runtime/`, `current` pointers, generation directories, release manifests, activation records, or receipt machinery for a source-owned plugin.
 
-Use `templates/dispatch-plugin.yaml` as a starting point and delete components that do not apply.
+## Workflow
 
-### 4. Implement and test the source contract
+1. Clone or update the built-in source under `plugins/<owner>` and read its README.
+2. Classify the component and declare only the capabilities it actually uses.
+3. Add the `pyproject.toml` Dispatch metadata and matching entry point.
+4. Keep owner data paths explicit and private; keep source and data separate.
+5. Exercise the source boundary:
 
-Keep changes small. Test registration, every action, malformed input, missing-data boundaries, response envelopes, release tamper rejection, query/collector separation, activation convergence, and non-mutating health. Avoid sprawling repetitive tests.
+   ```bash
+   ./scripts/test
+   ./scripts/build
+   ./scripts/verify
+   ./scripts/health
+   python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin_policy.py .
+   ```
 
-### 5. Build and activate safely
+6. Install editable into the shared environment and test selection through `DISPATCH_ACTIVE_PLUGINS`.
 
-Run source tests first. Build into staging, verify the exact member set and stable hashes, publish an immutable content-addressed release, update the single activation authority, derive secondary projections, then smoke-test through the model-facing boundary. Preserve the prior active release as rollback.
+## Contract checks
 
-If an owner has independently released query, collector, service, or auth components, use one activation record with an `interfaces` map. Bind each interface to its active runtime, exact rollback path and digest, and every launcher/manager/service projection. Do not force historical rollback directory names to look like current digest-prefix identities. If activation must replace files in a sealed owner directory, open only that directory for the replacement window and reseal it in `finally`; publish the root activation record last so interrupted activation fails closed.
-
-Never patch an immutable release in place or switch a live service to mutable source merely to make verification pass.
-
-### 6. Prove conformance
-
-Run, in order:
-
-```bash
-./scripts/test
-./scripts/build
-./scripts/verify
-./scripts/health
-python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin-policy/plugin_conformance.py .
-```
-
-Also test a fresh Hermes registration and representative safe action when a Hermes component exists. Report query readiness separately from producer/freshness readiness.
-
-## Completion checklist
-
-Before saying a plugin is complete:
-
-- root manifest and README are accurate;
-- canonical source is editable and outside runtime releases;
-- component classes and privileges are explicit;
-- owner data/artifact/state paths are correct;
-- standard commands ran successfully;
-- tests discovered a nonzero count;
-- all advertised actions crossed the real adapter boundary;
-- release manifest excludes volatile runtime byproducts;
-- active and rollback identities are explicit;
-- launcher, manager record, profile projection, service unit, and activation record agree;
-- health reports registration, runtime, query, data, freshness, collector, auth, and delivery honestly;
-- no secret or sensitive payload was exposed;
-- conformance audit passes.
+- pyproject metadata has a valid `tool.dispatch.id` and non-empty capability list;
+- the entry-point group has exactly one matching plugin ID and a loadable source callable;
+- an optional root manifest has the same ID as pyproject metadata;
+- lifecycle scripts are regular owner-executable files and not group/world writable;
+- entry-point and Hermes responses use exactly `ok`, `action`, `status`, `data`, `freshness`, `delivery`, and `error`;
+- Hermes schemas require only bounded, closed inputs and register the declared tool exactly once;
+- health distinguishes registration, runtime, query, data, freshness, collector, authentication, delivery, and overall state.
 
 ## References
 
-- `references/component-design.md` — choose component classes and capability boundaries.
-- `references/release-and-verification.md` — deterministic build, activation, rollback, and proof gates.
-- `templates/dispatch-plugin.yaml` — root manifest starting template.
-- Canonical full standard: `${DISPATCH_CODE_ROOT}/docs/dispatch-plugin-standard-v1.md`.
+- `references/component-design.md` — component classes and capability boundaries.
+- `references/standard-v1.md` — source ownership, setup, data paths, and contracts.
+- `references/release-and-verification.md` — source test, verification, and health workflow (no artifact release).
+- `templates/dispatch-plugin.yaml` — optional root manifest starting point.

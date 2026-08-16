@@ -1,91 +1,57 @@
 # Portable path configuration
 
-Dispatch Core owns one non-mutating resolver in `dispatch-core/paths/src/dispatch_core/paths/__init__.py`. It resolves canonical code separately from private configuration, data, state, cache, runtime, and build output. Constructing the resolver never creates directories.
+Dispatch Core resolves code, private configuration, durable data, mutable state, disposable cache, runtime state, and temporary installation work as separate roots. Resolving paths is non-mutating; the installer performs directory creation.
 
 ## User installation root
 
-The Phase 5 per-user default is:
-
-```text
-${DISPATCH_HOME}
-```
-
-`DISPATCH_HOME` must be absolute and defaults to:
+`DISPATCH_HOME` must be an absolute, user-owned, non-symlink directory. It defaults to:
 
 ```text
 ${HOME}/.dispatch
 ```
 
-The installer owns creation and permissions. Core only resolves paths.
+The default layout is:
+
+```text
+${DISPATCH_HOME}/
+├── dispatch/                  selected Git checkout
+├── venv/                      per-installation Python environment
+├── config/                    private configuration
+├── secrets/                   private secret storage
+├── data/                      durable user data
+├── state/                     mutable operational state
+├── cache/                     disposable downloads and test cache
+├── logs/                      private operational logs
+└── run/                       transient sockets and locks
+```
+
+There is no active-release selector or content-addressed release tree in the source installation contract. The selected source ref is recorded as ordinary installation state and is changed only by an explicit channel update.
 
 ## Root precedence
 
 | Root | Explicit override | Default |
 |---|---|---|
-| Canonical code | `DISPATCH_CODE_ROOT` | current candidate checkout when running maintained source; exact content-addressed release when installed |
+| Canonical code | `DISPATCH_CODE_ROOT` | `${DISPATCH_HOME}/dispatch` outside a checkout; current checkout during development |
 | Private configuration | `DISPATCH_CONFIG_ROOT` | `${DISPATCH_HOME}/config` |
+| Private secrets | `DISPATCH_SECRETS_ROOT` | `${DISPATCH_HOME}/secrets` |
 | Private data | `DISPATCH_DATA_ROOT` | `${DISPATCH_HOME}/data` |
 | Mutable state | `DISPATCH_STATE_ROOT` | `${DISPATCH_HOME}/state` |
 | Disposable cache | `DISPATCH_CACHE_ROOT` | `${DISPATCH_HOME}/cache` |
-| Runtime state | `DISPATCH_RUNTIME_ROOT` | `${XDG_RUNTIME_DIR}/dispatch`, otherwise `${DISPATCH_HOME}/runtime` |
-| One build invocation | `DISPATCH_BUILD_OUTPUT` | `<cache-root>/build/<owner>` |
+| Private logs | `DISPATCH_LOGS_ROOT` | `${DISPATCH_HOME}/logs` |
+| Runtime state | `DISPATCH_RUNTIME_ROOT` | `${DISPATCH_HOME}/run` |
 
-Individual `DISPATCH_*_ROOT` settings override only their corresponding root. The installer normally projects all exact values instead of relying on a user's interactive shell environment.
+Every configured path must be absolute. Reject explicit `..` traversal, symlink aliases, overlapping primary roots, and private roots inside the source checkout. A maintained source checkout may use its own root for code, but private and generated roots must remain outside it.
 
-Every configured value must be absolute. Relative paths, explicit `..` traversal, symlink-root aliases, overlapping primary roots, and private/build roots inside the canonical code release are rejected.
+The `dispatch/` checkout and `venv/` environment are installer-owned lifecycle paths. Core does not expose separate overrides for them in plugin owner-path output; the installer records both in `installation.json` and projects the checkout as `DISPATCH_CODE_ROOT`.
 
-Outside a maintained source checkout, `DISPATCH_CODE_ROOT` must be supplied explicitly by the installer or launcher projection. It names the exact release directory, never a mutable `current` symlink.
+## Stable and development channels
 
-## Installed layout
+A stable installation uses a published, non-draft, non-prerelease GitHub Release tag and remains detached at that tag. A development installation uses the complete `dev` branch and remains attached to it. Explicit channel switching preserves the durable roots. Development updates refuse local changes and merge `origin/dev` with `--ff-only`.
 
-```text
-~/.dispatch/
-├── releases/<release-id>/
-├── bin/
-├── config/
-├── data/
-├── state/
-├── cache/
-└── staging/
-```
+Use `dispatch update` to advance the selected channel and `dispatch channel stable|dev` to switch channels. Do not manually reset the installed checkout around the lifecycle command.
 
-The installer maintains the active release selector at:
+## Ownership and projections
 
-```text
-~/.dispatch/state/install/active-release.json
-```
+Core's path API supports explicit root overrides for development and embedded process use. Installed launchers and user services intentionally project the canonical absolute roots beneath `DISPATCH_HOME`; they do not inherit ambient per-root overrides that would escape lifecycle preservation and uninstall boundaries. Paths must not embed a username, a branch-specific private path, or a secret.
 
-The release selector binds both the immutable tree manifest and the secret-free release receipt by SHA-256.
-
-Default uninstall removes verified releases and operational roots while preserving `config` and `data`. Explicit purge removes those two roots as well. Secret-free retention and interruption receipts remain under `state/install` for keep-data uninstall; a purge uses a temporary digest-bound external journal so it can resume after the in-tree receipt is removed. See [`uninstallation.md`](uninstallation.md).
-
-Browser runtime authority deliberately remains outside the user-owned tree:
-
-```text
-/etc/dispatch/browser-runtime-active.json
-/opt/dispatch/browser-runtimes/<generation>/
-```
-
-Hermes is outside the installation path contract. It is assumed to be preinstalled, and the installer does not inspect or mutate its files, profiles, or environment.
-
-## Owner roots
-
-`DispatchPaths.owner_environment(owner)` derives bounded owner roots and the exact environment a launcher or service projection must receive. For `handbook`, this includes:
-
-```text
-DISPATCH_HANDBOOK_CONFIG_ROOT
-DISPATCH_HANDBOOK_DATA_ROOT
-DISPATCH_HANDBOOK_STATE_ROOT
-```
-
-Generic `DISPATCH_OWNER_*_ROOT` values are emitted at the same time. Owner IDs must be lowercase Dispatch slugs; they cannot contain separators or traversal.
-
-The deferred Handbook adapter requires both `DISPATCH_HANDBOOK_DATA_ROOT` and `DISPATCH_HANDBOOK_INDEX`. The configured index must resolve to a physical file below the declared owner data root. A query never creates the root or index.
-
-The explicit source-tree synthetic demo may use an operator-selected absolute temporary target. It is a development action, not installed configuration or a model-facing import capability.
-
-## Projection contract
-
-The installer renders installed launchers and future user-service units with absolute values from the selected installation layout and `owner_environment()`. Source templates must not contain a username, home directory, current release identity, or active private path.
-
-Missing optional roots or integration-specific values are reported as not configured or unavailable by choice. Read-only query, verify, doctor, and health operations never authenticate, collect, browse, install, repair, or silently create configuration.
+Hermes is outside the Dispatch path contract. Dispatch never inspects, configures, creates profiles for, or removes Hermes files.
