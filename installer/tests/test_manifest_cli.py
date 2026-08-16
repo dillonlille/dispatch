@@ -13,6 +13,15 @@ from dispatch_installer.manifest import load_manifest
 
 ROOT = Path(__file__).resolve().parents[2]
 MANIFEST = ROOT / "packaging" / "installation-release-manifest.json"
+SOURCE_MANIFEST = json.loads(MANIFEST.read_text(encoding="utf-8"))
+PRODUCT_VERSION = SOURCE_MANIFEST["product"]["version"]
+INSTALLER_VERSION = SOURCE_MANIFEST["installer"]["version"]
+CORE_VERSION = SOURCE_MANIFEST["core"]["version"]
+
+
+def _release_url(package: str, version: str) -> str:
+    filename = f"{package}-{version}-py3-none-any.whl"
+    return f"https://dispatch.dillonlille.com/releases/{PRODUCT_VERSION}/{filename}"
 
 
 def _handbook_plugin() -> dict:
@@ -21,7 +30,7 @@ def _handbook_plugin() -> dict:
         "capabilities": [],
         "id": "handbook",
         "package": "dispatch-local-handbook",
-        "requires_dist": ['dispatch-core==1.0.0', 'pytest==9.1.1; extra == "dev"'],
+        "requires_dist": [f"dispatch-core=={CORE_VERSION}", 'pytest==9.1.1; extra == "dev"'],
         "version": "0.1.0",
     }
 
@@ -31,10 +40,10 @@ def test_incomplete_repository_manifest_is_valid_and_fail_closed() -> None:
     manifest = load_manifest(MANIFEST, expected_sha256=digest)
 
     assert manifest.ready is False
-    assert manifest.product_version == "0.0.7"
-    assert manifest.installer_version == "0.1.5"
+    assert manifest.product_version == PRODUCT_VERSION
+    assert manifest.installer_version == INSTALLER_VERSION
     assert manifest.installer_artifact.complete is False
-    assert manifest.core_version == "1.0.0"
+    assert manifest.core_version == CORE_VERSION
     assert manifest.core_artifact_url is None
     assert manifest.builtin_plugins == ()
     assert manifest.browser_ready is False
@@ -85,12 +94,12 @@ def test_complete_ready_manifest_authorizes_core_policy(tmp_path: Path) -> None:
     payload["post_install"]["setup_implemented"] = True
     artifacts = [payload["installer"]["artifact"], payload["core"]["artifact"]]
     filenames = [
-        "dispatch_installer-0.1.5-py3-none-any.whl",
-        "dispatch_core-1.0.0-py3-none-any.whl",
+        f"dispatch_installer-{INSTALLER_VERSION}-py3-none-any.whl",
+        f"dispatch_core-{CORE_VERSION}-py3-none-any.whl",
     ]
     for index, (artifact, filename) in enumerate(zip(artifacts, filenames)):
         artifact.update(
-            url=f"https://dispatch.dillonlille.com/releases/0.0.7/{filename}",
+            url=f"https://dispatch.dillonlille.com/releases/{PRODUCT_VERSION}/{filename}",
             size=index + 1,
             sha256=str(index) * 64,
         )
@@ -119,12 +128,12 @@ def test_install_uses_ready_manifest_core_authority(
     payload["ready"] = True
     payload["post_install"]["setup_implemented"] = True
     payload["installer"]["artifact"] = {
-        "url": "https://dispatch.dillonlille.com/releases/0.0.7/dispatch_installer-0.1.5-py3-none-any.whl",
+        "url": _release_url("dispatch_installer", INSTALLER_VERSION),
         "size": 1,
         "sha256": "1" * 64,
     }
     payload["core"]["artifact"] = {
-        "url": "https://dispatch.dillonlille.com/releases/0.0.7/dispatch_core-1.0.0-py3-none-any.whl",
+        "url": _release_url("dispatch_core", CORE_VERSION),
         "size": wheel.stat().st_size,
         "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
     }
@@ -198,12 +207,12 @@ def test_install_refuses_untracked_dispatch_command_before_core_mutation(
     payload = json.loads(MANIFEST.read_text(encoding="utf-8"))
     payload["ready"] = True
     payload["installer"]["artifact"] = {
-        "url": "https://dispatch.dillonlille.com/releases/0.0.7/dispatch_installer-0.1.5-py3-none-any.whl",
+        "url": _release_url("dispatch_installer", INSTALLER_VERSION),
         "size": 1,
         "sha256": "1" * 64,
     }
     payload["core"]["artifact"] = {
-        "url": "https://dispatch.dillonlille.com/releases/0.0.7/dispatch_core-1.0.0-py3-none-any.whl",
+        "url": _release_url("dispatch_core", CORE_VERSION),
         "size": wheel.stat().st_size,
         "sha256": hashlib.sha256(wheel.read_bytes()).hexdigest(),
     }
@@ -342,7 +351,7 @@ def test_plan_reports_current_publication_blocker(tmp_path: Path, monkeypatch, c
 
     assert result == 2
     assert payload["status"] == "blocked"
-    assert payload["data"]["manifest"]["product_version"] == "0.0.7"
+    assert payload["data"]["manifest"]["product_version"] == PRODUCT_VERSION
     assert payload["data"]["manifest"]["builtin_plugins"] == []
     assert payload["data"]["manifest"]["browser_ready"] is False
     assert payload["data"]["manifest"]["browser_install_phase"] == "setup"

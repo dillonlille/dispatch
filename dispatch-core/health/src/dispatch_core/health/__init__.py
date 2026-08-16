@@ -6,6 +6,7 @@ import os
 import stat
 from typing import Any
 
+from dispatch_core import __version__ as CORE_VERSION
 from dispatch_core.paths import DispatchPaths, PathConfigError
 from dispatch_core.plugin_runtime import plugin_health
 
@@ -228,7 +229,7 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             data["authentication"] = authentication
         if action == "verify":
             data["package"] = "dispatch-core"
-            data["version"] = "1.0.0"
+            data["version"] = CORE_VERSION
 
         error = None
         if collection_error is not None:

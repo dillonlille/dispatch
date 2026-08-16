@@ -118,6 +118,15 @@ def test_launcher_pairs_approved_plugin_ids_with_their_paths(monkeypatch, tmp_pa
 
 
 MANIFEST = ROOT / "packaging" / "installation-release-manifest.json"
+SOURCE_MANIFEST = json.loads(MANIFEST.read_text(encoding="utf-8"))
+PRODUCT_VERSION = SOURCE_MANIFEST["product"]["version"]
+INSTALLER_VERSION = SOURCE_MANIFEST["installer"]["version"]
+CORE_VERSION = SOURCE_MANIFEST["core"]["version"]
+
+
+def _release_url(package: str, version: str) -> str:
+    filename = f"{package}-{version}-py3-none-any.whl"
+    return f"https://dispatch.dillonlille.com/releases/{PRODUCT_VERSION}/{filename}"
 
 
 def _wheel(
@@ -136,7 +145,7 @@ def _wheel(
             "Version: 0.1.0\n"
             "License-Expression: Apache-2.0\n"
             "Requires-Python: <3.14,>=3.11\n"
-            "Requires-Dist: dispatch-core==1.0.0\n"
+            f"Requires-Dist: dispatch-core=={CORE_VERSION}\n"
             'Requires-Dist: pytest==9.1.1; extra == "dev"\n\n'
         ).encode(),
         f"{root}WHEEL": b"Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n\n",
@@ -175,13 +184,13 @@ def _ready_manifest(tmp_path: Path, wheel: Path) -> tuple[Path, str]:
             "capabilities": [],
             "id": "handbook",
             "package": "dispatch-local-handbook",
-            "requires_dist": ['dispatch-core==1.0.0', 'pytest==9.1.1; extra == "dev"'],
+            "requires_dist": [f"dispatch-core=={CORE_VERSION}", 'pytest==9.1.1; extra == "dev"'],
             "version": "0.1.0",
         }
     ]
     filenames = (
-        "dispatch_installer-0.1.5-py3-none-any.whl",
-        "dispatch_core-1.0.0-py3-none-any.whl",
+        f"dispatch_installer-{INSTALLER_VERSION}-py3-none-any.whl",
+        f"dispatch_core-{CORE_VERSION}-py3-none-any.whl",
         wheel.name,
     )
     artifacts = (
@@ -191,7 +200,7 @@ def _ready_manifest(tmp_path: Path, wheel: Path) -> tuple[Path, str]:
     )
     for index, (artifact, filename) in enumerate(zip(artifacts, filenames), start=1):
         artifact.update(
-            url=f"https://dispatch.dillonlille.com/releases/0.0.7/{filename}",
+            url=f"https://dispatch.dillonlille.com/releases/{PRODUCT_VERSION}/{filename}",
             size=index,
             sha256=str(index) * 64,
         )
@@ -223,12 +232,12 @@ def test_release_authority_is_persisted_for_later_setup(tmp_path: Path) -> None:
         layout,
         manifest_path,
         expected_sha256=digest,
-        product_version="0.0.7",
+        product_version=PRODUCT_VERSION,
     )
     loaded = load_installed_manifest(layout)
 
     assert persisted.read_bytes() == manifest_path.read_bytes()
-    assert loaded.product_version == "0.0.7"
+    assert loaded.product_version == PRODUCT_VERSION
     assert loaded.builtin_plugins[0].id == "handbook"
 
 
@@ -236,7 +245,7 @@ def test_builtin_plugin_requires_exact_apache_license(tmp_path: Path, monkeypatc
     wheel = _wheel(tmp_path, license_bytes=b"not the approved license\n")
     manifest_path, digest = _ready_manifest(tmp_path, wheel)
     layout = _layout(tmp_path)
-    persist_release_manifest(layout, manifest_path, expected_sha256=digest, product_version="0.0.7")
+    persist_release_manifest(layout, manifest_path, expected_sha256=digest, product_version=PRODUCT_VERSION)
 
     def download(_url, destination, **_policy):
         destination.write_bytes(wheel.read_bytes())
@@ -254,7 +263,7 @@ def test_builtin_plugin_requires_matching_discovery_entry_point(tmp_path: Path, 
     wheel = _wheel(tmp_path, entry_point_bytes=b"[dispatch.plugins]\nother = dispatch_handbook.service:handle\n")
     manifest_path, digest = _ready_manifest(tmp_path, wheel)
     layout = _layout(tmp_path)
-    persist_release_manifest(layout, manifest_path, expected_sha256=digest, product_version="0.0.7")
+    persist_release_manifest(layout, manifest_path, expected_sha256=digest, product_version=PRODUCT_VERSION)
 
     def download(_url, destination, **_policy):
         destination.write_bytes(wheel.read_bytes())
@@ -272,7 +281,7 @@ def test_selected_builtin_plugin_is_verified_activated_and_receipted(tmp_path: P
     wheel = _wheel(tmp_path)
     manifest_path, digest = _ready_manifest(tmp_path, wheel)
     layout = _layout(tmp_path)
-    persist_release_manifest(layout, manifest_path, expected_sha256=digest, product_version="0.0.7")
+    persist_release_manifest(layout, manifest_path, expected_sha256=digest, product_version=PRODUCT_VERSION)
 
     def download(url, destination, **_policy):
         destination.write_bytes(wheel.read_bytes())
@@ -307,7 +316,7 @@ def test_core_only_setup_is_a_valid_explicit_selection(tmp_path: Path, monkeypat
     wheel = _wheel(tmp_path)
     manifest_path, digest = _ready_manifest(tmp_path, wheel)
     layout = _layout(tmp_path)
-    persist_release_manifest(layout, manifest_path, expected_sha256=digest, product_version="0.0.7")
+    persist_release_manifest(layout, manifest_path, expected_sha256=digest, product_version=PRODUCT_VERSION)
     monkeypatch.setattr(
         setup_runtime.subprocess,
         "run",
@@ -325,22 +334,22 @@ def test_empty_core_only_setup_migrates_durably_between_product_manifests(tmp_pa
     payload = json.loads((ROOT / "packaging" / "installation-release-manifest.json").read_text())
     payload["ready"] = True
     payload["installer"]["artifact"].update(
-        url="https://dispatch.dillonlille.com/releases/0.0.7/dispatch_installer-0.1.5-py3-none-any.whl",
+        url=_release_url("dispatch_installer", INSTALLER_VERSION),
         size=1,
         sha256="1" * 64,
     )
     payload["core"]["artifact"].update(
-        url="https://dispatch.dillonlille.com/releases/0.0.7/dispatch_core-1.0.0-py3-none-any.whl",
+        url=_release_url("dispatch_core", CORE_VERSION),
         size=1,
         sha256="1" * 64,
     )
     old_payload = json.loads(json.dumps(payload))
     old_payload["product"]["version"] = "0.0.1"
     old_payload["installer"]["artifact"]["url"] = (
-        "https://dispatch.dillonlille.com/releases/0.0.1/dispatch_installer-0.1.5-py3-none-any.whl"
+        f"https://dispatch.dillonlille.com/releases/0.0.1/dispatch_installer-{INSTALLER_VERSION}-py3-none-any.whl"
     )
     old_payload["core"]["artifact"]["url"] = (
-        "https://dispatch.dillonlille.com/releases/0.0.1/dispatch_core-1.0.0-py3-none-any.whl"
+        f"https://dispatch.dillonlille.com/releases/0.0.1/dispatch_core-{CORE_VERSION}-py3-none-any.whl"
     )
     old_path = tmp_path / "old.json"
     old_path.write_text(json.dumps(old_payload), encoding="utf-8")
@@ -364,11 +373,11 @@ def test_empty_core_only_setup_migrates_durably_between_product_manifests(tmp_pa
     )
 
     assert prepare_core_only_setup_migration(layout, target) is True
-    persist_release_manifest(layout, new_path, expected_sha256=new_digest, product_version="0.0.7")
+    persist_release_manifest(layout, new_path, expected_sha256=new_digest, product_version=PRODUCT_VERSION)
     assert prepare_core_only_setup_migration(layout, target) is True
     complete_core_only_setup_migration(layout, target)
 
     setup = json.loads((layout.state / "install" / "setup.json").read_text())
-    assert setup["product_version"] == "0.0.7"
+    assert setup["product_version"] == PRODUCT_VERSION
     assert setup["selected_plugins"] == []
     assert not (layout.state / "install" / "setup-migration.json").exists()

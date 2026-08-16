@@ -19,7 +19,9 @@ SKILLS/
 **/logs/
 **/locks/
 **/backups/
-**/archive/
+**/backup/
+**/cache/
+**/private/
 **/downloads/
 **/browser-state/
 **/chrome-profile/
@@ -29,6 +31,11 @@ SKILLS/
 node_modules/
 .venv/
 venv/
+.direnv/
+.tox/
+.nox/
+.cache/
+.uv-cache/
 
 # Language and test byproducts
 __pycache__/
@@ -38,17 +45,63 @@ __pycache__/
 build/
 dist/
 .pytest_cache/
+.hypothesis/
 .mypy_cache/
 .ruff_cache/
+.pyright/
+.pyre/
+.pytype/
+.dmypy.json
 coverage.xml
 .coverage
+.coverage.*
 htmlcov/
+junit.xml
+
+# Editors and operating systems
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+*.orig
+*.rej
+
+# Local build, acceptance, and release outputs
+/.worktrees/
+/candidate/
+/reviewed/
+/wheelhouse/
+.wrangler/
+acceptance-evidence.json
+release-evidence.json
+SHA256SUMS*
+*.sha256
 
 # Operational files
 *.sqlite
 *.sqlite3
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-wal
+*.sqlite3-shm
 *.db
 *.db-wal
 *.db-shm
 *.log
+*.pid
+*.sock
 .hermes-tmp.*
+install-receipt.json
+launcher-manifest.json
+release-retention.json
+Cookies
+History
+Login Data
+Web Data
+
+# Local credentials and signing material
+*.key
+*.pem
+*.p12
+*.pfx
