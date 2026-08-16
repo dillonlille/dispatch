@@ -19,15 +19,9 @@ import yaml
 from jsonschema import Draft202012Validator
 
 CORE_ROOT = Path(__file__).resolve().parents[1]
-SOURCE_ROOTS = (
-    CORE_ROOT / "src",
-    CORE_ROOT / "paths" / "src",
-    CORE_ROOT / "health" / "src",
-    CORE_ROOT / "command-interface" / "src",
-)
-for source in reversed(SOURCE_ROOTS):
-    if str(source) not in sys.path:
-        sys.path.insert(0, str(source))
+SOURCE_ROOT = CORE_ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from dispatch_core.paths import DispatchPaths
 

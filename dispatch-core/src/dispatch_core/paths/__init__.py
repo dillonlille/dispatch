@@ -79,8 +79,8 @@ def require_within(value: str | Path, root: str | Path, label: str = "path") -> 
 
 
 def _source_code_root() -> Path:
-    candidate = Path(__file__).resolve().parents[5]
-    source = candidate / "dispatch-core" / "paths" / "src" / "dispatch_core" / "paths"
+    candidate = Path(__file__).resolve().parents[4]
+    source = candidate / "dispatch-core" / "src" / "dispatch_core" / "paths"
     if not source.is_dir():
         raise PathConfigError("DISPATCH_CODE_ROOT is required outside the source checkout")
     return candidate

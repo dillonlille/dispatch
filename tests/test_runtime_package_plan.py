@@ -41,15 +41,7 @@ def test_runtime_package_plan_matches_pyproject_and_sources() -> None:
         "dispatch_core.browser_manager",
     ]
     package_dirs = pyproject["tool"]["setuptools"]["package-dir"]
-    assert package_dirs == {
-        "dispatch_core": "src/dispatch_core",
-        "dispatch_core.authentication": "authentication/src/dispatch_core/authentication",
-        "dispatch_core.browser_manager": "browser-manager/src/dispatch_core/browser_manager",
-        "dispatch_core.collection_manager": "collection-manager/src/dispatch_core/collection_manager",
-        "dispatch_core.command_interface": "command-interface/src/dispatch_core/command_interface",
-        "dispatch_core.health": "health/src/dispatch_core/health",
-        "dispatch_core.paths": "paths/src/dispatch_core/paths",
-    }
+    assert package_dirs == {"dispatch_core": "src/dispatch_core"}
     assert all("plugins" not in Path(value).parts for value in package_dirs.values())
 
     declared_sources = set()

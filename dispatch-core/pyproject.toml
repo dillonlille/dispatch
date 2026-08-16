@@ -45,12 +45,6 @@ packages = [
 
 [tool.setuptools.package-dir]
 dispatch_core = "src/dispatch_core"
-"dispatch_core.paths" = "paths/src/dispatch_core/paths"
-"dispatch_core.health" = "health/src/dispatch_core/health"
-"dispatch_core.command_interface" = "command-interface/src/dispatch_core/command_interface"
-"dispatch_core.collection_manager" = "collection-manager/src/dispatch_core/collection_manager"
-"dispatch_core.authentication" = "authentication/src/dispatch_core/authentication"
-"dispatch_core.browser_manager" = "browser-manager/src/dispatch_core/browser_manager"
 
 [tool.pytest.ini_options]
 addopts = "-q -p no:cacheprovider"

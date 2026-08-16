@@ -11,19 +11,9 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-for source in reversed(
-    (
-        ROOT / "src",
-        ROOT / "paths" / "src",
-        ROOT / "health" / "src",
-        ROOT / "command-interface" / "src",
-        ROOT / "collection-manager" / "src",
-        ROOT / "authentication" / "src",
-        ROOT / "browser-manager" / "src",
-    )
-):
-    if str(source) not in sys.path:
-        sys.path.insert(0, str(source))
+SOURCE_ROOT = ROOT / "src"
+if str(SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(SOURCE_ROOT))
 
 from dispatch_core.paths import DispatchPaths, PathConfigError
 
@@ -34,32 +24,32 @@ RELEASE_FILES = (
     "src/dispatch_core/__init__.py",
     "src/dispatch_core/plugin_runtime.py",
     "paths/README.md",
-    "paths/src/dispatch_core/paths/__init__.py",
+    "src/dispatch_core/paths/__init__.py",
     "health/README.md",
-    "health/src/dispatch_core/health/__init__.py",
+    "src/dispatch_core/health/__init__.py",
     "command-interface/README.md",
-    "command-interface/src/dispatch_core/command_interface/__init__.py",
-    "command-interface/src/dispatch_core/command_interface/__main__.py",
+    "src/dispatch_core/command_interface/__init__.py",
+    "src/dispatch_core/command_interface/__main__.py",
     "plugin-policy/README.md",
     "plugin-policy/plugin_conformance.py",
     "lifecycle/README.md",
     "lifecycle/build_component.py",
     "lifecycle/verify_component.py",
     "collection-manager/README.md",
-    "collection-manager/src/dispatch_core/collection_manager/__init__.py",
-    "collection-manager/src/dispatch_core/collection_manager/queue.py",
-    "collection-manager/src/dispatch_core/collection_manager/supervisor.py",
+    "src/dispatch_core/collection_manager/__init__.py",
+    "src/dispatch_core/collection_manager/queue.py",
+    "src/dispatch_core/collection_manager/supervisor.py",
     "authentication/README.md",
-    "authentication/src/dispatch_core/authentication/__init__.py",
-    "authentication/src/dispatch_core/authentication/workflow.py",
+    "src/dispatch_core/authentication/__init__.py",
+    "src/dispatch_core/authentication/workflow.py",
     "browser-manager/README.md",
-    "browser-manager/src/dispatch_core/browser_manager/__init__.py",
-    "browser-manager/src/dispatch_core/browser_manager/manager.py",
-    "browser-manager/src/dispatch_core/browser_manager/models.py",
-    "browser-manager/src/dispatch_core/browser_manager/policy.py",
-    "browser-manager/src/dispatch_core/browser_manager/runtime.py",
-    "browser-manager/src/dispatch_core/browser_manager/runtime_authority.py",
-    "browser-manager/src/dispatch_core/browser_manager/store.py",
+    "src/dispatch_core/browser_manager/__init__.py",
+    "src/dispatch_core/browser_manager/manager.py",
+    "src/dispatch_core/browser_manager/models.py",
+    "src/dispatch_core/browser_manager/policy.py",
+    "src/dispatch_core/browser_manager/runtime.py",
+    "src/dispatch_core/browser_manager/runtime_authority.py",
+    "src/dispatch_core/browser_manager/store.py",
     "scripts/build",
     "scripts/health",
     "scripts/verify",

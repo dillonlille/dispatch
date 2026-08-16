@@ -16,7 +16,7 @@
     "package_files": [
       {
         "path": "dispatch_core/__init__.py",
-        "sha256": "d76e4b6d0d0a9926e128130588b25e2f4b75a7852877049faa6938618493ae34"
+        "sha256": "d08af085b4a9e847d8574138d8d8609ae40251f794701757767ae3e50bc48ace"
       },
       {
         "path": "dispatch_core/authentication/__init__.py",
@@ -80,7 +80,7 @@
       },
       {
         "path": "dispatch_core/paths/__init__.py",
-        "sha256": "1f3f6f6b6e5d86900a0d4d350c5e94fb5f8d66eb0c3b7c41b9a40de6670851ff"
+        "sha256": "802ac31602f6f37033915fda759b0cdf8a2214850c4b524b7fd94ebd8ac53f88"
       },
       {
         "path": "dispatch_core/plugin_runtime.py",

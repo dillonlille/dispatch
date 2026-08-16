@@ -2,12 +2,19 @@
 
 Dispatch Core is the root-level, feature-oriented control plane for Dispatch. It is not a plugin and does not live under `plugins/`.
 
-Each Core feature owns a directory, documentation, implementation, and focused tests. The current source contains implemented `paths`, `health`, `command-interface`, `plugin-policy`, `lifecycle`, and `browser-manager` features. Authentication has encrypted credential storage and a bounded Amazon/Paycom login workflow; authorized live-account acceptance remains pending. Collection Manager has bounded registration, a transactional SQLite task queue, retries, cancellation, reconciliation, schedules, receipts, and spawned worker-process supervision with hard deadlines, heartbeats, process-tree cleanup, and startup orphan recovery. Persistent OS service installation remains deferred to the installer.
+Core runtime implementation lives under the single `src/dispatch_core/` package tree. Each feature retains an owner directory for documentation and focused tests. The current source contains implemented `paths`, `health`, `command-interface`, `plugin-policy`, `lifecycle`, and `browser-manager` features. Authentication has encrypted credential storage and a bounded Amazon/Paycom login workflow; authorized live-account acceptance remains pending. Collection Manager has bounded registration, a transactional SQLite task queue, retries, cancellation, reconciliation, schedules, receipts, and spawned worker-process supervision with hard deadlines, heartbeats, process-tree cleanup, and startup orphan recovery. Persistent OS service installation remains deferred to the installer.
 
 ## Layout
 
 ```text
 dispatch-core/
+├── src/dispatch_core/
+│   ├── paths/
+│   ├── health/
+│   ├── command_interface/
+│   ├── collection_manager/
+│   ├── authentication/
+│   └── browser_manager/
 ├── paths/
 ├── health/
 ├── command-interface/

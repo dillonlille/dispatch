@@ -13,15 +13,9 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 WORKSPACE = ROOT.parents[1]
 CORE = WORKSPACE / "dispatch-core"
-CORE_SOURCE_ROOTS = (
-    CORE / "src",
-    CORE / "paths" / "src",
-    CORE / "health" / "src",
-    CORE / "command-interface" / "src",
-)
-for source in reversed(CORE_SOURCE_ROOTS):
-    if str(source) not in sys.path:
-        sys.path.insert(0, str(source))
+CORE_SOURCE_ROOT = CORE / "src"
+if str(CORE_SOURCE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CORE_SOURCE_ROOT))
 
 from dispatch_core.paths import DispatchPaths
 

@@ -1,6 +1,6 @@
 # Portable path configuration
 
-Dispatch Core owns one non-mutating resolver in `dispatch-core/paths/src/dispatch_core/paths/__init__.py`. It resolves canonical code separately from private configuration, data, state, cache, runtime, and build output. Constructing the resolver never creates directories.
+Dispatch Core owns one non-mutating resolver in `dispatch-core/src/dispatch_core/paths/__init__.py`. It resolves canonical code separately from private configuration, data, state, cache, runtime, and build output. Constructing the resolver never creates directories.
 
 ## User installation root
 

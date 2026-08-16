@@ -78,22 +78,12 @@
     "dispatch-core/README.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "0edb6e42f2a02a1b3bf0e00c16fd69577d6a5c8ced6dd87808533c07026bd613"
+      "sha256": "d11457f24552436bc770124c918a13dc6e7c2bfd9a24a21620f2ee73ffc0b19e"
     },
     "dispatch-core/authentication/README.md": {
       "kind": "file",
       "origin": "generated_public",
       "sha256": "9845878d4f949800d4a08de4f0459194f805e0acf5ff7ff68204c0167fbcf1ae"
-    },
-    "dispatch-core/authentication/src/dispatch_core/authentication/__init__.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "8904bfa96ad69ff1d7585a692db9bad41d36af61c2345a8326731a2929d3ebfa"
-    },
-    "dispatch-core/authentication/src/dispatch_core/authentication/workflow.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "17bbf3eda7842a09d82dcee5aff2615f72929f4645c2257d90ff58199b72bdc5"
     },
     "dispatch-core/authentication/tests/test_authentication.py": {
       "kind": "file",
@@ -110,41 +100,6 @@
       "origin": "generated_public",
       "sha256": "b1018d7bace7d9727b25abd0cac5269282e1f8f139bc8312e1dfa9a922bdfdc8"
     },
-    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/__init__.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "343f2316c2475f1e19de5ce75a87e24b3cb1e1802fe72ac7060211d53d40073a"
-    },
-    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/manager.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "4a7af653575c79ee0c452a32a2cb0b3f83be03c921d449472e436474094dc7c9"
-    },
-    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/models.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "82143c2c3f3594cdcd874a46608a7f267e47fb490bbd1c3ccb01c058cc1d95d8"
-    },
-    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/policy.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "5af803255fbf5b9e8fad5364a227de068d0e3584ad22cd14f802fa1e4265152a"
-    },
-    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/runtime.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "9f5b88489832f89722be329fcb3b3348b0ebe5998100e36586854415d1e5e425"
-    },
-    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/runtime_authority.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "bacec89b43e9ea76898ff1efffb3840f37b8b614fb4e3a2f89bc4d5b9a47ba58"
-    },
-    "dispatch-core/browser-manager/src/dispatch_core/browser_manager/store.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "d372d7aecccab71e8a23790658c3ef33bcb0d861f9812e2bbc9476d11028105e"
-    },
     "dispatch-core/browser-manager/tests/test_browser_manager.py": {
       "kind": "file",
       "origin": "generated_public",
@@ -159,21 +114,6 @@
       "kind": "file",
       "origin": "generated_public",
       "sha256": "30bb34c40dfe8dab4e8927e4e260d6c5e01b29c9feb45a618b43c07dc7da4614"
-    },
-    "dispatch-core/collection-manager/src/dispatch_core/collection_manager/__init__.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "e72ba3542af409e63b474ca0d24b34ac4e3916337c97641f31c668ecf7a4495a"
-    },
-    "dispatch-core/collection-manager/src/dispatch_core/collection_manager/queue.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "c114a1fdeead4213ee62166c2f8e6492fff7e9c348873042abcfa4eb6d7d2e5e"
-    },
-    "dispatch-core/collection-manager/src/dispatch_core/collection_manager/supervisor.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "1782ba65fa62abb4b79e41e5a3e24c31aefc469beb0da51a38e4240743e92cf9"
     },
     "dispatch-core/collection-manager/tests/test_collection_manager.py": {
       "kind": "file",
@@ -195,16 +135,6 @@
       "origin": "generated_public",
       "sha256": "ed7850dc3db7f8f21695c0163fb9137e87383e16047a217ca4134db9d79c1c38"
     },
-    "dispatch-core/command-interface/src/dispatch_core/command_interface/__init__.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "d8212842f75d4f4ec614fb28668c10ee1276b2ce3a2a2f8365e68346af9b3863"
-    },
-    "dispatch-core/command-interface/src/dispatch_core/command_interface/__main__.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "0472e2ffee01c7582c667fb3eb1ef01023e7d584f175cef8cb475e45e6bd1736"
-    },
     "dispatch-core/command-interface/tests/test_command_interface.py": {
       "kind": "file",
       "origin": "generated_public",
@@ -213,7 +143,7 @@
     "dispatch-core/conftest.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "9d9bdde3818c81c38760975314c7dff770fb7c85f7a96f2ac1624f57fbe16f9f"
+      "sha256": "1266fcf396de732cddf35f97d2c136f98d824f714ceb373a8684f255c0ce72f1"
     },
     "dispatch-core/core-manifest.json": {
       "kind": "file",
@@ -224,11 +154,6 @@
       "kind": "file",
       "origin": "generated_public",
       "sha256": "baa765ec45f5685c32f1ed86afc4911a6de0e6a5331cbdf8b5740175e19ad4d8"
-    },
-    "dispatch-core/health/src/dispatch_core/health/__init__.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "09df9b453a835ed423d9b14def15e02fe3571f276882499732ec6a0d4e1cbe3f"
     },
     "dispatch-core/health/tests/test_health.py": {
       "kind": "file",
@@ -243,7 +168,7 @@
     "dispatch-core/lifecycle/build_component.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "ca222c8f839836bed69d58cc8a91e66a79c0dd7e19705293e1aabc0cf75aa016"
+      "sha256": "8111755e33a31b2ceb2fedf0c8693667ee46690f1b717dce8944ae107cb459e2"
     },
     "dispatch-core/lifecycle/tests/test_lifecycle.py": {
       "kind": "file",
@@ -253,17 +178,12 @@
     "dispatch-core/lifecycle/verify_component.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "4cf4a3183b8608644ee9f2da2ab6dc55c7ba7e96b4c94aa8945212809df663a7"
+      "sha256": "a6abfd0d5e11c7ab1a886585563e5e239609435d2766c1f67dee487054bf15fc"
     },
     "dispatch-core/paths/README.md": {
       "kind": "file",
       "origin": "generated_public",
       "sha256": "9085f750e6afc5f3983205a121aa786b54364e3eaa6f0ef2c47f947ff74473be"
-    },
-    "dispatch-core/paths/src/dispatch_core/paths/__init__.py": {
-      "kind": "file",
-      "origin": "generated_public",
-      "sha256": "1f3f6f6b6e5d86900a0d4d350c5e94fb5f8d66eb0c3b7c41b9a40de6670851ff"
     },
     "dispatch-core/paths/tests/test_paths.py": {
       "kind": "file",
@@ -278,7 +198,7 @@
     "dispatch-core/plugin-policy/plugin_conformance.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "a4352468378fcbd10a2b3870697183c3995ba86c792e7245c014ee06aded4cb6"
+      "sha256": "e62897031dd4f5999044104bdee8a4af96a88aeceabb8f59f315ad3ca5ce55a5"
     },
     "dispatch-core/plugin-policy/tests/test_plugin_conformance.py": {
       "kind": "file",
@@ -288,7 +208,7 @@
     "dispatch-core/pyproject.toml": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "112a15e2a8ab1221d59c9e53953a482d259698aac84c69f16921f440bd3b464a"
+      "sha256": "b8c86edd38aa5901e984fa6eab3161594e46720688ed080ac3bf9d13bacd4b2a"
     },
     "dispatch-core/scripts/build": {
       "kind": "file",
@@ -298,7 +218,7 @@
     "dispatch-core/scripts/health": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "c0cb321bc55eb97348bfd8d612dfcc4edfb775806a24ec4b94881abdb6afc8ec"
+      "sha256": "b2d7d47fea86e02bacf9b6316f60a2fa9a48bc49745f810001f4ef15bdd3ab0e"
     },
     "dispatch-core/scripts/test": {
       "kind": "file",
@@ -313,7 +233,87 @@
     "dispatch-core/src/dispatch_core/__init__.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "d76e4b6d0d0a9926e128130588b25e2f4b75a7852877049faa6938618493ae34"
+      "sha256": "d08af085b4a9e847d8574138d8d8609ae40251f794701757767ae3e50bc48ace"
+    },
+    "dispatch-core/src/dispatch_core/authentication/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "8904bfa96ad69ff1d7585a692db9bad41d36af61c2345a8326731a2929d3ebfa"
+    },
+    "dispatch-core/src/dispatch_core/authentication/workflow.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "17bbf3eda7842a09d82dcee5aff2615f72929f4645c2257d90ff58199b72bdc5"
+    },
+    "dispatch-core/src/dispatch_core/browser_manager/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "343f2316c2475f1e19de5ce75a87e24b3cb1e1802fe72ac7060211d53d40073a"
+    },
+    "dispatch-core/src/dispatch_core/browser_manager/manager.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "4a7af653575c79ee0c452a32a2cb0b3f83be03c921d449472e436474094dc7c9"
+    },
+    "dispatch-core/src/dispatch_core/browser_manager/models.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "82143c2c3f3594cdcd874a46608a7f267e47fb490bbd1c3ccb01c058cc1d95d8"
+    },
+    "dispatch-core/src/dispatch_core/browser_manager/policy.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "5af803255fbf5b9e8fad5364a227de068d0e3584ad22cd14f802fa1e4265152a"
+    },
+    "dispatch-core/src/dispatch_core/browser_manager/runtime.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "9f5b88489832f89722be329fcb3b3348b0ebe5998100e36586854415d1e5e425"
+    },
+    "dispatch-core/src/dispatch_core/browser_manager/runtime_authority.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "bacec89b43e9ea76898ff1efffb3840f37b8b614fb4e3a2f89bc4d5b9a47ba58"
+    },
+    "dispatch-core/src/dispatch_core/browser_manager/store.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "d372d7aecccab71e8a23790658c3ef33bcb0d861f9812e2bbc9476d11028105e"
+    },
+    "dispatch-core/src/dispatch_core/collection_manager/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "e72ba3542af409e63b474ca0d24b34ac4e3916337c97641f31c668ecf7a4495a"
+    },
+    "dispatch-core/src/dispatch_core/collection_manager/queue.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "c114a1fdeead4213ee62166c2f8e6492fff7e9c348873042abcfa4eb6d7d2e5e"
+    },
+    "dispatch-core/src/dispatch_core/collection_manager/supervisor.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "1782ba65fa62abb4b79e41e5a3e24c31aefc469beb0da51a38e4240743e92cf9"
+    },
+    "dispatch-core/src/dispatch_core/command_interface/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "d8212842f75d4f4ec614fb28668c10ee1276b2ce3a2a2f8365e68346af9b3863"
+    },
+    "dispatch-core/src/dispatch_core/command_interface/__main__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "0472e2ffee01c7582c667fb3eb1ef01023e7d584f175cef8cb475e45e6bd1736"
+    },
+    "dispatch-core/src/dispatch_core/health/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "09df9b453a835ed423d9b14def15e02fe3571f276882499732ec6a0d4e1cbe3f"
+    },
+    "dispatch-core/src/dispatch_core/paths/__init__.py": {
+      "kind": "file",
+      "origin": "generated_public",
+      "sha256": "802ac31602f6f37033915fda759b0cdf8a2214850c4b524b7fd94ebd8ac53f88"
     },
     "dispatch-core/src/dispatch_core/plugin_runtime.py": {
       "kind": "file",
@@ -343,7 +343,7 @@
     "docs/path-configuration.md": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "5ee02602973ddede1d656afab74ab12550a025adccaa14af1e0b0b37f4fba99f"
+      "sha256": "9249d7ee568fcb29e2b9cce5b7ac93b2b296690757fa01119087d9193e02c457"
     },
     "docs/phase-5-installation-contract.md": {
       "kind": "file",
@@ -573,7 +573,7 @@
     "packaging/installation-release-manifest.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "2aec490add52da14af22757237f9e8e225bbc1f9cf033f243f0a9db88d80c458"
+      "sha256": "b4921fcbace2799a2267beb6e214839e93c185509523c2d86e75d608439752ac"
     },
     "packaging/installer-package-plan.json": {
       "kind": "file",
@@ -583,7 +583,7 @@
     "packaging/runtime-package-plan.json": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "9990a8c9d3eed3f10ec4021ee796302bc2b747da1f7e4d8236551bbdf2e95561"
+      "sha256": "cfba35916bc599e5a8caf362de3d3c109b06c1eeade6d456b36044444937e4e9"
     },
     "plugins/handbook/LICENSE": {
       "kind": "file",
@@ -638,7 +638,7 @@
     "plugins/handbook/scripts/build_release.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "e37e50370352bdbbc2eb3ddcf1b3d60a27fba2dde6689fe688945ed75bb01248"
+      "sha256": "0994bc8e479a05cf42222f3ab704eb132396d28412a2f6f8d68fc906b8679b5b"
     },
     "plugins/handbook/scripts/health": {
       "kind": "file",
@@ -793,7 +793,7 @@
     "tests/test_runtime_package_plan.py": {
       "kind": "file",
       "origin": "generated_public",
-      "sha256": "677359e7b155a66f3ef9d42d9ca5f5f8f1a89591504626f222afd207543f1f77"
+      "sha256": "2426834daaa1defb8150c3af1cb74f9acd3614b153ee8d968c06da0718afe3e6"
     },
     "tests/test_verify_source_export.py": {
       "kind": "file",
