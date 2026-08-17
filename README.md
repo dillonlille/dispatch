@@ -9,7 +9,7 @@ dispatch-core/                 directly executable Core source
 installer/                     source installer and lifecycle helpers
 plugins/handbook/              independently owned built-in example plugin
 scripts/                       source-safety checks
-.github/workflows/             source CI and manual release/deployment workflows
+.github/workflows/             source CI and manual release workflow
 docs/                          installation, path, release, and security contracts
 ```
 
@@ -86,7 +86,7 @@ These commands do not perform live account, browser-launch, production-service, 
 
 A release is a reviewed Git tag on the exact approved `main` commit. The manual release workflow reruns source safety and tests, then creates a published GitHub Release with generated notes and no custom assets.
 
-Bootstrap publication is a separate manual production workflow. It accepts an exact approved `main` commit, verifies it, stages the canonical root `install.sh` into the Cloudflare asset directory inside CI, and deploys it. Neither workflow runs automatically merely because CI passed or a branch changed.
+Bootstrap publication is a separate explicitly approved operator action performed from private tooling outside this repository. That tooling fetches the canonical root `install.sh` from the exact latest immutable Release, verifies release/tag/current-`main` identity, stages it transiently for Cloudflare, and verifies the public bytes and headers after deployment. Neither release publication nor bootstrap promotion runs automatically merely because CI passed or a branch changed.
 
 See [`docs/releasing.md`](docs/releasing.md).
 

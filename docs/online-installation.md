@@ -76,4 +76,4 @@ A development update refuses a dirty checkout, fetches `origin/dev`, and merges 
 
 Installation may modify only the user-owned Dispatch layout, its launcher and systemd user unit, and approved Playwright operating-system dependencies. It never installs, modifies, inspects, or removes Hermes. Authentication and external integration setup remain explicit operations; installation does not read or import credentials.
 
-The canonical bootstrap is the repository-root `install.sh`. The manual production deployment workflow stages that exact reviewed file for Cloudflare; no second tracked bootstrap implementation exists.
+The canonical bootstrap is the repository-root `install.sh`. Explicitly approved private operator tooling outside this repository fetches that exact file from the latest immutable Release, stages it transiently for Cloudflare, and verifies the public bytes and headers; no second tracked bootstrap implementation exists.
