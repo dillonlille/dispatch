@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import ctypes
+import importlib.util
 import json
 import os
 import shutil
@@ -11,17 +12,26 @@ import sys
 import tempfile
 import uuid
 from collections.abc import Callable, Sequence
+from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, TypeVar
 
+from .browser_lock import (
+    acquire_browser_generation_lock,
+    assert_no_unresolved_browser_leases,
+    release_browser_generation_lock,
+)
 from .layout import (
     InstallLayout,
     InstallerError,
     assert_directory_ancestors,
+    assert_installation_root_current,
     assert_user_owned_directory,
     atomic_json,
+    ensure_private_directory,
     installation_lock,
+    pinned_installation_path,
     read_installation,
 )
 from .repository import (
@@ -49,6 +59,12 @@ RunCommand = Callable[[Sequence[str], Path | None], subprocess.CompletedProcess[
 RollbackResult = TypeVar("RollbackResult")
 
 
+@dataclass(slots=True)
+class _SwapState:
+    backup: Path | None = None
+    active: bool = False
+
+
 def _checked(run: RunCommand, command: Sequence[str], cwd: Path | None, code: str, message: str) -> None:
     if run(command, cwd).returncode != 0:
         raise InstallerError(code, message)
@@ -68,11 +84,80 @@ def _selected_plugins(layout: InstallLayout) -> list[str]:
     return selected
 
 
+def _load_browser_provisioning(layout: InstallLayout) -> Any:
+    relative = Path("dispatch-core") / "browser_manager" / "provisioning.py"
+    checkout = Path(os.path.abspath(layout.clone))
+    source = checkout / relative
+    current = checkout
+    try:
+        checkout_details = current.lstat()
+        if current.is_symlink() or not stat.S_ISDIR(checkout_details.st_mode):
+            raise OSError("unsafe checkout root")
+        for index, part in enumerate(relative.parts):
+            current = current / part
+            details = current.lstat()
+            if current.is_symlink() or details.st_uid != os.geteuid():
+                raise OSError("unsafe provisioner path")
+            final = index == len(relative.parts) - 1
+            if final:
+                if not stat.S_ISREG(details.st_mode) or details.st_nlink != 1:
+                    raise OSError("unsafe provisioner file")
+            elif not stat.S_ISDIR(details.st_mode):
+                raise OSError("unsafe provisioner ancestor")
+        canonical_checkout = checkout.resolve(strict=True)
+        canonical_source = source.resolve(strict=True)
+        canonical_source.relative_to(canonical_checkout)
+        if canonical_source != source:
+            raise OSError("aliased provisioner path")
+    except (OSError, ValueError) as exc:
+        raise InstallerError("browser_provisioner_unsafe", "Browser Manager provisioner path is unsafe") from exc
+    spec = importlib.util.spec_from_file_location(
+        f"_dispatch_browser_provisioning_{uuid.uuid4().hex}",
+        source,
+    )
+    if spec is None or spec.loader is None:
+        raise InstallerError("browser_provisioner_invalid", "Browser Manager provisioner cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[spec.name] = module
+    try:
+        spec.loader.exec_module(module)
+    except Exception as exc:
+        raise InstallerError("browser_provisioner_invalid", "Browser Manager provisioner could not be loaded") from exc
+    if not callable(getattr(module, "provision_managed_browser", None)):
+        raise InstallerError("browser_provisioner_invalid", "Browser Manager provisioner contract is unavailable")
+    return module
+
+
+def _provision_browser(
+    layout: InstallLayout,
+    *,
+    python: Path,
+    staging_cache: Path,
+    run: RunCommand,
+) -> Any:
+    module = _load_browser_provisioning(layout)
+    try:
+        return module.provision_managed_browser(
+            python=python,
+            active_cache=layout.browser_cache,
+            staging_cache=staging_cache,
+            legacy_cache=layout.legacy_browser_cache,
+            run=run,
+            install_system_dependencies=True,
+        )
+    except Exception as exc:
+        error_type = getattr(module, "BrowserProvisioningError", ())
+        if error_type and isinstance(exc, error_type):
+            raise InstallerError(str(getattr(exc, "code", "browser_provisioning_failed")), str(exc)) from exc
+        raise
+
+
 def ensure_venv(
     layout: InstallLayout,
     *,
     destination: Path | None = None,
     browser_cache: Path | None = None,
+    browser_results: list[Any] | None = None,
     run: RunCommand = run_command,
 ) -> Path:
     """Build a complete replacement environment without mutating the active one."""
@@ -139,35 +224,15 @@ def ensure_venv(
         if install_editable_source(python, source, run=private_run).returncode != 0:
             raise InstallerError("plugin_install_failed", f"could not install selected plugin: {plugin_id}")
 
-    browser_cache = browser_cache or layout.cache / "browser"
-    if browser_cache.exists() or browser_cache.is_symlink():
-        if browser_cache.is_symlink() or not browser_cache.is_dir():
-            raise InstallerError("browser_cache_unsafe", "browser cache target is unsafe")
-    else:
-        browser_cache.mkdir(mode=0o700, parents=True)
-    browser_cache.chmod(0o700)
-    _checked(
-        private_run,
-        (str(python), "-m", "playwright", "install-deps", "chromium"),
-        None,
-        "browser_system_dependencies_failed",
-        "could not install Playwright Chromium system dependencies",
+    staging_cache = browser_cache or target.parent / "browser-manager-playwright"
+    result = _provision_browser(
+        layout,
+        python=python,
+        staging_cache=staging_cache,
+        run=private_run,
     )
-    _checked(
-        private_run,
-        (
-            "env",
-            f"PLAYWRIGHT_BROWSERS_PATH={browser_cache}",
-            str(python),
-            "-m",
-            "playwright",
-            "install",
-            "chromium",
-        ),
-        None,
-        "browser_install_failed",
-        "could not install user-owned Playwright Chromium",
-    )
+    if browser_results is not None:
+        browser_results.append(result)
     return target
 
 
@@ -207,6 +272,7 @@ def resolve_ref(channel: str, version: str | None, *, opener: Any = None) -> str
 
 
 def _safe_remove(path: Path) -> None:
+    path = pinned_installation_path(path)
     if not path.exists() and not path.is_symlink():
         return
     details = path.lstat()
@@ -225,6 +291,7 @@ def _safe_remove(path: Path) -> None:
 
 
 def _snapshot_file(path: Path) -> tuple[bytes, int] | None:
+    path = pinned_installation_path(path)
     if not path.exists() and not path.is_symlink():
         return None
     if path.is_symlink() or not path.is_file() or path.stat().st_uid != os.geteuid():
@@ -233,6 +300,7 @@ def _snapshot_file(path: Path) -> tuple[bytes, int] | None:
 
 
 def _restore_file(path: Path, snapshot: tuple[bytes, int] | None) -> None:
+    path = pinned_installation_path(path)
     if snapshot is None:
         if path.exists() or path.is_symlink():
             if path.is_symlink() or not path.is_file():
@@ -258,7 +326,15 @@ def _restore_file(path: Path, snapshot: tuple[bytes, int] | None) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _swap_directory(replacement: Path, target: Path) -> Path | None:
+def _swap_directory(
+    replacement: Path,
+    target: Path,
+    *,
+    state: _SwapState | None = None,
+) -> Path | None:
+    replacement = pinned_installation_path(replacement)
+    target = pinned_installation_path(target)
+    transaction = state or _SwapState()
     if replacement.is_symlink() or not replacement.is_dir():
         raise InstallerError("replacement_unsafe", f"replacement directory is unsafe: {replacement}")
     backup: Path | None = None
@@ -266,10 +342,15 @@ def _swap_directory(replacement: Path, target: Path) -> Path | None:
         if target.is_symlink() or not target.is_dir() or target.stat().st_uid != os.geteuid():
             raise InstallerError("managed_directory_unsafe", f"managed directory is unsafe: {target}")
         backup = target.parent / f".{target.name}.previous-{uuid.uuid4().hex}"
+    transaction.backup = backup
     try:
         if backup is not None:
+            assert_installation_root_current()
             os.replace(target, backup)
+            transaction.active = True
+        assert_installation_root_current()
         os.replace(replacement, target)
+        transaction.active = True
         target.chmod(0o700)
     except BaseException:
         def restore_swap() -> None:
@@ -278,6 +359,7 @@ def _swap_directory(replacement: Path, target: Path) -> Path | None:
                     _safe_remove(target)
                 if replacement.exists() or replacement.is_symlink():
                     _safe_remove(replacement)
+                transaction.active = False
                 return
             if backup.exists() and (target.exists() or target.is_symlink()):
                 if replacement.exists() or replacement.is_symlink():
@@ -292,6 +374,7 @@ def _swap_directory(replacement: Path, target: Path) -> Path | None:
                 _safe_remove(replacement)
             if backup.exists() or not target.is_dir():
                 raise InstallerError("directory_swap_state_unsafe", "directory promotion rollback is incomplete")
+            transaction.active = False
 
         rollback_error: BaseException | None = None
         for _attempt in range(2):
@@ -330,6 +413,8 @@ def _exchange_directories(left: Path, right: Path) -> None:
 
 
 def _restore_directory(target: Path, backup: Path | None) -> None:
+    target = pinned_installation_path(target)
+    backup = None if backup is None else pinned_installation_path(backup)
     displaced = target.parent / f".{target.name}.failed-{uuid.uuid4().hex}"
     if backup is None:
         if target.exists() or target.is_symlink():
@@ -376,13 +461,19 @@ def _restore_directory(target: Path, backup: Path | None) -> None:
                 ) from error
 
         cleanup_interruption: BaseException | None = None
-        while backup.exists() or backup.is_symlink():
+        for _attempt in range(3):
+            if not (backup.exists() or backup.is_symlink()):
+                break
             try:
                 os.replace(backup, displaced)
             except (KeyboardInterrupt, SystemExit) as error:
                 if cleanup_interruption is None:
                     cleanup_interruption = error
-                continue
+        if backup.exists() or backup.is_symlink():
+            raise InstallerError(
+                "directory_restore_rollback_failed",
+                "directory restore cleanup was persistently interrupted",
+            ) from cleanup_interruption
         restored = target.lstat() if target.exists() and not target.is_symlink() else None
         if restored is None or (restored.st_dev, restored.st_ino) != backup_identity:
             raise InstallerError(
@@ -418,6 +509,14 @@ def _restore_directory(target: Path, backup: Path | None) -> None:
                 recovery_error = exc
         if recovery_error is not None and not target.exists() and backup.is_dir() and not backup.is_symlink():
             try:
+                os.rename(backup, target)
+                if not target.is_dir() or target.is_symlink():
+                    raise InstallerError("directory_restore_state_unsafe", "rename fallback restore is unsafe")
+                recovery_error = None
+            except BaseException as exc:
+                recovery_error = exc
+        if recovery_error is not None and not target.exists() and backup.is_dir() and not backup.is_symlink():
+            try:
                 shutil.copytree(backup, target, symlinks=True)
                 if not target.is_dir() or target.is_symlink():
                     raise InstallerError("directory_restore_state_unsafe", "fallback restore is unsafe")
@@ -432,19 +531,54 @@ def _restore_directory(target: Path, backup: Path | None) -> None:
 
 
 def _complete_rollback(action: Callable[[], RollbackResult]) -> RollbackResult:
-    """Defer terminal interrupts until one critical rollback step completes."""
-    while True:
+    """Retry terminal interruption a bounded number of times."""
+    interruption: BaseException | None = None
+    for _attempt in range(3):
         try:
             return action()
-        except (KeyboardInterrupt, SystemExit):
-            continue
+        except (KeyboardInterrupt, SystemExit) as exc:
+            interruption = interruption or exc
+    raise InstallerError(
+        "rollback_persistently_interrupted",
+        "rollback could not complete after repeated terminal interruptions",
+    ) from interruption
 
 
-def _promote_clone(layout: InstallLayout, source: Path) -> Path | None:
-    temporary_root = _prepare_temporary_root(layout).resolve(strict=True)
+def _promote_clone(
+    layout: InstallLayout,
+    source: Path,
+    *,
+    state: _SwapState | None = None,
+) -> Path | None:
+    assert_installation_root_current(layout)
+    legacy_root = pinned_installation_path(layout.dispatch_home / ".install-tmp")
+    allowed_roots: list[Path] = []
+    if legacy_root.exists() or legacy_root.is_symlink():
+        if (
+            legacy_root.is_symlink()
+            or not legacy_root.is_dir()
+            or legacy_root.stat(follow_symlinks=False).st_uid != os.geteuid()
+            or stat.S_IMODE(legacy_root.stat(follow_symlinks=False).st_mode) != 0o700
+        ):
+            raise InstallerError("staging_unsafe", "installation staging directory is unsafe")
+        allowed_roots.append(legacy_root.resolve(strict=True))
     try:
-        candidate = source.resolve(strict=True)
-        candidate.relative_to(temporary_root)
+        candidate = pinned_installation_path(source).resolve(strict=True)
+        temporary_base = Path(tempfile.gettempdir()).resolve(strict=True)
+        for work in candidate.parents:
+            if work.parent != temporary_base:
+                continue
+            if (
+                work.name.startswith(f"dispatch-installer-{os.geteuid()}-")
+                and not work.is_symlink()
+                and work.is_dir()
+                and work.stat(follow_symlinks=False).st_uid == os.geteuid()
+                and stat.S_IMODE(work.stat(follow_symlinks=False).st_mode) == 0o700
+            ):
+                allowed_roots.append(work)
+            break
+        if not any(candidate.is_relative_to(root) for root in allowed_roots):
+            raise ValueError("candidate is outside approved staging")
     except (OSError, ValueError) as exc:
         raise InstallerError(
             "clone_outside_staging",
@@ -452,7 +586,7 @@ def _promote_clone(layout: InstallLayout, source: Path) -> Path | None:
         ) from exc
     if candidate.is_symlink() or not candidate.is_dir() or not (candidate / ".git").is_dir():
         raise InstallerError("clone_invalid", "staged source is not a safe Git checkout")
-    return _swap_directory(candidate, layout.clone)
+    return _swap_directory(candidate, layout.clone, state=state)
 
 
 def _remove_legacy_code(layout: InstallLayout, *, setup_migrated: bool) -> None:
@@ -471,36 +605,42 @@ def _remove_legacy_code(layout: InstallLayout, *, setup_migrated: bool) -> None:
 
 
 def _prepare_temporary_root(layout: InstallLayout) -> Path:
-    temporary_root = layout.dispatch_home / ".install-tmp"
-    if temporary_root.exists() or temporary_root.is_symlink():
+    legacy_root = pinned_installation_path(layout.dispatch_home / ".install-tmp")
+    if legacy_root.exists() or legacy_root.is_symlink():
         if (
-            temporary_root.is_symlink()
-            or not temporary_root.is_dir()
-            or temporary_root.stat().st_uid != os.geteuid()
-            or stat.S_IMODE(temporary_root.stat(follow_symlinks=False).st_mode) != 0o700
+            legacy_root.is_symlink()
+            or not legacy_root.is_dir()
+            or legacy_root.stat(follow_symlinks=False).st_uid != os.geteuid()
+            or stat.S_IMODE(legacy_root.stat(follow_symlinks=False).st_mode) != 0o700
         ):
             raise InstallerError("staging_unsafe", "installation staging directory is unsafe")
-    else:
-        temporary_root.mkdir(mode=0o700)
+    temporary_root = Path(tempfile.mkdtemp(prefix=f"dispatch-installer-{os.geteuid()}-"))
+    temporary_root.chmod(0o700)
     return temporary_root
 
 
-def _build_replacement_venv(layout: InstallLayout, *, run: RunCommand) -> tuple[Path, Path, Path]:
-    temporary_root = _prepare_temporary_root(layout)
-    work = Path(tempfile.mkdtemp(prefix="venv-", dir=temporary_root))
+def _build_replacement_venv(layout: InstallLayout, *, run: RunCommand) -> tuple[Path, Path | None, Path, Any]:
+    work = _prepare_temporary_root(layout)
     replacement = work / "venv"
-    browser_replacement = work / "browser"
+    browser_replacement = work / "browser-manager" / "playwright"
+    browser_results: list[Any] = []
     try:
         ensure_venv(
             layout,
             destination=replacement,
             browser_cache=browser_replacement,
+            browser_results=browser_results,
             run=run,
         )
     except BaseException:
         _safe_remove(work)
         raise
-    return replacement, browser_replacement, work
+    if len(browser_results) != 1:
+        _safe_remove(work)
+        raise InstallerError("browser_provisioning_failed", "Browser Manager did not return one provisioning result")
+    browser_result = browser_results[0]
+    staged = browser_replacement if bool(getattr(browser_result, "replacement_required", False)) else None
+    return replacement, staged, work, browser_result
 
 
 def _activate(
@@ -524,12 +664,17 @@ def _activate(
     plugin_snapshot = _snapshot_file(plugin_config)
     work: Path | None = None
     try:
+        assert_checkout_clean(pinned_installation_path(layout.clone), run=run)
         legacy_setup_migrated = migrate_legacy_plugin_config(layout)
-        replacement, browser_replacement, work = _build_replacement_venv(layout, run=run)
-        assert_checkout_clean(layout.clone, run=run)
+        replacement, browser_replacement, work, browser_result = _build_replacement_venv(layout, run=run)
+        assert_checkout_clean(pinned_installation_path(layout.clone), run=run)
         snapshots = {
             "command": (layout.command_path, _snapshot_file(layout.command_path)),
             "installation": (layout.installation_record, _snapshot_file(layout.installation_record)),
+            "browser_installation": (
+                layout.browser_installation_record,
+                _snapshot_file(layout.browser_installation_record),
+            ),
             "service": (layout.service_path, _snapshot_file(layout.service_path)),
             "service_record": (layout.state / "service.json", _snapshot_file(layout.state / "service.json")),
             "plugin_config": (plugin_config, plugin_snapshot),
@@ -543,20 +688,27 @@ def _activate(
         raise
     assert work is not None
     old_service_present = snapshots["service"][1] is not None
-    venv_backup: Path | None = None
-    venv_swapped = False
-    browser_backup: Path | None = None
-    browser_swapped = False
+    venv_swap = _SwapState()
+    browser_swap = _SwapState()
+    generation_lock: int | None = None
     try:
         if legacy_owned:
             stop_legacy_user_service(layout, run=run)
-        browser_backup = _swap_directory(browser_replacement, layout.cache / "browser")
-        browser_swapped = True
-        venv_backup = _swap_directory(replacement, layout.venv)
-        venv_swapped = True
+        if old_service_present:
+            stopped = run(("systemctl", "--user", "stop", "dispatch.service"), None)
+            if stopped.returncode != 0:
+                raise InstallerError("service_stop_failed", "Dispatch service could not be stopped before activation")
+        generation_lock = acquire_browser_generation_lock(layout)
+        assert_no_unresolved_browser_leases(layout)
+        if browser_replacement is not None:
+            ensure_private_directory(layout.browser_manager_cache, "Browser Manager cache")
+            _swap_directory(browser_replacement, layout.browser_cache, state=browser_swap)
+        _swap_directory(replacement, layout.venv, state=venv_swap)
         command = install_user_command(layout)
         payload = _installation_record(layout, channel=channel, ref=ref, commit=commit, now=now)
-        atomic_json(layout.installation_record, payload)
+        atomic_json(pinned_installation_path(layout.installation_record), payload)
+        browser_payload = browser_result.installation_record(layout.browser_cache)
+        atomic_json(pinned_installation_path(layout.browser_installation_record), browser_payload)
         service = install_user_service(layout, run=run, activate=True)
     except BaseException as activation_error:
         rollback_failure: BaseException | None = None
@@ -573,21 +725,25 @@ def _activate(
 
         if service_unit_is_owned(layout):
             attempt(lambda: run(("systemctl", "--user", "disable", "--now", "dispatch.service"), None))
-        if venv_swapped:
-            attempt(lambda: _restore_directory(layout.venv, venv_backup))
-        if browser_swapped:
-            attempt(lambda: _restore_directory(layout.cache / "browser", browser_backup))
+        if venv_swap.active:
+            attempt(lambda: _restore_directory(layout.venv, venv_swap.backup))
+            venv_swap.active = False
+        if browser_swap.active:
+            attempt(lambda: _restore_directory(layout.browser_cache, browser_swap.backup))
+            browser_swap.active = False
         for path, snapshot in snapshots.values():
             attempt(lambda path=path, snapshot=snapshot: _restore_file(path, snapshot))
         attempt(lambda: run(("systemctl", "--user", "daemon-reload"), None))
         if legacy_owned:
             attempt(lambda: run(("systemctl", "--user", "enable", "--now", "dispatch-core.service"), None))
         elif old_service_present:
-            attempt(lambda: run(("systemctl", "--user", "restart", "dispatch.service"), None))
+            attempt(lambda: run(("systemctl", "--user", "enable", "--now", "dispatch.service"), None))
         try:
             _safe_remove(work)
         except BaseException:
             pass
+        release_browser_generation_lock(generation_lock)
+        generation_lock = None
         if rollback_failure is not None:
             raise InstallerError(
                 "activation_rollback_failed",
@@ -595,35 +751,47 @@ def _activate(
             ) from activation_error
         raise
 
-    # Activation is committed. Cleanup failures, including user interruption,
-    # must not escape to callers that would roll back only the checkout.
-    for obsolete in (venv_backup, browser_backup, work):
+    release_browser_generation_lock(generation_lock)
+    generation_lock = None
+
+    # Activation is committed. Cleanup failures must be explicit without
+    # triggering a checkout-only rollback of an already active generation.
+    cleanup_failed = False
+    for obsolete in (venv_swap.backup, browser_swap.backup, work):
         if obsolete is None:
             continue
         try:
             _safe_remove(obsolete)
         except BaseException:
-            pass
+            cleanup_failed = True
     try:
+        if (
+            getattr(browser_result, "status", "") == "migrated"
+            and (layout.legacy_browser_cache.exists() or layout.legacy_browser_cache.is_symlink())
+        ):
+            _safe_remove(layout.legacy_browser_cache)
         if legacy_present:
             remove_legacy_user_service(layout, run=run)
         if legacy_present and legacy_setup_migrated:
             _remove_legacy_code(layout, setup_migrated=True)
     except BaseException:
-        # The new generation is active; failed legacy cleanup may leave only
-        # obsolete files and must not trigger a checkout-only rollback.
-        pass
-    return {
+        cleanup_failed = True
+    result_status = f"{status}_cleanup_incomplete" if cleanup_failed else status
+    result = {
         "schema_version": 1,
-        "status": status,
+        "status": result_status,
         "channel": channel,
         "ref": ref,
         "commit": commit,
         "layout": layout.as_dict(),
+        "browser": browser_result.safe_data(),
         "command": command,
         "service": service,
         "hermes": "untouched",
     }
+    if cleanup_failed:
+        result["cleanup_error_code"] = "post_activation_cleanup_failed"
+    return result
 
 
 def install_from_clone(
@@ -635,14 +803,16 @@ def install_from_clone(
     run: RunCommand = run_command,
     now: Callable[[], datetime] = lambda: datetime.now(UTC),
 ) -> dict[str, object]:
-    layout.prepare()
     with installation_lock(layout):
-        clone_backup: Path | None = None
-        clone_promoted = False
+        clone_swap = _SwapState()
         try:
-            clone_backup = _promote_clone(layout, Path(source))
-            clone_promoted = True
-            commit = verify_checkout_authority(layout.clone, channel=channel, ref=ref, run=run)
+            _promote_clone(layout, Path(source), state=clone_swap)
+            commit = verify_checkout_authority(
+                pinned_installation_path(layout.clone),
+                channel=channel,
+                ref=ref,
+                run=run,
+            )
             result = _activate(
                 layout,
                 channel=channel,
@@ -653,26 +823,26 @@ def install_from_clone(
                 status="installed",
             )
         except BaseException as exc:
-            if clone_promoted:
+            if clone_swap.active:
                 try:
-                    _complete_rollback(lambda: _restore_directory(layout.clone, clone_backup))
+                    _complete_rollback(lambda: _restore_directory(layout.clone, clone_swap.backup))
+                    clone_swap.active = False
                 except BaseException:
                     raise InstallerError(
                         "clone_rollback_failed",
                         "installation failed and the prior checkout could not be restored",
                     ) from exc
             raise
-        if clone_backup is not None:
+        if clone_swap.backup is not None:
             try:
-                _safe_remove(clone_backup)
+                _safe_remove(clone_swap.backup)
             except BaseException:
                 pass
         return result
 
 
 def _stage_repository(layout: InstallLayout, *, channel: str, ref: str, run: RunCommand) -> tuple[Path, Path]:
-    temporary_root = _prepare_temporary_root(layout)
-    work = Path(tempfile.mkdtemp(prefix="clone-", dir=temporary_root))
+    work = _prepare_temporary_root(layout)
     source = work / "dispatch"
     try:
         clone_repository(source, channel=channel, ref=ref, run=run)
@@ -694,6 +864,7 @@ def _update_existing(
     now: Callable[[], datetime],
 ) -> dict[str, object]:
     def rollback_checkout(old_commit: str) -> subprocess.CompletedProcess[str]:
+        clone = pinned_installation_path(layout.clone)
         restore = (
             ("git", "reset", "--hard", old_commit)
             if channel == "dev"
@@ -703,7 +874,7 @@ def _update_existing(
         first_failure: BaseException | None = None
         for command in (restore,):
             try:
-                completed = run(command, layout.clone)
+                completed = run(command, clone)
                 result = completed
                 if completed.returncode != 0 and first_failure is None:
                     first_failure = InstallerError(
@@ -714,7 +885,7 @@ def _update_existing(
                 if first_failure is None:
                     first_failure = command_error
         try:
-            assert_checkout_clean(layout.clone, run=run)
+            assert_checkout_clean(clone, run=run)
         except BaseException as cleanliness_error:
             if first_failure is None:
                 first_failure = cleanliness_error
@@ -725,11 +896,12 @@ def _update_existing(
         return result
 
     with installation_lock(layout):
-        assert_checkout_clean(layout.clone, run=run)
-        old_commit = current_commit(layout.clone, run=run)
+        clone = pinned_installation_path(layout.clone)
+        assert_checkout_clean(clone, run=run)
+        old_commit = current_commit(clone, run=run)
         try:
-            checkout_existing(layout.clone, channel=channel, ref=ref, preflight=False, run=run)
-            commit = current_commit(layout.clone, run=run)
+            checkout_existing(clone, channel=channel, ref=ref, preflight=False, run=run)
+            commit = current_commit(clone, run=run)
             return _activate(
                 layout,
                 channel=channel,
@@ -765,16 +937,18 @@ def install_or_update(
         return _update_existing(layout, channel=channel, ref=ref, run=run, now=now)
 
     layout.prepare()
-    staged, work = _stage_repository(layout, channel=channel, ref=ref, run=run)
-    try:
-        result = install_from_clone(layout, source=staged, channel=channel, ref=ref, run=run, now=now)
-        result["status"] = "switched" if current is not None else "installed"
-        return result
-    finally:
+    with installation_lock(layout):
+        assert_installation_root_current(layout)
+        staged, work = _stage_repository(layout, channel=channel, ref=ref, run=run)
         try:
-            _safe_remove(work)
-        except BaseException:
-            pass
+            result = install_from_clone(layout, source=staged, channel=channel, ref=ref, run=run, now=now)
+            result["status"] = "switched" if current is not None else "installed"
+            return result
+        finally:
+            try:
+                _safe_remove(work)
+            except BaseException:
+                pass
 
 
 def repair_existing(
@@ -787,10 +961,11 @@ def repair_existing(
     if current is None or not layout.clone.is_dir():
         raise InstallerError("installation_missing", "Dispatch is not installed")
     with installation_lock(layout):
+        clone = pinned_installation_path(layout.clone)
         channel = str(current["channel"])
         ref = str(current["ref"])
         commit = verify_checkout_authority(
-            layout.clone,
+            clone,
             channel=channel,
             ref=ref,
             run=run,

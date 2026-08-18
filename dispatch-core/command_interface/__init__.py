@@ -5,7 +5,7 @@ import argparse
 import getpass
 import json
 import signal
-from typing import Any, Sequence
+from typing import Any, NoReturn, Sequence
 
 from collection_manager import CollectionStoreError, CollectionTaskStore
 from collection_manager.queue import utc_now
@@ -25,12 +25,24 @@ class CommandInterfaceError(RuntimeError):
         self.code = code
 
 
+class _JsonArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise CommandInterfaceError("arguments_invalid", message)
+
+
 def parser(*, prog: str = "dispatch-core") -> argparse.ArgumentParser:
-    value = argparse.ArgumentParser(prog=prog)
+    value = _JsonArgumentParser(prog=prog)
     subcommands = value.add_subparsers(dest="action", required=True)
     subcommands.add_parser("health", help="report installed Core path readiness")
     subcommands.add_parser("verify", help="verify the installed Core package and path contract")
     subcommands.add_parser("browser-doctor", help="report non-mutating Browser Manager dependency readiness")
+    browser = subcommands.add_parser("browser", help="inspect the managed Browser Manager runtime")
+    browser_actions = browser.add_subparsers(dest="browser_action", required=True)
+    browser_actions.add_parser("status", help="report bounded runtime and provider status")
+    browser_actions.add_parser("doctor", help="diagnose managed browser readiness")
+    browser_actions.add_parser("verify", help="verify the active managed browser generation")
+    browser_actions.add_parser("reconcile", help="reconcile interrupted Browser Manager leases")
+    browser_actions.add_parser("providers", help="list implemented and reserved provider contracts")
     service = subcommands.add_parser("service", help="run the foreground Core collection service")
     service.add_argument("--idle-seconds", type=float, default=1.0)
     service.add_argument("--max-ticks", type=int)
@@ -158,6 +170,57 @@ def _plugin_result(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
+def _browser_result(args: argparse.Namespace) -> dict[str, Any]:
+    from browser_manager import BrowserManager, BrowserManagerError, BrowserProviderRegistry
+    from browser_manager.runtime_authority import BrowserRuntimeAuthority
+
+    action = f"browser-{args.browser_action}"
+    providers = BrowserProviderRegistry().safe_data()
+    if args.browser_action == "providers":
+        return envelope(
+            ok=True,
+            action=action,
+            status="ready",
+            data={"schema_version": 1, "providers": providers, "contains_secrets": False},
+        )
+    if args.browser_action == "reconcile":
+        try:
+            manager = BrowserManager(DispatchPaths.from_environment(), reconciliation_only=True)
+            outcomes = manager.reconcile()
+        except (BrowserManagerError, PathConfigError) as exc:
+            code = exc.code if isinstance(exc, BrowserManagerError) else "path_configuration_invalid"
+            raise CommandInterfaceError(code, str(exc)) from exc
+        return envelope(
+            ok=True,
+            action=action,
+            status="ready",
+            data={
+                "schema_version": 1,
+                "outcomes": outcomes,
+                "leases": manager.status(),
+                "contains_secrets": False,
+            },
+        )
+    try:
+        inspection = BrowserRuntimeAuthority.production().inspect(full_tree=True)
+    except BrowserManagerError as exc:
+        raise CommandInterfaceError(exc.code, str(exc)) from exc
+    ready = bool(inspection["ready"])
+    data = {
+        "schema_version": 1,
+        "runtime": inspection,
+        "providers": providers,
+        "contains_secrets": False,
+    }
+    if args.browser_action == "status":
+        return envelope(ok=True, action=action, status="ready" if ready else "not_ready", data=data)
+    error = None if ready else {
+        "code": str(inspection["error_code"]),
+        "message": str(inspection["error_message"]),
+    }
+    return envelope(ok=ready, action=action, status="ready" if ready else "not_ready", data=data, error=error)
+
+
 def _service_result(args: argparse.Namespace) -> dict[str, Any]:
     paths = DispatchPaths.from_environment()
     store = CollectionTaskStore.from_paths(paths)
@@ -185,39 +248,39 @@ def _service_result(args: argparse.Namespace) -> dict[str, Any]:
 
 
 def main(argv: Sequence[str] | None = None, *, prog: str = "dispatch-core") -> int:
-    args = parser(prog=prog).parse_args(argv)
     try:
+        args = parser(prog=prog).parse_args(argv)
         if args.action == "auth":
             result = _auth_result(args)
         elif args.action == "collection":
             result = _collection_result(args)
         elif args.action == "plugin":
             result = _plugin_result(args)
+        elif args.action == "browser":
+            result = _browser_result(args)
         elif args.action == "service":
             result = _service_result(args)
         else:
             result = resolved(args.action, getattr(args, "owner", None))
     except (CommandInterfaceError, CollectionStoreError, PathConfigError, PluginRuntimeError) as exc:
+        parsed = locals().get("args")
+        action_name = str(getattr(parsed, "action", "unknown"))
         code = (
             exc.code
             if isinstance(exc, (CommandInterfaceError, CollectionStoreError, PluginRuntimeError))
             else "invalid_path_configuration"
         )
+        if action_name == "auth":
+            rendered_action = f"auth-{getattr(parsed, 'auth_action', 'unknown')}"
+        elif action_name == "collection":
+            rendered_action = f"collection-{getattr(parsed, 'collection_action', 'unknown')}"
+        elif action_name == "plugin":
+            rendered_action = f"plugin-{getattr(parsed, 'plugin_action', 'unknown')}"
+        else:
+            rendered_action = action_name
         result = envelope(
             ok=False,
-            action=(
-                f"auth-{getattr(args, 'auth_action', 'unknown')}"
-                if args.action == "auth"
-                else (
-                    f"collection-{getattr(args, 'collection_action', 'unknown')}"
-                    if args.action == "collection"
-                    else (
-                        f"plugin-{getattr(args, 'plugin_action', 'unknown')}"
-                        if args.action == "plugin"
-                        else args.action
-                    )
-                )
-            ),
+            action=rendered_action,
             status="error",
             data={},
             error={"code": code, "message": str(exc)[:256]},

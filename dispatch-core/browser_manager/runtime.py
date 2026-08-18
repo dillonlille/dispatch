@@ -83,8 +83,37 @@ class BrowserLayout:
         digest = hashlib.sha256(identity.encode("utf-8")).hexdigest()
         return require_within(self.locks / f"{kind}-{digest}.lock", self.locks, "browser lock")
 
+    @property
+    def generation_lock(self) -> Path:
+        return require_within(
+            self.state_boundary / "browser-manager" / "generation.lock",
+            self.state_boundary,
+            "browser generation lock",
+        )
+
+
+def _validate_private_ancestors(boundary: Path) -> None:
+    absolute = Path(os.path.abspath(boundary))
+    current = Path(absolute.anchor)
+    for part in absolute.parts[1:]:
+        current /= part
+        if not current.exists() and not current.is_symlink():
+            current.mkdir(mode=0o700)
+            current.chmod(0o700)
+            continue
+        details = current.lstat()
+        if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(details.st_mode):
+            raise BrowserManagerError("unsafe_browser_storage", "private root ancestry is unsafe")
+        if details.st_uid not in {0, os.geteuid()}:
+            raise BrowserManagerError("unsafe_browser_storage", "private root ancestry has an unsafe owner")
+        writable = details.st_mode & 0o022
+        trusted_sticky_root = details.st_uid == 0 and bool(details.st_mode & stat.S_ISVTX)
+        if writable and not trusted_sticky_root:
+            raise BrowserManagerError("unsafe_browser_storage", "private root ancestry is group/world writable")
+
 
 def _private_directory(path: Path, boundary: Path) -> Path:
+    _validate_private_ancestors(boundary)
     path = require_within(path, boundary, "private browser directory")
     boundary = boundary.resolve(strict=False)
     if boundary.exists() and boundary.is_symlink():
@@ -107,12 +136,38 @@ def _private_directory(path: Path, boundary: Path) -> Path:
     return path
 
 
+def _open_pinned_lock(path: Path, flags: int) -> int:
+    absolute = Path(os.path.abspath(path))
+    if not absolute.is_absolute() or not absolute.name:
+        raise OSError("lock path must be absolute")
+    directory_flags = os.O_RDONLY | os.O_DIRECTORY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0)
+    parent_descriptor = os.open("/", directory_flags)
+    try:
+        for part in absolute.parent.parts[1:]:
+            child = os.open(part, directory_flags, dir_fd=parent_descriptor)
+            os.close(parent_descriptor)
+            parent_descriptor = child
+        pinned = os.fstat(parent_descriptor)
+        descriptor = os.open(absolute.name, flags, 0o600, dir_fd=parent_descriptor)
+        try:
+            current = absolute.parent.stat(follow_symlinks=False)
+            if not stat.S_ISDIR(current.st_mode) or (current.st_dev, current.st_ino) != (pinned.st_dev, pinned.st_ino):
+                raise OSError("lock parent changed identity")
+        except BaseException:
+            os.close(descriptor)
+            raise
+        return descriptor
+    finally:
+        os.close(parent_descriptor)
+
+
 class FileLock:
     """Non-blocking process lock held by an open file descriptor."""
 
-    def __init__(self, path: Path, busy_code: str) -> None:
+    def __init__(self, path: Path, busy_code: str, *, shared: bool = False) -> None:
         self.path = path
         self.busy_code = busy_code
+        self.shared = shared
         self._descriptor: int | None = None
 
     def acquire(self) -> None:
@@ -120,7 +175,7 @@ class FileLock:
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
         try:
-            descriptor = os.open(self.path, flags, 0o600)
+            descriptor = _open_pinned_lock(self.path, flags)
         except OSError as exc:
             raise BrowserManagerError("unsafe_browser_storage", "browser lock cannot be opened safely") from exc
         try:
@@ -131,16 +186,18 @@ class FileLock:
                 or details.st_uid != os.getuid()
             ):
                 raise BrowserManagerError("unsafe_browser_storage", "browser lock is not a private regular file")
-            fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            operation = fcntl.LOCK_SH if self.shared else fcntl.LOCK_EX
+            fcntl.flock(descriptor, operation | fcntl.LOCK_NB)
             if os.fstat(descriptor).st_nlink != 1:
                 raise BrowserManagerError("unsafe_browser_storage", "browser lock has an unsafe hard link")
             os.fchmod(descriptor, 0o600)
-            os.ftruncate(descriptor, 0)
-            os.write(descriptor, f"{os.getpid()}\n".encode("ascii"))
+            if not self.shared:
+                os.ftruncate(descriptor, 0)
+                os.write(descriptor, f"{os.getpid()}\n".encode("ascii"))
         except BlockingIOError as exc:
             os.close(descriptor)
             raise BrowserManagerError(self.busy_code, "browser resource is already leased") from exc
-        except Exception:
+        except BaseException:
             os.close(descriptor)
             raise
         self._descriptor = descriptor
@@ -157,6 +214,7 @@ class FileLock:
 
 @dataclass(slots=True)
 class LeaseLocks:
+    generation: FileLock
     slot: FileLock
     realm: FileLock
     profile: FileLock
@@ -170,36 +228,47 @@ class LeaseLocks:
         realm: str,
         profile_key: str,
     ) -> "LeaseLocks":
+        generation_lock = FileLock(
+            layout.generation_lock,
+            "browser_generation_busy",
+            shared=True,
+        )
+        generation_lock.acquire()
         slot: FileLock | None = None
-        for index in range(maximum_browsers):
-            candidate = FileLock(layout.lock_path("global", str(index)), "browser_capacity_unavailable")
-            try:
-                candidate.acquire()
-            except BrowserManagerError as exc:
-                if exc.code != "browser_capacity_unavailable":
-                    raise
-                continue
-            slot = candidate
-            break
-        if slot is None:
-            raise BrowserManagerError("browser_capacity_unavailable", "all approved browser slots are occupied")
-
-        realm_lock = FileLock(layout.lock_path("realm", realm), "browser_realm_busy")
-        profile_lock = FileLock(layout.lock_path("profile", profile_key), "browser_profile_busy")
         try:
-            realm_lock.acquire()
-            profile_lock.acquire()
-        except Exception:
-            profile_lock.release()
-            realm_lock.release()
-            slot.release()
+            for index in range(maximum_browsers):
+                candidate = FileLock(layout.lock_path("global", str(index)), "browser_capacity_unavailable")
+                try:
+                    candidate.acquire()
+                except BrowserManagerError as exc:
+                    if exc.code != "browser_capacity_unavailable":
+                        raise
+                    continue
+                slot = candidate
+                break
+            if slot is None:
+                raise BrowserManagerError("browser_capacity_unavailable", "all approved browser slots are occupied")
+
+            realm_lock = FileLock(layout.lock_path("realm", realm), "browser_realm_busy")
+            profile_lock = FileLock(layout.lock_path("profile", profile_key), "browser_profile_busy")
+            try:
+                realm_lock.acquire()
+                profile_lock.acquire()
+            except BaseException:
+                profile_lock.release()
+                realm_lock.release()
+                slot.release()
+                raise
+        except BaseException:
+            generation_lock.release()
             raise
-        return cls(slot=slot, realm=realm_lock, profile=profile_lock)
+        return cls(generation=generation_lock, slot=slot, realm=realm_lock, profile=profile_lock)
 
     def release(self) -> None:
         self.profile.release()
         self.realm.release()
         self.slot.release()
+        self.generation.release()
 
 
 class RuntimeHandle(Protocol):
@@ -247,12 +316,12 @@ class ProcessRuntimeHandle:
     def close(self) -> None:
         if self.closed:
             return
-        cleanup_error: Exception | None = None
+        cleanup_error: BaseException | None = None
         try:
             for operation in (self.context.close, self.playwright.stop):
                 try:
                     _call_bounded(operation, timeout_seconds=2)
-                except Exception as exc:
+                except BaseException as exc:
                     cleanup_error = cleanup_error or exc
             if process_start_ticks(self.pid) == self.process_start_ticks:
                 try:
@@ -262,7 +331,7 @@ class ProcessRuntimeHandle:
                         self.profile,
                         self.identity.executable,
                     )
-                except Exception as exc:
+                except BaseException as exc:
                     cleanup_error = cleanup_error or exc
             if process_start_ticks(self.control_pid) == self.control_process_start_ticks:
                 try:
@@ -271,7 +340,7 @@ class ProcessRuntimeHandle:
                         self.control_process_start_ticks,
                         self.identity.control_executable,
                     )
-                except Exception as exc:
+                except BaseException as exc:
                     cleanup_error = cleanup_error or exc
         finally:
             self.closed = True
@@ -279,6 +348,8 @@ class ProcessRuntimeHandle:
         control_alive = process_start_ticks(self.control_pid) == self.control_process_start_ticks
         if cleanup_error is not None and (browser_alive or control_alive):
             raise BrowserManagerError("browser_cleanup_failed", "owned browser process tree did not close") from cleanup_error
+        if isinstance(cleanup_error, (KeyboardInterrupt, SystemExit)):
+            raise cleanup_error
 
 
 class PlaywrightRuntime:
@@ -319,19 +390,52 @@ class PlaywrightRuntime:
         context: Any | None = None
         control_pid: int | None = None
         control_ticks: int | None = None
+        executable_descriptor: int | None = None
         try:
-            executable = self.__launch_executable
+            executable = Path(os.path.abspath(self.__launch_executable))
+            cache = installation.browsers_path
             if not executable.is_absolute():
                 raise BrowserManagerError("browser_runtime_unsafe", "approved Chromium path must be absolute")
             try:
+                relative = executable.relative_to(cache)
+                current = cache
+                for part in relative.parts:
+                    current /= part
+                    if current.is_symlink():
+                        raise BrowserManagerError(
+                            "browser_runtime_changed",
+                            "approved Chromium path became aliased before launch",
+                        )
                 executable = executable.resolve(strict=True)
-            except FileNotFoundError as exc:
+                executable.relative_to(cache)
+                details = executable.stat(follow_symlinks=False)
+            except BrowserManagerError:
+                raise
+            except (FileNotFoundError, OSError, ValueError) as exc:
                 raise BrowserManagerError(
                     "browser_runtime_missing",
                     "approved Chromium executable is unavailable",
                 ) from exc
-            if not executable.is_file() or not os.access(executable, os.X_OK):
-                raise BrowserManagerError("browser_runtime_missing", "approved Chromium executable is unavailable")
+            if (
+                executable != identity.executable
+                or not stat.S_ISREG(details.st_mode)
+                or details.st_uid != os.geteuid()
+                or details.st_mode & 0o022
+                or not os.access(executable, os.X_OK)
+            ):
+                raise BrowserManagerError("browser_runtime_changed", "approved Chromium identity changed before launch")
+            executable_descriptor = _open_pinned_lock(
+                executable,
+                os.O_RDONLY | os.O_CLOEXEC | getattr(os, "O_NOFOLLOW", 0),
+            )
+            pinned_details = os.fstat(executable_descriptor)
+            if (
+                not stat.S_ISREG(pinned_details.st_mode)
+                or (pinned_details.st_dev, pinned_details.st_ino)
+                != (installation.executable_device, installation.executable_inode)
+            ):
+                raise BrowserManagerError("browser_runtime_changed", "approved Chromium bytes changed before launch")
+            pinned_executable = Path(f"/proc/{os.getpid()}/fd/{executable_descriptor}")
             if matching_browser_processes(profile):
                 raise BrowserManagerError(
                     "browser_reconciliation_required",
@@ -348,7 +452,7 @@ class PlaywrightRuntime:
             record_control_process(control_pid, control_ticks)
             context = playwright.chromium.launch_persistent_context(
                 user_data_dir=str(profile),
-                executable_path=str(executable),
+                executable_path=str(pinned_executable),
                 headless=mode == BrowserMode.HEADLESS,
                 chromium_sandbox=True,
                 handle_sigint=False,
@@ -357,6 +461,8 @@ class PlaywrightRuntime:
                 timeout=realm.launch_timeout_seconds * 1000,
                 env=_browser_environment(profile),
             )
+            os.close(executable_descriptor)
+            executable_descriptor = None
             pid = _await_browser_pid(profile, identity.executable, realm.launch_timeout_seconds)
             if process_uses_forbidden_sandbox_flags(pid):
                 raise BrowserManagerError(
@@ -386,6 +492,9 @@ class PlaywrightRuntime:
                 control_process_start_ticks=control_ticks,
             )
         except BaseException as exc:
+            if executable_descriptor is not None:
+                os.close(executable_descriptor)
+                executable_descriptor = None
             try:
                 _cleanup_partial(playwright, context, profile, identity)
             except BrowserManagerError as cleanup_exc:
@@ -488,8 +597,11 @@ def _cleanup_partial(
     if playwright is not None:
         try:
             control = _playwright_control_process(playwright, identity.control_executable)
-        except BrowserManagerError:
-            unverified_control = _raw_playwright_control_process(playwright)
+        except BaseException:
+            try:
+                unverified_control = _raw_playwright_control_process(playwright)
+            except BaseException:
+                unverified_control = None
     for operation in (
         context.close if context is not None else None,
         playwright.stop if playwright is not None else None,
@@ -498,7 +610,7 @@ def _cleanup_partial(
             continue
         try:
             _call_bounded(operation, timeout_seconds=2)
-        except Exception:
+        except BaseException:
             pass
     for pid in matching_browser_processes(profile):
         ticks = process_start_ticks(pid)
@@ -506,12 +618,12 @@ def _cleanup_partial(
             continue
         try:
             terminate_owned_process(pid, ticks, profile, identity.executable)
-        except BrowserManagerError:
+        except BaseException:
             pass
     if control is not None and process_start_ticks(control[0]) == control[1]:
         try:
             terminate_control_process(control[0], control[1], identity.control_executable)
-        except BrowserManagerError:
+        except BaseException:
             pass
     control_alive = control is not None and process_start_ticks(control[0]) == control[1]
     unverified_control_alive = (

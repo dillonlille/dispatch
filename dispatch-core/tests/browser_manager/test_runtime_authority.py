@@ -22,6 +22,9 @@ def fixture(
     cache = tmp_path / "home" / ".dispatch" / "cache" / "browser"
     chromium = cache / "chromium-1234" / "chrome-linux64" / "chrome"
     chromium.parent.mkdir(parents=True)
+    tmp_path.chmod(0o700)
+    for private in (tmp_path / "home", tmp_path / "home" / ".dispatch", tmp_path / "home" / ".dispatch" / "cache"):
+        private.chmod(0o700)
     chromium.write_text("#!/bin/sh\n", encoding="utf-8")
     chromium.chmod(0o700)
     cache.chmod(0o700)
@@ -77,8 +80,20 @@ def test_authority_resolves_user_cache_without_starting_playwright(
     assert os.environ["PLAYWRIGHT_BROWSERS_PATH"] == "/tmp/untrusted-playwright"
     assert inspection["ready"] is True
     assert inspection["browser_family"] == "chromium"
+    assert inspection["chromium_revision"] == "1234"
     assert inspection["chromium_version"] == "151.0.7922.34"
     assert inspection["chromium_executable"] == str(chromium.resolve())
+
+
+def test_authority_rejects_world_writable_cache_ancestor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority, _chromium, _module = fixture(tmp_path, monkeypatch)
+    (tmp_path / "home").chmod(0o777)
+    with pytest.raises(BrowserManagerError) as error:
+        authority.load()
+    assert error.value.code == "browser_runtime_unsafe"
 
 
 def test_authority_rejects_symlinked_runtime_file(
@@ -97,13 +112,61 @@ def test_authority_rejects_symlinked_runtime_file(
     assert error.value.code == "browser_runtime_unsafe"
 
 
+def test_authority_rejects_control_executable_symlink_escape(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority, _chromium, module = fixture(tmp_path, monkeypatch)
+    control = module.parent / "driver" / "node"
+    outside = tmp_path / "outside-node"
+    outside.write_text("node", encoding="utf-8")
+    outside.chmod(0o700)
+    control.unlink()
+    control.symlink_to(outside)
+    with pytest.raises(BrowserManagerError) as error:
+        authority.load()
+    assert error.value.code == "browser_runtime_unsafe"
+
+
+def test_authority_rejects_duplicate_and_special_browser_metadata(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    authority, _chromium, module = fixture(tmp_path, monkeypatch)
+    manifest = module.parent / "driver" / "package" / "browsers.json"
+    duplicate = {
+        "browsers": [
+            {"name": "chromium", "revision": "1234", "browserVersion": "151.0.7922.34"},
+            {"name": "chromium", "revision": "5678", "browserVersion": "152.0.0.0"},
+        ]
+    }
+    manifest.write_text(json.dumps(duplicate), encoding="utf-8")
+    assert authority.inspect()["error_code"] == "browser_runtime_missing"
+
+    manifest.write_text("[" * 2000 + "]" * 2000, encoding="utf-8")
+    deep = authority.inspect()
+    assert deep["ready"] is False
+    assert deep["error_code"] == "browser_runtime_missing"
+
+    manifest.unlink()
+    os.mkfifo(manifest, mode=0o600)
+    inspection = authority.inspect()
+    assert inspection["ready"] is False
+    assert inspection["error_code"] == "browser_runtime_missing"
+
+
 def test_user_browser_cache_honors_custom_dispatch_home(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     custom = tmp_path / "custom-dispatch"
     monkeypatch.setenv("DISPATCH_HOME", str(custom))
-    assert authority_module.user_browser_cache() == (custom / "cache" / "browser").resolve()
+    assert authority_module.user_browser_cache() == (custom / "cache" / "browser-manager" / "playwright").resolve()
+
+    explicit_cache = tmp_path / "explicit-cache"
+    monkeypatch.setenv("DISPATCH_CACHE_ROOT", str(explicit_cache))
+    assert authority_module.user_browser_cache() == explicit_cache / "browser-manager" / "playwright"
+    monkeypatch.delenv("DISPATCH_CACHE_ROOT")
 
     monkeypatch.setenv("DISPATCH_HOME", "relative-dispatch")
     with pytest.raises(BrowserManagerError) as error:
@@ -120,7 +183,9 @@ def test_browser_cache_rejects_symlink_before_resolution(
     outside = tmp_path / "outside"
     cache.mkdir(parents=True)
     outside.mkdir()
-    (cache / "browser").symlink_to(outside, target_is_directory=True)
+    browser_manager = cache / "browser-manager"
+    browser_manager.mkdir()
+    (browser_manager / "playwright").symlink_to(outside, target_is_directory=True)
     monkeypatch.setenv("DISPATCH_HOME", str(custom))
 
     configured = authority_module.user_browser_cache()

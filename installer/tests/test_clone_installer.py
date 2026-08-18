@@ -1,17 +1,26 @@
 from __future__ import annotations
 
 import hashlib
+import importlib
+import fcntl
 import json
 import os
 import shlex
+import shutil
+import sqlite3
 import stat
 import subprocess
+import tempfile
 from datetime import UTC, datetime
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
 
+from dispatch_installer.browser_lock import (
+    acquire_browser_generation_lock,
+    assert_no_unresolved_browser_leases,
+)
 from dispatch_installer.cli import main as installer_main
 from dispatch_installer.layout import (
     InstallLayout,
@@ -24,6 +33,9 @@ from dispatch_installer.layout import (
 )
 import dispatch_installer.lifecycle as lifecycle_runtime
 import dispatch_installer.setup as setup_runtime
+browser_lock_runtime = importlib.import_module("dispatch_installer.browser_lock")
+cli_runtime = importlib.import_module("dispatch_installer.cli")
+layout_runtime = importlib.import_module("dispatch_installer.layout")
 from dispatch_installer.doctor import inspect_installation
 from dispatch_installer.lifecycle import install_from_clone
 from dispatch_installer.repository import (
@@ -49,10 +61,13 @@ from dispatch_installer.service import (
     legacy_service_unit_is_owned,
     remove_legacy_user_service,
     remove_user_service,
+    service_unit,
     service_unit_is_owned,
 )
 from dispatch_installer.uninstall import plan_uninstall, uninstall
 from dispatch_installer.user_command import inspect_user_command, install_user_command, launcher_script
+
+uninstall_runtime = importlib.import_module("dispatch_installer.uninstall")
 
 
 def completed(*, stdout: str = "", returncode: int = 0) -> subprocess.CompletedProcess[str]:
@@ -70,7 +85,54 @@ def fake_site_packages(python: Path) -> Path:
         site_packages,
     ):
         directory.chmod(0o700)
+    playwright = site_packages / "playwright"
+    package = playwright / "driver" / "package"
+    package.mkdir(parents=True, exist_ok=True)
+    (playwright / "__init__.py").write_text("", encoding="utf-8")
+    (package / "browsers.json").write_text(
+        json.dumps(
+            {
+                "browsers": [
+                    {
+                        "name": "chromium",
+                        "revision": "1234567",
+                        "browserVersion": "151.0.7922.34",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    metadata = site_packages / "playwright-1.62.0.dist-info" / "METADATA"
+    metadata.parent.mkdir(parents=True, exist_ok=True)
+    metadata.write_text("Name: playwright\nVersion: 1.62.0\n", encoding="utf-8")
     return site_packages
+
+
+def browser_response(command) -> subprocess.CompletedProcess[str] | None:
+    values = tuple(str(value) for value in command)
+    if any("chromium_sandbox=True" in value for value in values):
+        return completed()
+    if (
+        values
+        and "env" in values
+        and "-m" in values
+        and "playwright" in values
+        and "install" in values
+        and any(value.startswith("PLAYWRIGHT_BROWSERS_PATH=") for value in values)
+    ):
+        cache_value = next(value.split("=", 1)[1] for value in values if value.startswith("PLAYWRIGHT_BROWSERS_PATH="))
+        executable = Path(cache_value) / "chromium-1234567" / "chrome-linux64" / "chrome"
+        executable.parent.mkdir(parents=True, exist_ok=True)
+        Path(cache_value).chmod(0o700)
+        executable.write_text("chromium", encoding="utf-8")
+        executable.chmod(0o700)
+        return completed()
+    if any(Path(value).name == "ldd" for value in values):
+        return completed(stdout="linux-vdso.so.1 => linux-vdso.so.1\n")
+    if "install-deps" in values:
+        return completed()
+    return None
 
 
 def editable_response(command) -> subprocess.CompletedProcess[str] | None:
@@ -80,6 +142,17 @@ def editable_response(command) -> subprocess.CompletedProcess[str] | None:
     site_packages = fake_site_packages(Path(values[0]))
     (site_packages / "__editable__.test.pth").write_text(values[-1] + "\n", encoding="utf-8")
     return completed()
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
+
+
+def write_browser_manager_project(core: Path) -> None:
+    browser_manager = core / "browser_manager"
+    browser_manager.mkdir(parents=True)
+    for name in ("provisioning.py", "versioning.py"):
+        shutil.copyfile(REPOSITORY_ROOT / "dispatch-core" / "browser_manager" / name, browser_manager / name)
+    (core / "requirements.txt").write_text("", encoding="utf-8")
 
 
 def write_test_project(
@@ -127,6 +200,30 @@ def test_layout_has_clone_based_final_roots(tmp_path: Path) -> None:
     }
     assert layout.clone == layout.dispatch_home / "dispatch"
     assert layout.installation_record.name == "installation.json"
+
+
+def test_custom_private_roots_project_consistently_into_launcher_and_service(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    environment = {"HOME": str(home)}
+    for name, variable in (
+        ("config", "DISPATCH_CONFIG_ROOT"),
+        ("secrets", "DISPATCH_SECRETS_ROOT"),
+        ("data", "DISPATCH_DATA_ROOT"),
+        ("state", "DISPATCH_STATE_ROOT"),
+        ("cache", "DISPATCH_CACHE_ROOT"),
+        ("logs", "DISPATCH_LOGS_ROOT"),
+        ("runtime", "DISPATCH_RUNTIME_ROOT"),
+    ):
+        environment[variable] = str(home / "private-roots" / name)
+    layout = InstallLayout.from_environment(environment)
+    layout.prepare()
+    launcher = launcher_script(layout).decode("utf-8")
+    for variable, value in environment.items():
+        if variable != "HOME":
+            assert f"export {variable}={value}" in launcher
+    assert layout.browser_cache == home / "private-roots" / "cache" / "browser-manager" / "playwright"
+    assert str(layout.browser_cache) in service_unit(layout).decode("utf-8")
 
 
 def test_layout_rejects_symlinked_dispatch_home_ancestor(tmp_path: Path) -> None:
@@ -185,6 +282,93 @@ def test_python_layout_rejects_writable_home_ancestor_and_staging(tmp_path: Path
     staging.chmod(0o700)
 
 
+def test_browser_provisioner_loader_rejects_symlinked_checkout_ancestor(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    outside = tmp_path / "outside-browser-manager"
+    outside.mkdir()
+    marker = outside / "executed"
+    (outside / "provisioning.py").write_text(
+        f"from pathlib import Path\nPath({str(marker)!r}).write_text('executed')\n",
+        encoding="utf-8",
+    )
+    dispatch_core = layout.clone / "dispatch-core"
+    dispatch_core.mkdir()
+    (dispatch_core / "browser_manager").symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(InstallerError) as error:
+        getattr(lifecycle_runtime, "_load_browser_provisioning")(layout)
+    assert error.value.code == "browser_provisioner_unsafe"
+    assert not marker.exists()
+
+
+def test_installer_generation_lock_refuses_active_shared_browser_lease(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    locks = layout.state / "browser-manager"
+    ensure_private_directory(locks, "Browser Manager state")
+    lock_path = locks / "generation.lock"
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        with pytest.raises(InstallerError) as error:
+            acquire_browser_generation_lock(layout)
+        assert error.value.code == "browser_generation_busy"
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def test_generation_lock_rejects_parent_swapped_to_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    locks = layout.state / "browser-manager"
+    locks.mkdir(mode=0o700)
+    displaced = layout.state / "browser-manager-original"
+    outside = tmp_path / "outside-locks"
+    outside.mkdir(mode=0o700)
+    original_open = browser_lock_runtime.os.open
+    swapped = False
+
+    def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if path == "generation.lock" and dir_fd is not None and not swapped:
+            locks.rename(displaced)
+            locks.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(browser_lock_runtime.os, "open", racing_open)
+    with pytest.raises(InstallerError) as error:
+        acquire_browser_generation_lock(layout)
+    assert error.value.code == "browser_generation_lock_unsafe"
+    assert not (outside / "generation.lock").exists()
+
+
+def test_durable_quarantined_lease_blocks_generation_mutation_without_live_lock(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    database = layout.data / "db" / "browser-manager" / "browser-manager.sqlite3"
+    database.parent.mkdir(parents=True)
+    database.parent.chmod(0o700)
+    connection = sqlite3.connect(database)
+    try:
+        connection.execute("CREATE TABLE leases (lease_id TEXT PRIMARY KEY, state TEXT NOT NULL)")
+        connection.execute("INSERT INTO leases VALUES (?, ?)", ("a" * 32, "quarantined"))
+        connection.commit()
+    finally:
+        connection.close()
+    database.chmod(0o600)
+
+    with pytest.raises(InstallerError) as error:
+        assert_no_unresolved_browser_leases(layout)
+    assert error.value.code == "browser_reconciliation_required"
+
+
 def test_release_resolver_ignores_drafts_and_prereleases() -> None:
     payload = [
         {"tag_name": "v-old", "draft": False, "prerelease": False, "published_at": "2025-01-01T00:00:00Z"},
@@ -238,6 +422,37 @@ def test_remote_authority_binds_dev_and_stable_records() -> None:
     assert canonical_record_has_remote_authority(stable_record, opener=stable_opener) is True
 
 
+def test_json_invalid_command_returns_one_error_document(capsys: pytest.CaptureFixture[str]) -> None:
+    result = installer_main(["--json", "invalid-command"])
+    assert result == 1
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert captured.err == ""
+    assert payload["ok"] is False
+    assert payload["error"]["code"] == "arguments_invalid"
+
+
+def test_cli_reports_committed_cleanup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(
+        cli_runtime,
+        "_lifecycle",
+        lambda *_args, **_kwargs: {
+            "status": "installed_cleanup_incomplete",
+            "cleanup_error_code": "post_activation_cleanup_failed",
+        },
+    )
+    result = installer_main(["--dispatch-home", str(tmp_path / "dispatch"), "install", "--yes"])
+    assert result == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is False
+    assert payload["status"] == "installed_cleanup_incomplete"
+    assert payload["error"]["code"] == "post_activation_cleanup_failed"
+
+
 def test_update_refuses_missing_installation(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     result = installer_main(["--dispatch-home", str(tmp_path / "dispatch"), "update"])
     assert result == 1
@@ -264,7 +479,7 @@ def test_dev_clone_is_complete_and_update_is_fast_forward_only(tmp_path: Path) -
 
     def fake_run(command, cwd=None):
         commands.append(tuple(command))
-        return authority_response(command) or editable_response(command) or completed()
+        return authority_response(command) or browser_response(command) or editable_response(command) or completed()
 
     destination = tmp_path / "clone"
     clone_repository(destination, channel="dev", ref="dev", run=fake_run)
@@ -392,13 +607,15 @@ def test_staged_dev_checkout_must_match_github_fetch_head(tmp_path: Path) -> Non
 def test_install_from_staged_clone_writes_atomic_record(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
     layout.prepare()
+    legacy_marker = layout.legacy_browser_cache / "unrelated-marker"
+    legacy_marker.parent.mkdir(mode=0o700)
+    legacy_marker.write_text("preserve", encoding="utf-8")
     source = layout.dispatch_home / ".install-tmp" / "candidate" / "dispatch"
     source.parent.parent.mkdir(mode=0o700)
     source.parent.mkdir(mode=0o700)
     (source / ".git").mkdir(parents=True)
     write_test_project(source / "installer")
-    (source / "dispatch-core").mkdir()
-    (source / "dispatch-core" / "requirements.txt").write_text("")
+    write_browser_manager_project(source / "dispatch-core")
     layout.venv_python.parent.mkdir(parents=True)
     layout.venv_python.write_text("python")
     layout.venv_python.chmod(0o700)
@@ -416,7 +633,7 @@ def test_install_from_staged_clone_writes_atomic_record(tmp_path: Path) -> None:
         response = authority_response(command)
         if response is not None:
             return response
-        return editable_response(command) or completed()
+        return browser_response(command) or editable_response(command) or completed()
 
     result = install_from_clone(
         layout,
@@ -433,7 +650,19 @@ def test_install_from_staged_clone_writes_atomic_record(tmp_path: Path) -> None:
     assert str(record["commit"]).startswith("01234567")
     assert layout.clone.is_dir()
     assert layout.command_path.is_file()
+    browser_result = result["browser"]
+    assert isinstance(browser_result, dict)
+    assert browser_result["status"] == "installed"
+    assert browser_result["chromium_revision"] == "1234567"
+    browser_record = read_json(layout.browser_installation_record)
+    assert browser_record["cache"] == str(layout.browser_cache)
+    assert browser_record["playwright_version"] == "1.62.0"
+    assert browser_record["contains_secrets"] is False
+    assert (layout.browser_cache / "chromium-1234567" / "chrome-linux64" / "chrome").is_file()
+    assert legacy_marker.read_text(encoding="utf-8") == "preserve"
     assert not any("--editable" in command for command in commands)
+    assert not any("install-deps" in command for command in commands)
+    assert any(any("chromium_sandbox=True" in value for value in command) for command in commands)
     assert (fake_site_packages(layout.venv_python) / "__dispatch__.dispatch_installer.pth").is_file()
 
 
@@ -453,7 +682,7 @@ def test_setup_installs_selected_plugin_editable_and_writes_config(tmp_path: Pat
 
     def fake_run(command, cwd=None):
         calls.append(tuple(str(value) for value in command))
-        return editable_response(command) or completed()
+        return browser_response(command) or editable_response(command) or completed()
 
     result = configure_plugins(layout, ["handbook"], run=fake_run)
     config = json.loads((layout.config / "plugins.json").read_text())
@@ -552,6 +781,7 @@ def test_failed_activation_restores_prior_checkout_and_environment(
     layout.venv_python.write_text("old-python")
     old_browser = layout.cache / "browser" / "old-browser"
     old_browser.parent.mkdir()
+    old_browser.parent.chmod(0o700)
     old_browser.write_text("old-browser")
 
     source = layout.dispatch_home / ".install-tmp" / "candidate" / "dispatch"
@@ -559,8 +789,7 @@ def test_failed_activation_restores_prior_checkout_and_environment(
     source.parent.mkdir(mode=0o700)
     (source / ".git").mkdir(parents=True)
     write_test_project(source / "installer")
-    (source / "dispatch-core").mkdir()
-    (source / "dispatch-core" / "requirements.txt").write_text("")
+    write_browser_manager_project(source / "dispatch-core")
     (source / "new.txt").write_text("new")
 
     def fake_run(command, cwd=None):
@@ -578,7 +807,7 @@ def test_failed_activation_restores_prior_checkout_and_environment(
         response = authority_response(command)
         if response is not None:
             return response
-        return editable_response(command) or completed()
+        return browser_response(command) or editable_response(command) or completed()
 
     real_restore = lifecycle_runtime._restore_directory
     interrupted: set[Path] = set()
@@ -598,10 +827,80 @@ def test_failed_activation_restores_prior_checkout_and_environment(
     assert not (layout.clone / "new.txt").exists()
     assert layout.venv_python.read_text() == "old-python"
     assert old_browser.read_text() == "old-browser"
+    assert not layout.browser_cache.exists()
+    assert not layout.browser_installation_record.exists()
     assert not layout.installation_record.exists()
     assert not layout.command_path.exists()
     assert not layout.service_path.exists()
     assert interrupted == {layout.venv, layout.clone}
+
+
+def test_post_return_browser_swap_interrupt_restores_active_generation_and_record(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    (layout.clone / ".git").mkdir(parents=True)
+    (layout.clone / "old.txt").write_text("old", encoding="utf-8")
+    layout.venv_python.parent.mkdir(parents=True)
+    layout.venv_python.write_text("old-python", encoding="utf-8")
+    old_browser = layout.browser_cache / "chromium-9999999" / "chrome-linux64" / "chrome"
+    old_browser.parent.mkdir(parents=True)
+    layout.browser_manager_cache.chmod(0o700)
+    layout.browser_cache.chmod(0o700)
+    old_browser.write_text("old-browser", encoding="utf-8")
+    old_browser.chmod(0o700)
+    old_record = {
+        "schema_version": 1,
+        "status": "active",
+        "playwright_version": "1.61.0",
+        "browser_family": "chromium",
+        "chromium_revision": "9999999",
+        "chromium_version": "150.0.0.0",
+        "cache": str(layout.browser_cache),
+        "contains_secrets": False,
+    }
+    atomic_json(layout.browser_installation_record, old_record)
+
+    source = layout.dispatch_home / ".install-tmp" / "candidate" / "dispatch"
+    source.parent.parent.mkdir(mode=0o700)
+    source.parent.mkdir(mode=0o700)
+    (source / ".git").mkdir(parents=True)
+    write_test_project(source / "installer")
+    write_browser_manager_project(source / "dispatch-core")
+    (source / "new.txt").write_text("new", encoding="utf-8")
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        if values[1:3] == ("-m", "venv"):
+            python = Path(values[-1]) / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("new-python", encoding="utf-8")
+            python.chmod(0o700)
+            fake_site_packages(python)
+        response = authority_response(command)
+        if response is not None:
+            return response
+        return browser_response(command) or editable_response(command) or completed()
+
+    original_swap = lifecycle_runtime._swap_directory
+
+    def interrupt_after_browser_return(replacement, target, *, state=None):
+        result = original_swap(replacement, target, state=state)
+        if target == layout.browser_cache:
+            raise KeyboardInterrupt("post-browser-return")
+        return result
+
+    monkeypatch.setattr(lifecycle_runtime, "_swap_directory", interrupt_after_browser_return)
+    with pytest.raises(KeyboardInterrupt):
+        install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
+    assert (layout.clone / "old.txt").read_text(encoding="utf-8") == "old"
+    assert not (layout.clone / "new.txt").exists()
+    assert layout.venv_python.read_text(encoding="utf-8") == "old-python"
+    assert old_browser.read_text(encoding="utf-8") == "old-browser"
+    assert not (layout.browser_cache / "chromium-1234567").exists()
+    assert read_json(layout.browser_installation_record) == old_record
 
 
 def test_update_dirty_preflight_never_runs_destructive_rollback(tmp_path: Path) -> None:
@@ -668,6 +967,34 @@ def test_update_post_gate_file_is_preserved_and_fails_rollback(
         )
     assert error.value.code == "checkout_rollback_failed"
     assert user_file.read_text(encoding="utf-8") == "preserve"
+
+
+def test_install_caller_restores_checkout_after_post_return_swap_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    (layout.clone / ".git").mkdir(parents=True)
+    (layout.clone / "marker").write_text("old", encoding="utf-8")
+    source = layout.dispatch_home / ".install-tmp" / "candidate" / "dispatch"
+    source.parent.parent.mkdir(mode=0o700)
+    source.parent.mkdir(mode=0o700)
+    (source / ".git").mkdir(parents=True)
+    (source / "marker").write_text("new", encoding="utf-8")
+    original = lifecycle_runtime._swap_directory
+
+    def interrupt_after_return(replacement, target, *, state=None):
+        result = original(replacement, target, state=state)
+        if target == layout.clone:
+            raise KeyboardInterrupt("post-return")
+        return result
+
+    monkeypatch.setattr(lifecycle_runtime, "_swap_directory", interrupt_after_return)
+    with pytest.raises(KeyboardInterrupt):
+        install_from_clone(layout, source, channel="dev", ref="dev", run=lambda *_args, **_kwargs: completed())
+    assert (layout.clone / "marker").read_text(encoding="utf-8") == "old"
+    assert not list(layout.dispatch_home.glob(".dispatch.previous-*"))
 
 
 def test_swap_directory_restores_active_generation_on_interrupt(
@@ -827,6 +1154,41 @@ def test_swap_directory_persistent_rollback_failure_keeps_active_target(
     assert error.value.code == "directory_swap_rollback_failed"
     assert (target / "marker").read_text(encoding="utf-8") == "new"
     assert any((path / "marker").read_text(encoding="utf-8") == "old" for path in tmp_path.glob(".active.previous-*"))
+
+
+def test_complete_rollback_bounds_persistent_terminal_interrupt() -> None:
+    attempts = 0
+
+    def interrupt() -> None:
+        nonlocal attempts
+        attempts += 1
+        raise KeyboardInterrupt("persistent")
+
+    with pytest.raises(InstallerError) as error:
+        lifecycle_runtime._complete_rollback(interrupt)
+    assert error.value.code == "rollback_persistently_interrupted"
+    assert attempts == 3
+
+
+def test_restore_directory_uses_rename_fallback_when_replace_and_copy_fail(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "active"
+    backup = tmp_path / "backup"
+    backup.mkdir()
+    (backup / "marker").write_text("old", encoding="utf-8")
+
+    monkeypatch.setattr(lifecycle_runtime.os, "replace", lambda *_args: (_ for _ in ()).throw(OSError("replace")))
+    monkeypatch.setattr(
+        lifecycle_runtime.shutil,
+        "copytree",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(OSError("copy")),
+    )
+    with pytest.raises(OSError, match="replace"):
+        lifecycle_runtime._restore_directory(target, backup)
+    assert (target / "marker").read_text(encoding="utf-8") == "old"
+    assert not backup.exists()
 
 
 def test_restore_directory_preserves_displaced_generation_and_user_file(tmp_path: Path) -> None:
@@ -1004,8 +1366,7 @@ def test_activation_conflict_never_disables_unrelated_service(tmp_path: Path) ->
     source.parent.mkdir(mode=0o700)
     (source / ".git").mkdir(parents=True)
     write_test_project(source / "installer")
-    (source / "dispatch-core").mkdir()
-    (source / "dispatch-core" / "requirements.txt").write_text("")
+    write_browser_manager_project(source / "dispatch-core")
     ensure_private_directory(layout.service_directory, "service directory")
     layout.service_path.write_text("[Service]\nExecStart=/usr/bin/unrelated\n")
     layout.service_path.chmod(0o600)
@@ -1020,7 +1381,7 @@ def test_activation_conflict_never_disables_unrelated_service(tmp_path: Path) ->
             python.write_text("python")
             python.chmod(0o700)
             fake_site_packages(python)
-        return authority_response(command) or editable_response(command) or completed()
+        return authority_response(command) or browser_response(command) or editable_response(command) or completed()
 
     with pytest.raises(InstallerError) as error:
         install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
@@ -1037,8 +1398,7 @@ def test_activation_never_enables_unowned_legacy_service(tmp_path: Path) -> None
     source.parent.mkdir(mode=0o700)
     (source / ".git").mkdir(parents=True)
     write_test_project(source / "installer")
-    (source / "dispatch-core").mkdir()
-    (source / "dispatch-core" / "requirements.txt").write_text("")
+    write_browser_manager_project(source / "dispatch-core")
     legacy = layout.service_directory / "dispatch-core.service"
     ensure_private_directory(legacy.parent, "service directory")
     legacy.write_text("[Service]\nExecStart=/usr/bin/unrelated\n")
@@ -1047,13 +1407,73 @@ def test_activation_never_enables_unowned_legacy_service(tmp_path: Path) -> None
 
     def fake_run(command, cwd=None):
         commands.append(tuple(str(value) for value in command))
-        return authority_response(command) or editable_response(command) or completed()
+        return authority_response(command) or browser_response(command) or editable_response(command) or completed()
 
     with pytest.raises(InstallerError) as error:
         install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
     assert error.value.code == "legacy_service_unsafe"
     assert not any(command[:4] == ("systemctl", "--user", "enable", "--now") for command in commands)
     assert legacy.exists()
+
+
+def test_post_activation_cleanup_failure_is_reported_without_checkout_rollback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    source = layout.dispatch_home / ".install-tmp" / "candidate" / "dispatch"
+    source.parent.parent.mkdir(mode=0o700)
+    source.parent.mkdir(mode=0o700)
+    (source / ".git").mkdir(parents=True)
+    write_test_project(source / "installer")
+    write_browser_manager_project(source / "dispatch-core")
+    legacy = layout.service_directory / "dispatch-core.service"
+    ensure_private_directory(legacy.parent, "service directory")
+    legacy.write_text("owned legacy", encoding="utf-8")
+    legacy.chmod(0o600)
+
+    monkeypatch.setattr(lifecycle_runtime, "legacy_service_unit_is_owned", lambda _layout: True)
+    monkeypatch.setattr(lifecycle_runtime, "stop_legacy_user_service", lambda *_args, **_kwargs: None)
+    monkeypatch.setattr(
+        lifecycle_runtime,
+        "remove_legacy_user_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(InstallerError("legacy_service_reload_failed", "synthetic")),
+    )
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        if values[1:3] == ("-m", "venv"):
+            python = Path(values[-1]) / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("python", encoding="utf-8")
+            python.chmod(0o700)
+            fake_site_packages(python)
+        return authority_response(command) or browser_response(command) or editable_response(command) or completed()
+
+    result = install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
+    assert result["status"] == "installed_cleanup_incomplete"
+    assert result["cleanup_error_code"] == "post_activation_cleanup_failed"
+    assert layout.clone.is_dir()
+    assert layout.venv_python.is_file()
+    assert legacy.exists()
+
+
+def test_repository_staging_runs_inside_installation_root_lock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    observed: list[bool] = []
+
+    def inspect_stage(*_args, **_kwargs):
+        observed.append(layout_runtime._ACTIVE_INSTALLATION_ROOT.get() is not None)
+        raise RuntimeError("stage inspected")
+
+    monkeypatch.setattr(lifecycle_runtime, "_stage_repository", inspect_stage)
+    with pytest.raises(RuntimeError, match="stage inspected"):
+        lifecycle_runtime.install_or_update(layout, channel="dev")
+    assert observed == [True]
 
 
 def test_update_keyboard_interrupt_restores_checkout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
@@ -1088,6 +1508,47 @@ def test_update_keyboard_interrupt_restores_checkout(tmp_path: Path, monkeypatch
     assert marker.read_text() == "old"
 
 
+def test_update_root_swap_does_not_run_rollback_against_replacement(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    (layout.clone / ".git").mkdir(parents=True)
+    displaced = layout.dispatch_home.parent / "dispatch-update-original"
+    outside = tmp_path / "outside-update"
+    (outside / "dispatch").mkdir(parents=True)
+    commands: list[tuple[str, ...]] = []
+    working_directories: list[Path | None] = []
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        working_directories.append(cwd)
+        if values[-2:] == ("rev-parse", "HEAD"):
+            return completed(stdout=f"{AUTHORITY_COMMIT}\n")
+        return completed()
+
+    def swap_checkout(*_args, **_kwargs):
+        layout.dispatch_home.rename(displaced)
+        layout.dispatch_home.symlink_to(outside, target_is_directory=True)
+        raise KeyboardInterrupt("checkout interrupted")
+
+    monkeypatch.setattr(lifecycle_runtime, "checkout_existing", swap_checkout)
+    with pytest.raises(KeyboardInterrupt):
+        lifecycle_runtime._update_existing(
+            layout,
+            channel="dev",
+            ref="dev",
+            run=fake_run,
+            now=lambda: datetime(2026, 8, 14, tzinfo=UTC),
+        )
+    assert any("reset" in command for command in commands)
+    reset_cwds = [cwd for command, cwd in zip(commands, working_directories, strict=True) if "reset" in command]
+    assert reset_cwds and all(cwd is not None and str(cwd).startswith("/proc/") for cwd in reset_cwds)
+    assert not (outside / "rollback-marker").exists()
+
+
 def test_repair_revalidates_github_authority_and_recorded_commit(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
     layout.prepare()
@@ -1112,7 +1573,7 @@ def test_repair_revalidates_github_authority_and_recorded_commit(tmp_path: Path)
     def fake_run(command, cwd=None):
         values = tuple(str(value) for value in command)
         commands.append(values)
-        return authority_response(command) or editable_response(command) or completed()
+        return authority_response(command) or browser_response(command) or editable_response(command) or completed()
 
     with pytest.raises(InstallerError) as error:
         lifecycle_runtime.repair_existing(layout, run=fake_run)
@@ -1161,6 +1622,19 @@ def test_uninstall_preserves_user_data_and_purge_removes_root(tmp_path: Path) ->
             "contains_secrets": False,
         },
     )
+    atomic_json(
+        layout.browser_installation_record,
+        {
+            "schema_version": 1,
+            "status": "active",
+            "playwright_version": "1.62.0",
+            "browser_family": "chromium",
+            "chromium_revision": "1234567",
+            "chromium_version": "151.0.7922.34",
+            "cache": str(layout.browser_cache),
+            "contains_secrets": False,
+        },
+    )
     install_user_command(layout)
     previous_launcher = launcher_script(layout).replace(b"umask 077\n", b"", 1)
     layout.command_path.write_bytes(previous_launcher)
@@ -1187,9 +1661,294 @@ def test_uninstall_preserves_user_data_and_purge_removes_root(tmp_path: Path) ->
     assert not layout.clone.exists()
     assert not layout.venv.exists()
     assert not layout.installation_record.exists()
+    assert not layout.browser_installation_record.exists()
     result = uninstall(layout, purge=True)
     assert result["status"] == "purged"
     assert not layout.dispatch_home.exists()
+
+
+def test_stale_uninstall_receipt_cannot_authorize_fresh_managed_assets(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    atomic_json(
+        layout.state / "uninstall.json",
+        {
+            "schema_version": 1,
+            "status": "uninstalled",
+            "dispatch_home": str(layout.dispatch_home),
+            "contains_secrets": False,
+        },
+    )
+    marker = layout.clone / "fresh-managed"
+    marker.parent.mkdir()
+    marker.write_text("preserve", encoding="utf-8")
+    for purge in (False, True):
+        plan = plan_uninstall(layout, purge=purge)
+        assert plan["status"] == "blocked"
+        blockers = plan["blockers"]
+        assert isinstance(blockers, list)
+        assert any("stale uninstall receipt" in str(item) for item in blockers)
+        with pytest.raises(InstallerError) as error:
+            uninstall(layout, purge=purge)
+        assert error.value.code == "uninstall_blocked"
+        assert marker.read_text(encoding="utf-8") == "preserve"
+
+
+def test_purge_removes_valid_external_private_roots(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    environment = {"HOME": str(home)}
+    for name, variable in (
+        ("config", "DISPATCH_CONFIG_ROOT"),
+        ("secrets", "DISPATCH_SECRETS_ROOT"),
+        ("data", "DISPATCH_DATA_ROOT"),
+        ("state", "DISPATCH_STATE_ROOT"),
+        ("cache", "DISPATCH_CACHE_ROOT"),
+        ("logs", "DISPATCH_LOGS_ROOT"),
+        ("runtime", "DISPATCH_RUNTIME_ROOT"),
+    ):
+        environment[variable] = str(home / "external" / name)
+    layout = InstallLayout.from_environment(environment)
+    layout.prepare()
+    shutil.rmtree(layout.cache)
+    shutil.rmtree(layout.run)
+    atomic_json(
+        layout.state / "uninstall.json",
+        {
+            "schema_version": 1,
+            "status": "uninstalled",
+            "dispatch_home": str(layout.dispatch_home),
+            "contains_secrets": False,
+        },
+    )
+    roots = (layout.config, layout.secrets, layout.data, layout.state, layout.logs)
+    all_roots = (*roots, layout.cache, layout.run)
+    for root in roots:
+        (root / "marker").write_text("remove", encoding="utf-8")
+
+    result = uninstall(layout, purge=True)
+    assert result["status"] == "purged"
+    assert not layout.dispatch_home.exists()
+    assert all(not root.exists() for root in all_roots)
+
+
+def test_uninstall_refuses_active_browser_generation_before_mutation(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    shutil.rmtree(layout.cache)
+    shutil.rmtree(layout.run)
+    atomic_json(
+        layout.state / "uninstall.json",
+        {
+            "schema_version": 1,
+            "status": "uninstalled",
+            "dispatch_home": str(layout.dispatch_home),
+            "contains_secrets": False,
+        },
+    )
+    (layout.config / "preserve").write_text("config", encoding="utf-8")
+    locks = layout.state / "browser-manager"
+    ensure_private_directory(locks, "Browser Manager state")
+    lock_path = locks / "generation.lock"
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        with pytest.raises(InstallerError) as error:
+            uninstall(layout)
+        assert error.value.code == "browser_generation_busy"
+        assert (layout.config / "preserve").read_text(encoding="utf-8") == "config"
+        assert not layout.cache.exists()
+        assert not layout.run.exists()
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def test_uninstall_rolls_back_post_mutation_directory_stage_interrupt(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    marker = layout.clone / "marker"
+    marker.parent.mkdir()
+    marker.write_text("preserve", encoding="utf-8")
+    monkeypatch.setattr(uninstall_runtime, "_uninstall_blockers", lambda *_args, **_kwargs: [])
+    original_stage = uninstall_runtime._stage_directory
+    interrupted = False
+
+    def interrupt_after_stage(stage):
+        nonlocal interrupted
+        original_stage(stage)
+        if not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt("post-stage")
+
+    monkeypatch.setattr(uninstall_runtime, "_stage_directory", interrupt_after_stage)
+    with pytest.raises(KeyboardInterrupt):
+        uninstall(layout, run=lambda *_args, **_kwargs: completed())
+    assert marker.read_text(encoding="utf-8") == "preserve"
+    assert not list(layout.dispatch_home.glob(".dispatch.uninstall-*"))
+
+
+def test_uninstall_reports_persistent_post_commit_cleanup_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    (layout.clone / "marker").parent.mkdir()
+    (layout.clone / "marker").write_text("sensitive", encoding="utf-8")
+    monkeypatch.setattr(uninstall_runtime, "_uninstall_blockers", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        uninstall_runtime,
+        "_discard_directory",
+        lambda _stage: (_ for _ in ()).throw(OSError("persistent cleanup")),
+    )
+    with pytest.raises(InstallerError) as error:
+        uninstall(layout, run=lambda *_args, **_kwargs: completed())
+    assert error.value.code == "uninstall_cleanup_failed"
+
+
+def test_uninstall_rolls_back_current_service_after_later_mutation_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    atomic_json(
+        layout.state / "uninstall.json",
+        {
+            "schema_version": 1,
+            "status": "uninstalled",
+            "dispatch_home": str(layout.dispatch_home),
+            "contains_secrets": False,
+        },
+    )
+    layout.venv_python.parent.mkdir(parents=True)
+    layout.venv_python.write_text("python", encoding="utf-8")
+    install_user_command(layout)
+    install_user_service(layout, activate=False)
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(command, cwd=None):
+        commands.append(tuple(str(value) for value in command))
+        return completed()
+
+    monkeypatch.setattr(uninstall_runtime, "_uninstall_blockers", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        uninstall_runtime,
+        "remove_legacy_user_service",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("injected later failure")),
+    )
+    with pytest.raises(RuntimeError, match="injected later failure"):
+        uninstall(layout, run=fake_run)
+    assert layout.command_path.exists()
+    assert inspect_user_command(layout)["status"] == "ready"
+    assert layout.service_path.exists()
+    assert service_unit_is_owned(layout)
+    assert ("systemctl", "--user", "enable", "--now", "dispatch.service") in commands
+
+
+def test_uninstall_restores_staged_directories_after_late_record_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    atomic_json(
+        layout.state / "uninstall.json",
+        {
+            "schema_version": 1,
+            "status": "uninstalled",
+            "dispatch_home": str(layout.dispatch_home),
+            "contains_secrets": False,
+        },
+    )
+    for path in (layout.clone, layout.venv, layout.cache, layout.run):
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o700)
+        (path / "marker").write_text(path.name, encoding="utf-8")
+    layout.venv_python.parent.mkdir(parents=True, exist_ok=True)
+    layout.venv_python.write_text("python", encoding="utf-8")
+    install_user_command(layout)
+    install_user_service(layout, activate=False)
+
+    monkeypatch.setattr(uninstall_runtime, "_uninstall_blockers", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        uninstall_runtime,
+        "_unlink_browser_installation_record",
+        lambda _layout: (_ for _ in ()).throw(RuntimeError("late record failure")),
+    )
+    with pytest.raises(RuntimeError, match="late record failure"):
+        uninstall(layout, run=lambda *_args, **_kwargs: completed())
+    for path in (layout.clone, layout.venv, layout.cache, layout.run):
+        assert (path / "marker").exists()
+    assert inspect_user_command(layout)["status"] == "ready"
+    assert service_unit_is_owned(layout)
+
+
+def test_uninstall_reports_service_rollback_failure_when_generation_lock_blocks(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    atomic_json(
+        layout.state / "uninstall.json",
+        {
+            "schema_version": 1,
+            "status": "uninstalled",
+            "dispatch_home": str(layout.dispatch_home),
+            "contains_secrets": False,
+        },
+    )
+    install_user_service(layout, activate=False)
+    lock_path = layout.state / "browser-manager" / "generation.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock_path.parent.chmod(0o700)
+    descriptor = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o600)
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        if values == ("systemctl", "--user", "stop", "dispatch.service"):
+            return completed()
+        if values == ("systemctl", "--user", "enable", "--now", "dispatch.service"):
+            return completed(returncode=1)
+        return completed()
+
+    monkeypatch.setattr(uninstall_runtime, "_uninstall_blockers", lambda *_args, **_kwargs: [])
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        with pytest.raises(InstallerError) as error:
+            uninstall(layout, run=fake_run)
+        assert error.value.code == "service_rollback_failed"
+        assert layout.service_path.exists()
+        assert service_unit_is_owned(layout)
+    finally:
+        fcntl.flock(descriptor, fcntl.LOCK_UN)
+        os.close(descriptor)
+
+
+def test_uninstall_rejects_symlinked_browser_record_parent_without_external_mutation(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    outside = tmp_path / "outside-browser-state"
+    outside.mkdir(mode=0o700)
+    external_record = outside / "installation.json"
+    external_record.write_text('{"preserve":true}\n', encoding="utf-8")
+    external_record.chmod(0o600)
+    (layout.state / "browser-manager").symlink_to(outside, target_is_directory=True)
+
+    plan = plan_uninstall(layout)
+    assert plan["status"] == "blocked"
+    blockers = plan["blockers"]
+    assert isinstance(blockers, list)
+    assert any("symlink" in str(item) for item in blockers)
+    with pytest.raises(InstallerError) as error:
+        uninstall(layout)
+    assert error.value.code == "uninstall_blocked"
+    assert external_record.read_text(encoding="utf-8") == '{"preserve":true}\n'
 
 
 def test_uninstall_rejects_invalid_provenance_before_removal(tmp_path: Path) -> None:
@@ -1261,8 +2020,7 @@ def test_dev_rejects_version() -> None:
 def test_replacement_venv_accepts_real_stdlib_python_layout(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
     layout.prepare()
-    (layout.clone / "dispatch-core").mkdir(parents=True)
-    (layout.clone / "dispatch-core" / "requirements.txt").write_text("")
+    write_browser_manager_project(layout.clone / "dispatch-core")
     write_test_project(layout.clone / "installer")
     destination = layout.dispatch_home / "replacement-venv"
     browser = layout.dispatch_home / "replacement-browser"
@@ -1270,8 +2028,10 @@ def test_replacement_venv_accepts_real_stdlib_python_layout(tmp_path: Path) -> N
     def fake_run(command, cwd=None):
         values = tuple(str(value) for value in command)
         if values[1:3] == ("-m", "venv"):
-            return subprocess.run(values, cwd=cwd, check=False, capture_output=True, text=True)
-        return editable_response(command) or completed()
+            completed_venv = subprocess.run(values, cwd=cwd, check=False, capture_output=True, text=True)
+            fake_site_packages(Path(values[-1]) / "bin" / "python")
+            return completed_venv
+        return browser_response(command) or editable_response(command) or completed()
 
     result = lifecycle_runtime.ensure_venv(
         layout,
@@ -1638,6 +2398,31 @@ def test_launcher_and_service_upgrade_previous_private_umask_format(tmp_path: Pa
     install_user_service(layout, activate=False)
     assert b"UMask=0077\n" in layout.service_path.read_bytes()
 
+    clone_launcher = (
+        "#!/bin/sh\nset -eu\numask 077\n"
+        f"export DISPATCH_HOME={shlex.quote(str(layout.dispatch_home))}\n"
+        f"exec {shlex.quote(str(layout.venv_python))} -I -B -m dispatch_installer.launcher \"$@\"\n"
+    ).encode("utf-8")
+    layout.command_path.write_bytes(clone_launcher)
+    layout.command_path.chmod(0o700)
+    assert inspect_user_command(layout)["status"] == "ready"
+    install_user_command(layout)
+    assert layout.command_path.read_bytes() == launcher_script(layout)
+
+    clone_service = service_unit(layout).replace(
+        str(layout.browser_cache).encode("utf-8"),
+        str(layout.legacy_browser_cache).encode("utf-8"),
+        1,
+    )
+    layout.service_path.write_bytes(clone_service)
+    layout.service_path.chmod(0o600)
+    service_record = read_json(layout.state / "service.json")
+    service_record["unit_sha256"] = hashlib.sha256(clone_service).hexdigest()
+    atomic_json(layout.state / "service.json", service_record)
+    assert service_unit_is_owned(layout)
+    install_user_service(layout, activate=False)
+    assert str(layout.browser_cache).encode("utf-8") in layout.service_path.read_bytes()
+
 
 def test_launcher_rejects_symlinked_public_directory_ancestor(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
@@ -1657,6 +2442,112 @@ def test_launcher_rejects_group_writable_public_directory(tmp_path: Path) -> Non
     with pytest.raises(InstallerError) as error:
         install_user_command(layout)
     assert error.value.code == "directory_unsafe"
+
+
+def test_installation_lock_rejects_root_swapped_to_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    displaced = layout.dispatch_home.parent / "dispatch-original"
+    outside = tmp_path / "outside-install"
+    outside.mkdir(mode=0o700)
+    original_open = layout_runtime.os.open
+    swapped = False
+
+    def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if path == ".install.lock" and dir_fd is not None and not swapped:
+            layout.dispatch_home.rename(displaced)
+            layout.dispatch_home.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(layout_runtime.os, "open", racing_open)
+    with pytest.raises(InstallerError) as error:
+        with installation_lock(layout):
+            pass
+    assert error.value.code == "installation_root_changed"
+    assert not (outside / ".install.lock").exists()
+
+
+def test_installation_lock_rejects_root_swap_immediately_after_flock(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    displaced = layout.dispatch_home.parent / "dispatch-after-flock"
+    outside = tmp_path / "outside-after-flock"
+    outside.mkdir(mode=0o700)
+    original_flock = layout_runtime.fcntl.flock
+    swapped = False
+
+    def racing_flock(descriptor, operation):
+        nonlocal swapped
+        result = original_flock(descriptor, operation)
+        if operation & layout_runtime.fcntl.LOCK_EX and not swapped:
+            layout.dispatch_home.rename(displaced)
+            layout.dispatch_home.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return result
+
+    monkeypatch.setattr(layout_runtime.fcntl, "flock", racing_flock)
+    with pytest.raises(InstallerError) as error:
+        with installation_lock(layout):
+            pass
+    assert error.value.code == "installation_root_changed"
+    assert not (outside / ".install.lock").exists()
+
+
+def test_installation_lock_detects_root_swap_before_lifecycle_mutation(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    source = tmp_path / "staged-source"
+    (source / ".git").mkdir(parents=True)
+    displaced = layout.dispatch_home.parent / "dispatch-lifetime-original"
+    outside = tmp_path / "outside-lifetime"
+    outside.mkdir(mode=0o700)
+
+    with installation_lock(layout):
+        layout.dispatch_home.rename(displaced)
+        layout.dispatch_home.symlink_to(outside, target_is_directory=True)
+        with pytest.raises(InstallerError) as error:
+            lifecycle_runtime._promote_clone(layout, source)
+        assert error.value.code == "installation_root_changed"
+    assert not (outside / "dispatch").exists()
+    assert not (outside / ".install-tmp").exists()
+
+
+def test_post_validation_root_swap_keeps_promotion_in_pinned_root(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    staging_root = lifecycle_runtime._prepare_temporary_root(layout)
+    source = Path(tempfile.mkdtemp(prefix="candidate-", dir=staging_root)) / "dispatch"
+    (source / ".git").mkdir(parents=True)
+    displaced = layout.dispatch_home.parent / "dispatch-pinned-original"
+    outside = tmp_path / "outside-pinned"
+    outside.mkdir(mode=0o700)
+    original_assert = lifecycle_runtime.assert_installation_root_current
+    validation_count = 0
+
+    def swap_after_validation(value=None):
+        nonlocal validation_count
+        original_assert(value)
+        validation_count += 1
+        if validation_count == 2:
+            layout.dispatch_home.rename(displaced)
+            layout.dispatch_home.symlink_to(outside, target_is_directory=True)
+
+    with installation_lock(layout):
+        monkeypatch.setattr(lifecycle_runtime, "assert_installation_root_current", swap_after_validation)
+        lifecycle_runtime._promote_clone(layout, source)
+    assert (displaced / "dispatch" / ".git").is_dir()
+    assert not (outside / "dispatch").exists()
 
 
 def test_installation_lock_rejects_symlink_without_chmod_target(tmp_path: Path) -> None:
@@ -1957,8 +2848,7 @@ def test_post_activation_legacy_cleanup_failure_keeps_new_generation(
     source.parent.mkdir(mode=0o700)
     (source / ".git").mkdir(parents=True)
     write_test_project(source / "installer")
-    (source / "dispatch-core").mkdir()
-    (source / "dispatch-core" / "requirements.txt").write_text("")
+    write_browser_manager_project(source / "dispatch-core")
 
     def fake_run(command, cwd=None):
         values = tuple(str(value) for value in command)
@@ -1971,7 +2861,7 @@ def test_post_activation_legacy_cleanup_failure_keeps_new_generation(
         response = authority_response(command)
         if response is not None:
             return response
-        return editable_response(command) or completed()
+        return browser_response(command) or editable_response(command) or completed()
 
     monkeypatch.setattr(
         lifecycle_runtime,
@@ -1986,7 +2876,8 @@ def test_post_activation_legacy_cleanup_failure_keeps_new_generation(
     monkeypatch.setattr(lifecycle_runtime, "stop_legacy_user_service", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(lifecycle_runtime, "remove_legacy_user_service", lambda *_args, **_kwargs: None)
     result = install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
-    assert result["status"] == "installed"
+    assert result["status"] == "installed_cleanup_incomplete"
+    assert result["cleanup_error_code"] == "post_activation_cleanup_failed"
     record = read_installation(layout)
     assert record is not None
     assert record["commit"] == "0123456789abcdef0123456789abcdef01234567"
@@ -2002,8 +2893,7 @@ def test_post_activation_work_cleanup_interrupt_keeps_new_generation(
     source.parent.mkdir(mode=0o700)
     (source / ".git").mkdir(parents=True)
     write_test_project(source / "installer")
-    (source / "dispatch-core").mkdir()
-    (source / "dispatch-core" / "requirements.txt").write_text("")
+    write_browser_manager_project(source / "dispatch-core")
 
     def fake_run(command, cwd=None):
         values = tuple(str(value) for value in command)
@@ -2013,18 +2903,19 @@ def test_post_activation_work_cleanup_interrupt_keeps_new_generation(
             python.write_text("python")
             python.chmod(0o700)
             fake_site_packages(python)
-        return authority_response(command) or editable_response(command) or completed()
+        return authority_response(command) or browser_response(command) or editable_response(command) or completed()
 
     real_remove = lifecycle_runtime._safe_remove
 
     def interrupted_cleanup(path: Path) -> None:
-        if path.name.startswith("venv-"):
+        if path.name.startswith("dispatch-installer-"):
             raise KeyboardInterrupt
         real_remove(path)
 
     monkeypatch.setattr(lifecycle_runtime, "_safe_remove", interrupted_cleanup)
     result = install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
-    assert result["status"] == "installed"
+    assert result["status"] == "installed_cleanup_incomplete"
+    assert result["cleanup_error_code"] == "post_activation_cleanup_failed"
     record = read_installation(layout)
     assert record is not None
     assert record["commit"] == AUTHORITY_COMMIT

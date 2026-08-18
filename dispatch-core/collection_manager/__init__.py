@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, Any, Callable, Mapping
 from browser_manager import (
     BrowserLeaseRequest,
     BrowserManager,
+    BrowserManagerError,
     BrowserMode,
     BrowserPurpose,
     LeaseState,
@@ -312,7 +313,14 @@ class CollectionManager:
 
     def run_claimed(self, task_id: str, worker_id: str) -> TaskRecord:
         store = self._require_store()
-        claimed = store.get(task_id)
+        try:
+            claimed = store.get(task_id)
+        except BaseException:
+            try:
+                self._persist_interrupted_task(task_id, worker_id)
+            except BaseException:
+                pass
+            raise
         if claimed.state != TaskState.RUNNING or claimed.worker_id != worker_id or claimed.execution_started:
             raise CollectionManagerError("collection_state_conflict", "worker does not own an unstarted collection task")
         registration = self._collectors.get(claimed.collector_id)
@@ -323,12 +331,26 @@ class CollectionManager:
             account_alias=claimed.account_alias,
             parameters=claimed.parameters,
         )
-        result = self._run_request(
-            request,
-            claimed.task_id,
-            lambda: store.mark_execution_started(claimed.task_id, worker_id, self._clock()),
-        )
-        return self._persist_result(claimed.task_id, worker_id, result)
+        def mark_started() -> None:
+            store.mark_execution_started(claimed.task_id, worker_id, self._clock())
+
+        try:
+            result = self._run_request(
+                request,
+                claimed.task_id,
+                mark_started,
+            )
+            return self._persist_result(claimed.task_id, worker_id, result)
+        except BaseException as primary:
+            pending = self._pending.get(claimed.task_id)
+            try:
+                self._persist_interrupted_task(claimed.task_id, worker_id)
+            except BaseException:
+                raise primary
+            if pending is not None:
+                self._pending.pop(claimed.task_id, None)
+                self._finish_lease(pending.lease, success=False, primary=primary)
+            raise
 
     def run_next(self, worker_id: str = "collection-worker", lease_seconds: int = 900) -> TaskRecord | None:
         claimed = self.claim_next(worker_id, lease_seconds)
@@ -341,20 +363,55 @@ class CollectionManager:
 
     def resume_task(self, task_id: str, lease_seconds: int = 900) -> TaskRecord:
         store = self._require_store()
-        current = store.get(task_id)
+        try:
+            current = store.get(task_id)
+        except BaseException as primary:
+            pending = self._pending.get(task_id)
+            try:
+                self._persist_interrupted_owner(task_id)
+            except BaseException:
+                raise primary
+            if pending is not None:
+                self._pending.pop(task_id, None)
+                self._finish_lease(pending.lease, success=False, primary=primary)
+            raise
         if current.state != TaskState.WAITING_FOR_USER or current.worker_id is None or task_id not in self._pending:
             raise CollectionManagerError("collection_not_pending", "collection is not resumable in this worker")
+        worker_id = current.worker_id
+        assert worker_id is not None
+        pending_guard = self._pending[task_id]
         if current.cancel_requested:
-            return self._finish_pending_cancellation(task_id, current.worker_id)
-        if not current.resume_requested:
-            current = store.request_resume(task_id, self._clock())
-        store.resume_waiting(task_id, current.worker_id, self._clock(), lease_seconds)
-        result = self.resume(task_id)
-        return self._persist_result(task_id, current.worker_id, result)
+            return self._finish_pending_cancellation(task_id, worker_id)
+        try:
+            if not current.resume_requested:
+                current = store.request_resume(task_id, self._clock())
+            store.resume_waiting(task_id, worker_id, self._clock(), lease_seconds)
+            result = self.resume(task_id)
+            return self._persist_result(task_id, worker_id, result)
+        except BaseException as primary:
+            pending = self._pending.get(task_id, pending_guard)
+            try:
+                self._persist_interrupted_task(task_id, worker_id)
+            except BaseException:
+                raise primary
+            self._pending.pop(task_id, None)
+            self._finish_lease(pending.lease, success=False, primary=primary)
+            raise
 
     def cancel_task(self, task_id: str) -> TaskRecord:
         store = self._require_store()
-        current = store.request_cancel(task_id, self._clock())
+        try:
+            current = store.request_cancel(task_id, self._clock())
+        except BaseException as primary:
+            pending = self._pending.get(task_id)
+            try:
+                self._persist_interrupted_owner(task_id)
+            except BaseException:
+                raise primary
+            if pending is not None:
+                self._pending.pop(task_id, None)
+                self._finish_lease(pending.lease, success=False, primary=primary)
+            raise
         if current.state == TaskState.WAITING_FOR_USER and task_id in self._pending:
             return self._finish_pending_cancellation(task_id, current.worker_id)
         return current
@@ -472,20 +529,27 @@ class CollectionManager:
                 )
             )
             lease.activate()
-        except Exception:
-            cleanup_ok = self._finish_lease(lease, success=False)
+        except BaseException as exc:
+            cleanup_ok = self._finish_lease(lease, success=False, primary=exc)
+            if not isinstance(exc, Exception):
+                raise
+            cleanup_failed = (
+                isinstance(exc, BrowserManagerError) and exc.code == "browser_cleanup_failed"
+            ) or not cleanup_ok
             return self._result(
                 run_id,
                 registration,
-                "browser_unavailable" if cleanup_ok else "browser_cleanup_failed",
+                "browser_cleanup_failed" if cleanup_failed else "browser_unavailable",
             )
 
         if not registration.authentication_required:
             return self._execute(run_id, registration, request, lease, lease.session, before_execute)
         try:
             authentication = self._authentication.authenticate(lease.session, request.account_alias)
-        except Exception:
-            cleanup_ok = self._finish_lease(lease, success=False)
+        except BaseException as exc:
+            cleanup_ok = self._finish_lease(lease, success=False, primary=exc)
+            if not isinstance(exc, Exception):
+                raise
             return self._result(
                 run_id,
                 registration,
@@ -511,9 +575,11 @@ class CollectionManager:
                 pending.lease.session,
                 pending.request.account_alias,
             )
-        except Exception:
+        except BaseException as exc:
             self._pending.pop(run_id, None)
-            cleanup_ok = self._finish_lease(pending.lease, success=False)
+            cleanup_ok = self._finish_lease(pending.lease, success=False, primary=exc)
+            if not isinstance(exc, Exception):
+                raise
             return self._result(
                 run_id,
                 pending.registration,
@@ -588,8 +654,10 @@ class CollectionManager:
         if before_execute is not None:
             try:
                 before_execute()
-            except Exception:
-                cleanup_ok = self._finish_lease(lease, success=False)
+            except BaseException as exc:
+                cleanup_ok = self._finish_lease(lease, success=False, primary=exc)
+                if not isinstance(exc, Exception):
+                    raise
                 return self._result(
                     run_id,
                     registration,
@@ -597,8 +665,10 @@ class CollectionManager:
                 )
         try:
             receipt = registration.runner(context)
-        except Exception:
-            cleanup_ok = self._finish_lease(lease, success=False)
+        except BaseException as exc:
+            cleanup_ok = self._finish_lease(lease, success=False, primary=exc)
+            if not isinstance(exc, Exception):
+                raise
             return self._result(
                 run_id,
                 registration,
@@ -617,15 +687,69 @@ class CollectionManager:
         return self._result(run_id, registration, "succeeded", ok=True, receipt=receipt)
 
     def _finish_pending_cancellation(self, task_id: str, worker_id: str) -> TaskRecord:
-        result = self.cancel(task_id)
-        cleanup_failed = result.status == "browser_cleanup_failed"
-        return self._require_store().finish(
-            task_id,
-            worker_id,
-            TaskState.FAILED if cleanup_failed else TaskState.CANCELLED,
-            self._clock(),
-            error_code="browser_cleanup_failed" if cleanup_failed else "cancelled",
-        )
+        guard = self._pending.get(task_id)
+        store = self._require_store()
+        last_error: BaseException | None = None
+        terminal: TaskRecord | None = None
+        for _attempt in range(3):
+            try:
+                current = store.get(task_id)
+                if current.state == TaskState.CANCELLED:
+                    terminal = current
+                else:
+                    terminal = store.finish(
+                        task_id,
+                        worker_id,
+                        TaskState.CANCELLED,
+                        self._clock(),
+                        error_code="cancelled",
+                    )
+                break
+            except BaseException as exc:
+                last_error = exc
+        if terminal is None:
+            assert last_error is not None
+            raise last_error
+        cleanup_ok = True if guard is None else self._finish_lease(guard.lease, success=False)
+        if cleanup_ok:
+            self._pending.pop(task_id, None)
+        return terminal
+
+    def _persist_interrupted_task(self, task_id: str, worker_id: str) -> TaskRecord:
+        store = self._require_store()
+        last_error: BaseException | None = None
+        for _attempt in range(3):
+            try:
+                current = store.get(task_id)
+                if current.state not in {TaskState.RUNNING, TaskState.WAITING_FOR_USER} or current.worker_id != worker_id:
+                    return current
+                if current.execution_started:
+                    return store.finish(
+                        task_id,
+                        worker_id,
+                        TaskState.UNCERTAIN,
+                        self._clock(),
+                        error_code="collection_interrupted",
+                    )
+                return self._persist_failure(current, worker_id, "collection_interrupted")
+            except BaseException as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
+
+    def _persist_interrupted_owner(self, task_id: str) -> TaskRecord:
+        store = self._require_store()
+        last_error: BaseException | None = None
+        for _attempt in range(3):
+            try:
+                current = store.get(task_id)
+                if current.worker_id is None:
+                    return current
+                return self._persist_interrupted_task(task_id, current.worker_id)
+            except BaseException as exc:
+                last_error = exc
+        assert last_error is not None
+        raise last_error
 
     def _persist_result(
         self,
@@ -693,6 +817,7 @@ class CollectionManager:
             "browser_cleanup_failed",
             "browser_unavailable",
             "collection_dependencies_unavailable",
+            "collection_interrupted",
             "collector_not_registered",
             "task_state_unavailable",
         }
@@ -738,12 +863,21 @@ class CollectionManager:
         return self._store
 
     @staticmethod
-    def _finish_lease(lease: ManagedLease | None, *, success: bool) -> bool:
+    def _finish_lease(
+        lease: ManagedLease | None,
+        *,
+        success: bool,
+        primary: BaseException | None = None,
+    ) -> bool:
         if lease is None:
             return True
         try:
             terminal = lease.release() if success else lease.cancel()
-        except Exception:
+        except BaseException as cleanup_error:
+            if isinstance(cleanup_error, Exception):
+                return False
+            if primary is None:
+                raise
             return False
         expected = LeaseState.CLOSED if success else LeaseState.CANCELLED
         return terminal.state == expected
