@@ -11,6 +11,12 @@ from .models import (
     ManagedBrowserSession,
 )
 from .policy import DEFAULT_REALMS, RealmRegistry
+from .providers import (
+    BrowserProvider,
+    BrowserProviderDescriptor,
+    BrowserProviderKind,
+    BrowserProviderRegistry,
+)
 
 
 __all__ = [
@@ -19,6 +25,10 @@ __all__ = [
     "BrowserManager",
     "BrowserManagerError",
     "BrowserMode",
+    "BrowserProvider",
+    "BrowserProviderDescriptor",
+    "BrowserProviderKind",
+    "BrowserProviderRegistry",
     "BrowserPurpose",
     "BrowserRealm",
     "DEFAULT_REALMS",

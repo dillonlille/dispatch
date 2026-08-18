@@ -38,7 +38,7 @@ def service_unit(layout: InstallLayout) -> bytes:
         "UMask=0077\n"
         f"ExecStart={_quote_systemd(str(layout.command_path))} service\n"
         f"Environment=DISPATCH_HOME={_quote_systemd(str(layout.dispatch_home))}\n"
-        f"Environment=PLAYWRIGHT_BROWSERS_PATH={_quote_systemd(str(layout.cache / 'browser'))}\n"
+        f"Environment=PLAYWRIGHT_BROWSERS_PATH={_quote_systemd(str(layout.browser_cache))}\n"
         "Restart=on-failure\n"
         "RestartSec=2\n\n"
         "[Install]\n"
@@ -48,6 +48,19 @@ def service_unit(layout: InstallLayout) -> bytes:
 
 def _previous_service_unit(layout: InstallLayout) -> bytes:
     return service_unit(layout).replace(b"UMask=0077\n", b"", 1)
+
+
+def _clone_service_unit(layout: InstallLayout) -> bytes:
+    """Clone-lifecycle service used before Browser Manager cache ownership."""
+    return service_unit(layout).replace(
+        str(layout.browser_cache).encode("utf-8"),
+        str(layout.legacy_browser_cache).encode("utf-8"),
+        1,
+    )
+
+
+def _previous_clone_service_unit(layout: InstallLayout) -> bytes:
+    return _clone_service_unit(layout).replace(b"UMask=0077\n", b"", 1)
 
 
 def legacy_service_unit(layout: InstallLayout) -> bytes:
@@ -115,7 +128,12 @@ def service_unit_is_owned(layout: InstallLayout) -> bool:
         and details.st_nlink == 1
         and stat.S_IMODE(details.st_mode) == 0o600
         and details.st_size <= 64 * 1024
-        and content in {service_unit(layout), _previous_service_unit(layout)}
+        and content in {
+            service_unit(layout),
+            _previous_service_unit(layout),
+            _clone_service_unit(layout),
+            _previous_clone_service_unit(layout),
+        }
         and _record_matches(layout, content)
     )
 

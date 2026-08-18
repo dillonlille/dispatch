@@ -44,9 +44,9 @@ The application checkout and dependency environment are separate from durable us
 └── installation.json
 ```
 
-Core runs directly from `~/.dispatch/dispatch/dispatch-core`; it is not installed as a wheel. The installer installs the pinned Core dependencies, selected built-in plugin dependencies, Playwright system dependencies, and a user-owned Chromium under `~/.dispatch/cache/browser`.
+Core runs directly from `~/.dispatch/dispatch/dispatch-core`; it is not installed as a wheel. The installer installs the pinned Core dependencies and selected built-in plugin dependencies. Browser Manager then derives the exact Chromium revision from staged Playwright, reuses a safe matching generation when available, or installs user-owned Chromium under `~/.dispatch/cache/browser-manager/playwright`.
 
-On a fresh Linux host, Playwright's supported `install-deps` operation may invoke the host package manager and request normal administrator authorization for approved shared browser libraries. Its output remains visible; denial or an unavailable privilege path fails installation clearly rather than leaving a nominally ready browser.
+Browser Manager scans Chromium's shared libraries before requesting elevation. On a prepared host, no browser system command runs. When libraries are missing on a supported Linux host, Playwright's dependency operation may request normal administrator authorization; denial or unavailable privilege fails before activation rather than leaving a nominally ready browser. A bounded sandboxed `about:blank` launch must pass before the checkout, venv, and browser generation activate together.
 
 Sensitive roots and records are owner-only. The public launcher is `${HOME}/.local/bin/dispatch`, and the service is a systemd user service.
 

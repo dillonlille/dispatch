@@ -42,6 +42,10 @@ There is no active-release selector or content-addressed release tree in the sou
 
 Every configured path must be absolute. Reject explicit `..` traversal, symlink aliases, overlapping primary roots, and private roots inside the source checkout. A maintained source checkout may use its own root for code, but private and generated roots must remain outside it.
 
+### Local trust boundary
+
+Dispatch uses the Unix account as its local security boundary. The installation owner UID is trusted: a malicious process already running as that same UID can inspect private credentials, interfere with processes, and rename user-owned directories, so Dispatch does not claim isolation from a hostile same-UID process. Filesystem hardening instead fails closed on unsafe pre-existing paths, symlinks, ownership or mode conflicts, process interruption, and accidental concurrent lifecycle operations. Isolation from untrusted local code requires a separate OS account, container, or equivalent operating-system boundary.
+
 The `dispatch/` checkout and `venv/` environment are installer-owned lifecycle paths. Core does not expose separate overrides for them in plugin owner-path output; the installer records both in `installation.json` and projects the checkout as `DISPATCH_CODE_ROOT`.
 
 ## Stable and development channels
@@ -52,6 +56,6 @@ Use `dispatch update` to advance the selected channel and `dispatch channel stab
 
 ## Ownership and projections
 
-Core's path API supports explicit root overrides for development and embedded process use. Installed launchers and user services intentionally project the canonical absolute roots beneath `DISPATCH_HOME`; they do not inherit ambient per-root overrides that would escape lifecycle preservation and uninstall boundaries. Paths must not embed a username, a branch-specific private path, or a secret.
+Core's path API supports explicit absolute root overrides for development, embedded process use, and intentionally external private storage. Installed launchers and user services project the exact validated roots selected at installation time: defaults remain beneath `DISPATCH_HOME`, while explicit `DISPATCH_*_ROOT` values may be separate non-overlapping private directories and are preserved for lifecycle and uninstall operations. Paths must not embed a username, a branch-specific private path, or a secret.
 
 Hermes is outside the Dispatch path contract. Dispatch never inspects, configures, creates profiles for, or removes Hermes files.

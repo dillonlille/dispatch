@@ -68,20 +68,32 @@ class VerifiedBrowserInstallation:
     identity: BrowserRuntimeIdentity
     playwright_module: Path
     browsers_path: Path
+    executable_device: int
+    executable_inode: int
 
 
 
 def user_browser_cache() -> Path:
     """Return the only browser cache accepted by Browser Manager."""
 
-    configured = os.environ.get("DISPATCH_HOME")
-    root = Path(configured).expanduser() if configured else Path.home() / ".dispatch"
-    if not root.is_absolute():
+    configured_cache = os.environ.get("DISPATCH_CACHE_ROOT")
+    if configured_cache:
+        cache_root = Path(configured_cache).expanduser()
+    else:
+        configured_home = os.environ.get("DISPATCH_HOME")
+        dispatch_root = Path(configured_home).expanduser() if configured_home else Path.home() / ".dispatch"
+        if not dispatch_root.is_absolute():
+            raise BrowserManagerError(
+                "browser_cache_path_invalid",
+                "DISPATCH_HOME must be absolute",
+            )
+        cache_root = dispatch_root / "cache"
+    if not cache_root.is_absolute():
         raise BrowserManagerError(
             "browser_cache_path_invalid",
-            "DISPATCH_HOME must be absolute",
+            "DISPATCH_CACHE_ROOT must be absolute",
         )
-    return root / "cache" / "browser"
+    return cache_root / "browser-manager" / "playwright"
 
 
 def installed_playwright_module() -> Path:
@@ -133,24 +145,69 @@ def _driver_executable(module: Path) -> Path:
     return (module.parent / "driver" / name).resolve(strict=False)
 
 
-def _chromium_descriptor(module: Path) -> tuple[str, str | None] | None:
-    manifest = module.parent / "driver" / "package" / "browsers.json"
+def _bounded_json(path: Path, *, maximum: int = 64 * 1024) -> dict[str, object] | None:
+    flags = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     try:
-        payload = json.loads(manifest.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        descriptor = os.open(path, flags)
+    except OSError:
         return None
-    browsers = payload.get("browsers") if isinstance(payload, dict) else None
+    try:
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.geteuid()
+            or details.st_nlink != 1
+            or details.st_size > maximum
+        ):
+            return None
+        chunks: list[bytes] = []
+        remaining = maximum + 1
+        while remaining > 0:
+            chunk = os.read(descriptor, min(65536, remaining))
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        data = b"".join(chunks)
+        if len(data) > maximum:
+            return None
+        payload = json.loads(data.decode("utf-8", errors="strict"))
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
+        return None
+    finally:
+        os.close(descriptor)
+    return payload if isinstance(payload, dict) else None
+
+
+def _chromium_descriptor(module: Path) -> tuple[str, str | None] | None:
+    root = module.parent
+    manifest = root / "driver" / "package" / "browsers.json"
+    try:
+        current = root
+        for part in manifest.relative_to(root).parts:
+            current /= part
+            if current.is_symlink():
+                return None
+        resolved = manifest.resolve(strict=True)
+        resolved.relative_to(root.resolve(strict=True))
+        if resolved != manifest:
+            return None
+    except (OSError, ValueError):
+        return None
+    payload = _bounded_json(manifest)
+    if payload is None:
+        return None
+    browsers = payload.get("browsers")
     if not isinstance(browsers, list):
         return None
-    for browser in browsers:
-        if not isinstance(browser, dict) or browser.get("name") != BROWSER_FAMILY:
-            continue
-        revision = browser.get("revision")
-        version = browser.get("browserVersion")
-        if not isinstance(revision, str) or not revision.isdigit():
-            return None
-        return revision, version if isinstance(version, str) and version else None
-    return None
+    chromium = [browser for browser in browsers if isinstance(browser, dict) and browser.get("name") == BROWSER_FAMILY]
+    if len(chromium) != 1:
+        return None
+    revision = chromium[0].get("revision")
+    version = chromium[0].get("browserVersion")
+    if not isinstance(revision, str) or not revision.isdigit():
+        return None
+    return revision, version if isinstance(version, str) and version else None
 
 
 def _chromium_version(module: Path) -> str | None:
@@ -165,6 +222,20 @@ def _cache_directory(path: Path) -> Path:
                 "browser_runtime_unsafe",
                 "Dispatch Playwright browser cache cannot use symlink ancestors",
             )
+        if candidate.exists():
+            details = candidate.lstat()
+            if not stat.S_ISDIR(details.st_mode) or details.st_uid not in {0, os.geteuid()}:
+                raise BrowserManagerError(
+                    "browser_runtime_unsafe",
+                    "Dispatch Playwright browser cache ancestry is unsafe",
+                )
+            writable = details.st_mode & 0o022
+            trusted_sticky_root = details.st_uid == 0 and bool(details.st_mode & stat.S_ISVTX)
+            if writable and not trusted_sticky_root:
+                raise BrowserManagerError(
+                    "browser_runtime_unsafe",
+                    "Dispatch Playwright browser cache ancestry is group/world writable",
+                )
     try:
         resolved = path.resolve(strict=True)
     except FileNotFoundError as exc:
@@ -272,10 +343,13 @@ class BrowserRuntimeAuthority:
             executable=executable,
             control_executable=control_executable,
         )
+        executable_details = executable.stat(follow_symlinks=False)
         return VerifiedBrowserInstallation(
             identity=identity,
             playwright_module=module,
             browsers_path=cache,
+            executable_device=executable_details.st_dev,
+            executable_inode=executable_details.st_ino,
         )
 
     def inspect(self, *, full_tree: bool = True) -> dict[str, object]:
@@ -292,11 +366,13 @@ class BrowserRuntimeAuthority:
                 "error_code": exc.code,
                 "error_message": str(exc)[:256],
                 "playwright_version": version,
+                "chromium_revision": None,
                 "chromium_version": None,
                 "browser_family": BROWSER_FAMILY,
                 "playwright_browsers_path": str(cache),
             }
         identity = installation.identity
+        descriptor = _chromium_descriptor(installation.playwright_module)
         return {
             "installed": True,
             "configured": True,
@@ -305,6 +381,7 @@ class BrowserRuntimeAuthority:
             "error_code": None,
             "error_message": None,
             "playwright_version": identity.playwright_version,
+            "chromium_revision": None if descriptor is None else descriptor[0],
             "chromium_version": identity.chromium_version,
             "browser_family": BROWSER_FAMILY,
             "playwright_browsers_path": str(installation.browsers_path),

@@ -1,35 +1,68 @@
 # Browser Manager
 
-Browser Manager provides isolated Playwright Chromium sessions, realm policy, durable leases, crash recovery, and profile locking.
+Browser Manager provides version-matched Playwright Chromium provisioning, isolated sessions, provider contracts, realm policy, durable leases, crash recovery, and profile locking.
 
-## Runtime ownership
+## Ownership boundary
 
-The installer owns browser dependency installation:
+All browser policy lives under `dispatch-core/browser_manager/`.
 
-- the Python `playwright` package is installed in `~/.dispatch/venv`;
-- Chromium is installed by Playwright in `~/.dispatch/cache/browser`;
-- required Linux libraries are installed through Playwright's supported dependency command.
+The install-time provisioner:
 
-Browser Manager does not install or activate browser files. At runtime it asks the installed Playwright package for the Chromium executable, verifies that Chromium is inside the private Dispatch browser cache, verifies the Playwright control executable, and uses those paths for process supervision.
+- reads the exact Playwright version and Chromium revision from the staged virtual environment;
+- scans an existing managed cache and reuses only the exact safe revision;
+- migrates the former `~/.dispatch/cache/browser` cache only when it matches and is safe;
+- downloads missing Chromium into owner-only staging;
+- scans dynamic host libraries and invokes Playwright's supported system-dependency command only when libraries are missing;
+- performs a real `about:blank` smoke launch with `chromium_sandbox=True`;
+- returns a closed version/result record to the installer.
 
-There is no root-owned browser generation, selector, receipt, or parallel activation hierarchy.
+The installer remains the transaction coordinator. It swaps the checkout, virtual environment, and staged browser generation together, publishes `state/browser-manager/installation.json`, activates the launcher/service, and restores the prior generation on failure.
+
+The runtime authority remains read-only. It verifies the active Playwright package, Chromium revision/path, control executable, ownership, and modes before Browser Manager launches or reconciles any process. Every live lease holds a shared generation lock; install/update/repair must acquire the exclusive counterpart before swapping a browser generation.
+
+## Version contract
+
+The exact staged Playwright package determines the supported Chromium revision through its packaged `browsers.json`. Playwright and Chromium are accepted as one compatibility generation; an arbitrary system browser or Hermes cache is never selected automatically. The current managed provisioner is explicitly Linux-only, matching the existing executable and process-identity contract; unsupported platforms fail before browser mutation.
+
+The secret-free installation record reports:
+
+- Playwright version;
+- Chromium revision and browser version;
+- active managed cache;
+- readiness status.
 
 ## Persistence
 
 - Lease ledger: `~/.dispatch/data/db/browser-manager/browser-manager.sqlite3`
 - Per-realm profiles: `~/.dispatch/state/browser-manager/profiles/<realm>`
-- Browser cache: `~/.dispatch/cache/browser`
-- Temporary process bookkeeping: `~/.dispatch/run/browser-manager`
+- Browser installation record and durable generation lock: `~/.dispatch/state/browser-manager/{installation.json,generation.lock}`
+- Managed Playwright cache: `~/.dispatch/cache/browser-manager/playwright`
+- Future Browser Manager Node/download caches: `~/.dispatch/cache/browser-manager/`
+- Temporary per-lease process bookkeeping and locks: `~/.dispatch/run/browser-manager`
 
 Realm profiles are private and persist across ordinary updates and uninstall. Browser binaries and runtime bookkeeping are disposable.
 
-## Health
+## Provider foundation
 
-`dispatch browser-doctor` performs bounded package, cache, executable, ownership, and permissions checks. It does not launch a browser. Real browser launch errors are reported when a lease is acquired.
+The closed provider registry currently implements only `managed-playwright`. It reserves non-operational contracts for `persistent-cdp` and `external-cdp` so later collector migrations can add authenticated persistent providers without giving collectors ownership of executables, profiles, endpoints, or locks.
+
+No collector is integrated by this foundation.
+
+## Commands
+
+- `dispatch browser status` reports bounded runtime/provider status and succeeds even when the runtime is not ready.
+- `dispatch browser doctor` and `dispatch browser verify` require the active runtime to be ready.
+- `dispatch browser reconcile` positively reconciles interrupted/quarantined durable leases before generation mutation.
+- `dispatch browser providers` lists implemented and reserved provider contracts.
+- `dispatch browser-doctor` remains as a compatibility command.
+
+These commands never include credentials, cookies, CDP URLs, or profile paths.
 
 ## Verification
 
 ```bash
 cd dispatch-core
-python3 -m pytest -q -p no:cacheprovider tests/browser_manager
+python3 -m pytest -q -p no:cacheprovider tests/browser_manager tests/command_interface
 ```
+
+Real install, repair, update, sandbox-launch, and rollback acceptance runs only on `dispatch-testing` from exact accepted `dev` bootstrap bytes.
