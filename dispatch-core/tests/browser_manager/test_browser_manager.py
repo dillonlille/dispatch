@@ -301,7 +301,9 @@ def test_playwright_start_interrupt_runs_partial_cleanup(
 ) -> None:
     import playwright.sync_api as sync_api  # type: ignore[import-not-found]
 
-    executable = Path(sys.executable).resolve(strict=True)
+    executable = tmp_path / "approved-browser"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
     runtime = playwright_runtime_for_testing(executable, executable)
     fake_playwright = SimpleNamespace()
     starter = SimpleNamespace(start=lambda: fake_playwright)
