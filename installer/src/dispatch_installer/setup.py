@@ -436,7 +436,7 @@ def install_editable_source(
     if isinstance(project.get("requires-python"), str):
         metadata_lines.append(f"Requires-Python: {project['requires-python']}")
     metadata_lines.extend(f"Requires-Dist: {value}" for value in dependencies)
-    pth_payload = "".join(f"{root}\n" for root in (*roots, generation)).encode()
+    pth_payload = "".join(f"{root}\n" for root in roots).encode() + f"{generation_name}\n".encode()
     generation_files = {
         ".dispatch-direct.json": json.dumps(
             receipt, sort_keys=True, separators=(",", ":")
@@ -484,7 +484,7 @@ def install_editable_source(
         except OSError as exc:
             raise InstallerError("editable_site_packages_unsafe", "direct-source path record is unsafe") from exc
         expected_existing = (
-            "".join(f"{root}\n" for root in (*roots, old_generations[0])).encode()
+            "".join(f"{root}\n" for root in roots).encode() + f"{old_generations[0].name}\n".encode()
             if len(old_generations) == 1
             else None
         )
