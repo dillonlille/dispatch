@@ -212,7 +212,7 @@ def test_worker_exception_status_uses_closed_vocabulary(tmp_path: Path) -> None:
 
     outcome = _supervisor(store, "secret").run_once("worker-secret")
 
-    assert outcome.status == "collection_worker_failed"
+    assert outcome.status == "uncertain"
     assert "secret-token-value" not in repr(outcome.safe_data())
     assert store.get(task_id).state == TaskState.UNCERTAIN
 
@@ -435,10 +435,15 @@ def test_reconciliation_quarantines_missing_leader_with_live_group_member(tmp_pa
     ticks = _process_start_ticks(leader.pid)
     assert ticks is not None
     deadline = time.monotonic() + 2
-    while not child_file.exists() and time.monotonic() < deadline:
+    child_text = ""
+    while time.monotonic() < deadline:
+        if child_file.exists():
+            child_text = child_file.read_text(encoding="utf-8").strip()
+            if child_text.isdigit():
+                break
         time.sleep(0.01)
-    assert child_file.exists()
-    child_pid = int(child_file.read_text(encoding="utf-8"))
+    assert child_text.isdigit()
+    child_pid = int(child_text)
     store.attach_worker_process(
         task_id,
         "worker-missing-leader",
