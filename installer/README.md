@@ -27,6 +27,9 @@ dispatch repair --yes
 dispatch channel stable
 dispatch doctor
 dispatch verify
+dispatch browser status
+dispatch browser reconcile
+dispatch browser providers
 dispatch setup --plugin handbook --yes
 dispatch uninstall --plan
 dispatch uninstall --yes
@@ -47,8 +50,11 @@ launcher, service, and installation record while preserving `config`, `secrets`,
 `state`, and `logs`. `--purge` removes the complete `~/.dispatch` tree.
 Setup installs selected built-in plugins editable from `dispatch/plugins` and
 writes `config/plugins.json`. Installation and repair install the pinned Core
-requirements plus Playwright Chromium system dependencies, then place Chromium
-under `~/.dispatch/cache/browser`; no root-owned browser runtime hierarchy is
-created. On a fresh Linux host, Playwright may request administrator
-authorization for its approved shared system libraries; denial fails the
-installation explicitly. Hermes is never inspected or modified.
+requirements, then Browser Manager resolves the Chromium revision matched to
+staged Playwright. A safe existing generation is reused; otherwise Chromium is
+installed under `~/.dispatch/cache/browser-manager/playwright`. Browser Manager
+scans shared libraries before invoking Playwright's system-dependency operation,
+so a prepared host never receives an unnecessary sudo prompt. Missing libraries
+may require normal administrator authorization; denial fails before activation.
+A real sandboxed smoke launch must pass, and checkout, venv, and browser activate
+or roll back together. Hermes is never inspected or modified.

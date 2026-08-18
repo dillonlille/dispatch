@@ -93,8 +93,8 @@ class BrowserManager:
         "_guarded",
     )
 
-    def __init__(self, paths: DispatchPaths) -> None:
-        self.__runtime: BrowserRuntime = PlaywrightRuntime()
+    def __init__(self, paths: DispatchPaths, *, reconciliation_only: bool = False) -> None:
+        self.__runtime: BrowserRuntime | None = None if reconciliation_only else PlaywrightRuntime()
         self.__realms = RealmRegistry()
         self.__maximum_browsers = 2
         self.__clock = utc_now
@@ -103,7 +103,8 @@ class BrowserManager:
         self.__store = LeaseStore(self.__layout.database)
         self._active: dict[str, _ActiveLease] = {}
         self._guarded: dict[str, tuple[LeaseLocks, Path]] = {}
-        self.reconcile()
+        if not reconciliation_only:
+            self.reconcile()
 
     @property
     def layout(self) -> BrowserLayout:
@@ -118,6 +119,9 @@ class BrowserManager:
         return self.__maximum_browsers
 
     def acquire(self, request: BrowserLeaseRequest) -> ManagedLease:
+        runtime = self.__runtime
+        if runtime is None:
+            raise BrowserManagerError("playwright_missing", "browser launch is unavailable in reconciliation-only mode")
         realm = self.__realms.resolve(request)
         mode = request.mode or realm.default_mode
         profile = self.layout.profile(request.realm, request.plugin_id, request.account_alias)
@@ -130,7 +134,7 @@ class BrowserManager:
         lease_id = secrets.token_hex(16)
         created_at = self.__clock()
         expires_at = created_at + timedelta(seconds=realm.lease_timeout_seconds)
-        runtime_identity = self.__runtime.identity
+        runtime_identity = runtime.identity
         row: LeaseRow | None = None
         handle: RuntimeHandle | None = None
         try:
@@ -144,7 +148,7 @@ class BrowserManager:
                 maximum_browsers=self.maximum_browsers,
             )
             row = self.store.transition(lease_id, LeaseState.STARTING, self.__clock())
-            handle = self.__runtime.start(
+            handle = runtime.start(
                 lease_id=lease_id,
                 profile=profile,
                 realm=realm,
@@ -177,16 +181,16 @@ class BrowserManager:
                     handle.close()
                 except BaseException:
                     cleanup_failed = True
-            state_error: Exception | None = None
+            state_error: BaseException | None = None
             if row is not None:
                 try:
                     if cleanup_failed:
                         self._quarantine_stored(row.lease_id, "browser_cleanup_failed")
                     else:
                         self._fail_stored(row.lease_id, self._error_code(exc))
-                except Exception as persistence_exc:
+                except BaseException as persistence_exc:
                     state_error = persistence_exc
-            if cleanup_failed and state_error is not None and row is not None:
+            if (cleanup_failed or state_error is not None) and row is not None:
                 self._guarded[row.lease_id] = (locks, profile)
             else:
                 locks.release()
@@ -251,7 +255,27 @@ class BrowserManager:
             row = self.store.transition(lease_id, LeaseState.CLOSING, self.__clock())
         try:
             active.handle.close()
-        except Exception as exc:
+        except (KeyboardInterrupt, SystemExit) as exc:
+            if active.handle.is_alive():
+                self.store.transition(
+                    lease_id,
+                    LeaseState.QUARANTINED,
+                    self.__clock(),
+                    error_code=self._error_code(exc, "browser_cleanup_interrupted"),
+                )
+                self._active.pop(lease_id, None)
+                self._guarded[lease_id] = (active.locks, active.profile)
+            else:
+                self.store.transition(
+                    lease_id,
+                    final_state,
+                    self.__clock(),
+                    error_code=error_code,
+                )
+                self._active.pop(lease_id, None)
+                active.locks.release()
+            raise
+        except BaseException as exc:
             quarantined = self.store.transition(
                 lease_id,
                 LeaseState.QUARANTINED,
@@ -259,7 +283,7 @@ class BrowserManager:
                 error_code=self._error_code(exc, "browser_cleanup_failed"),
             ).lease()
             self._active.pop(lease_id, None)
-            active.locks.release()
+            self._guarded[lease_id] = (active.locks, active.profile)
             return quarantined
         completed = self.store.transition(
             lease_id,
@@ -329,79 +353,90 @@ class BrowserManager:
         )
         profile = self.layout.profile(request.realm, request.plugin_id, request.account_alias)
         guarded = self._guarded.get(row.lease_id)
-        profile_lock: FileLock | None = None
+        reconcile_locks: LeaseLocks | None = None
         if guarded is None:
-            profile_lock = FileLock(
-                self.layout.lock_path("profile", request.profile_key),
-                "browser_profile_busy",
-            )
             try:
-                profile_lock.acquire()
+                reconcile_locks = LeaseLocks.acquire(
+                    self.layout,
+                    profile_key=request.profile_key,
+                    realm=request.realm,
+                    maximum_browsers=self.maximum_browsers,
+                )
             except BrowserManagerError as exc:
-                if exc.code == "browser_profile_busy":
+                if exc.code in {
+                    "browser_generation_busy",
+                    "browser_capacity_unavailable",
+                    "browser_realm_busy",
+                    "browser_profile_busy",
+                }:
                     return {"lease_id": row.lease_id, "status": "owned_elsewhere"}
                 raise
         status = "interrupted"
         persisted = False
+        unsafe = True
         try:
-            if row.runtime_identity != self.__runtime.identity:
-                status = "browser_runtime_identity_mismatch"
+            browser_pair = row.pid is not None and row.process_start_ticks is not None
+            control_pair = row.control_pid is not None and row.control_process_start_ticks is not None
+            partial_identity = (row.pid is None) != (row.process_start_ticks is None) or (
+                (row.control_pid is None) != (row.control_process_start_ticks is None)
+            )
+            if partial_identity:
+                status = "browser_process_identity_missing"
             else:
-                browser_pair = row.pid is not None and row.process_start_ticks is not None
-                control_pair = row.control_pid is not None and row.control_process_start_ticks is not None
-                partial_identity = (row.pid is None) != (row.process_start_ticks is None) or (
-                    (row.control_pid is None) != (row.control_process_start_ticks is None)
-                )
-                if partial_identity:
-                    status = "browser_process_identity_missing"
-                else:
-                    if browser_pair:
-                        try:
-                            terminated = terminate_owned_process(
-                                pid=row.pid,
-                                expected_start_ticks=row.process_start_ticks,
-                                profile=profile,
-                                expected_executable=row.runtime_executable,
-                            )
-                            status = "orphan_terminated" if terminated else "process_absent"
-                        except BrowserManagerError as exc:
-                            status = exc.code
-                    if control_pair and status not in {
-                        "browser_process_identity_mismatch",
-                        "browser_cleanup_failed",
-                    }:
-                        try:
-                            terminated = terminate_control_process(
-                                row.control_pid,
-                                row.control_process_start_ticks,
-                                row.runtime_control_executable,
-                            )
-                            if terminated:
-                                status = "control_tree_terminated"
-                        except BrowserManagerError as exc:
-                            status = exc.code
+                if browser_pair:
+                    assert row.pid is not None and row.process_start_ticks is not None
+                    try:
+                        terminated = terminate_owned_process(
+                            pid=row.pid,
+                            expected_start_ticks=row.process_start_ticks,
+                            profile=profile,
+                            expected_executable=row.runtime_executable,
+                        )
+                        status = "orphan_terminated" if terminated else "process_absent"
+                    except BrowserManagerError as exc:
+                        status = exc.code
+                if control_pair and status not in {
+                    "browser_process_identity_mismatch",
+                    "browser_cleanup_failed",
+                }:
+                    assert row.control_pid is not None and row.control_process_start_ticks is not None
+                    try:
+                        terminated = terminate_control_process(
+                            row.control_pid,
+                            row.control_process_start_ticks,
+                            row.runtime_control_executable,
+                        )
+                        if terminated:
+                            status = "control_tree_terminated"
+                    except BrowserManagerError as exc:
+                        status = exc.code
 
-                    if not browser_pair:
-                        matches = matching_browser_processes(profile)
-                        if len(matches) == 1:
-                            ticks = process_start_ticks(matches[0])
-                            if ticks is None:
-                                status = "browser_process_identity_missing"
-                            else:
-                                try:
-                                    terminated = terminate_owned_process(
-                                        matches[0],
-                                        ticks,
-                                        profile,
-                                        row.runtime_executable,
-                                    )
-                                    status = "orphan_terminated" if terminated else "process_absent"
-                                except BrowserManagerError as exc:
-                                    status = exc.code
-                        elif len(matches) > 1:
-                            status = "browser_process_identity_ambiguous"
-                        elif not control_pair:
-                            status = "browser_launch_identity_pending"
+                if not browser_pair:
+                    matches = matching_browser_processes(profile)
+                    if len(matches) == 1:
+                        ticks = process_start_ticks(matches[0])
+                        if ticks is None:
+                            status = "browser_process_identity_missing"
+                        else:
+                            try:
+                                terminated = terminate_owned_process(
+                                    matches[0],
+                                    ticks,
+                                    profile,
+                                    row.runtime_executable,
+                                )
+                                status = "orphan_terminated" if terminated else "process_absent"
+                            except BrowserManagerError as exc:
+                                status = exc.code
+                    elif len(matches) > 1:
+                        status = "browser_process_identity_ambiguous"
+                    elif not control_pair:
+                        grace_elapsed = (
+                            row.state == LeaseState.QUARANTINED
+                            and row.error_code == "browser_launch_identity_pending"
+                            and (self.__clock() - row.updated_at).total_seconds() >= 2
+                        )
+                        status = "process_absent" if grace_elapsed else "browser_launch_identity_pending"
             unsafe = status in {
                 "browser_cleanup_failed",
                 "browser_control_identity_mismatch",
@@ -418,9 +453,12 @@ class BrowserManager:
             persisted = True
             return {"lease_id": row.lease_id, "status": status}
         finally:
-            if profile_lock is not None:
-                profile_lock.release()
-            if guarded is not None and persisted:
+            if reconcile_locks is not None:
+                if not persisted or unsafe:
+                    self._guarded[row.lease_id] = (reconcile_locks, profile)
+                else:
+                    reconcile_locks.release()
+            if guarded is not None and persisted and not unsafe:
                 self._guarded.pop(row.lease_id, None)
                 guarded[0].release()
 

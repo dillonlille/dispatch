@@ -54,7 +54,7 @@ def _prepare_core_environment(layout: InstallLayout) -> list[Path]:
         "DISPATCH_RUNTIME_ROOT": str(layout.run),
         "DISPATCH_ACTIVE_PLUGINS": ",".join(plugin_ids),
         "DISPATCH_PLUGIN_PATHS": os.pathsep.join(plugin_paths),
-        "PLAYWRIGHT_BROWSERS_PATH": str(layout.cache / "browser"),
+        "PLAYWRIGHT_BROWSERS_PATH": str(layout.browser_cache),
     }
     os.environ.update(values)
     paths = [package_root, *(Path(path) for path in plugin_paths)]

@@ -4,16 +4,22 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
+from typing import NoReturn
 
 from .doctor import inspect_installation
-from .layout import InstallLayout, InstallerError, read_installation
+from .layout import InstallLayout, InstallerError, installation_lock, read_installation
 from .lifecycle import install_or_update, repair_existing
 from .setup import run_setup
 from .uninstall import plan_uninstall, uninstall
 
 
+class _JsonArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> NoReturn:
+        raise InstallerError("arguments_invalid", message)
+
+
 def _parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(prog="dispatch-installer")
+    parser = _JsonArgumentParser(prog="dispatch-installer")
     parser.add_argument("--dispatch-home", help="per-user Dispatch root; defaults to $HOME/.dispatch")
     parser.add_argument("--json", action="store_true", help="emit a JSON result envelope")
     actions = parser.add_subparsers(dest="action", required=True)
@@ -88,6 +94,19 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.action in {"install", "update", "repair", "channel", "switch-channel"}:
             result = _lifecycle(layout, args)
+            cleanup_error = result.get("cleanup_error_code")
+            if cleanup_error is not None:
+                _emit(
+                    False,
+                    args.action,
+                    str(result.get("status", "error")),
+                    result,
+                    {
+                        "code": str(cleanup_error),
+                        "message": "activation committed but obsolete generation cleanup is incomplete",
+                    },
+                )
+                return 1
             _emit(True, args.action, str(result.get("status", "ready")), result)
             return 0
         if args.action in {"doctor", "verify"}:
@@ -95,11 +114,12 @@ def main(argv: list[str] | None = None) -> int:
             _emit(bool(result["ok"]), args.action, str(result["status"]), result)
             return 0 if result["ok"] else 1
         if args.action == "setup":
-            return run_setup(
-                layout,
-                [*(f"--plugin={plugin}" for plugin in args.plugin), *( ["--list"] if args.list else []), *( ["--yes"] if args.yes else [])],
-                human=not args.json,
-            )
+            with installation_lock(layout):
+                return run_setup(
+                    layout,
+                    [*(f"--plugin={plugin}" for plugin in args.plugin), *( ["--list"] if args.list else []), *( ["--yes"] if args.yes else [])],
+                    human=not args.json,
+                )
         if args.action == "uninstall":
             if args.plan and args.yes:
                 raise InstallerError("uninstall_arguments", "--plan and --yes cannot be combined")

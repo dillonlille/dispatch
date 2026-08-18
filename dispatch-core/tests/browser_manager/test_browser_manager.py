@@ -32,6 +32,7 @@ from browser_manager.runtime import (
     FileLock,
     LeaseLocks,
     PlaywrightRuntime,
+    ProcessRuntimeHandle,
     matching_browser_processes,
     process_start_ticks,
     terminate_owned_process,
@@ -179,7 +180,13 @@ def playwright_runtime_for_testing(launch_executable: Path, identity_executable:
         executable=identity_executable.resolve(strict=True),
         control_executable=control_executable,
     )
-    installation = SimpleNamespace(identity=identity, browsers_path=package_root)
+    executable_details = identity_executable.resolve(strict=True).stat()
+    installation = SimpleNamespace(
+        identity=identity,
+        browsers_path=identity_executable.resolve(strict=True).parent,
+        executable_device=executable_details.st_dev,
+        executable_inode=executable_details.st_ino,
+    )
 
     class StaticAuthority:
         def load(self, *, full_tree: bool = False) -> Any:
@@ -193,12 +200,110 @@ def playwright_runtime_for_testing(launch_executable: Path, identity_executable:
     return value
 
 
+def test_browser_layout_rejects_world_writable_custom_root_ancestor(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    writable = tmp_path / "writable"
+    writable.mkdir(mode=0o777)
+    writable.chmod(0o777)
+    core_paths = DispatchPaths.from_environment(
+        {
+            "HOME": str(home),
+            "DISPATCH_DATA_ROOT": str(writable / "data"),
+        },
+        code_root=CODE_ROOT,
+    )
+    layout = BrowserLayout.from_paths(core_paths)
+    with pytest.raises(BrowserManagerError) as error:
+        layout.prepare()
+    assert error.value.code == "unsafe_browser_storage"
+    assert not (writable / "data").exists()
+
+
+def test_launch_rejects_runtime_symlink_replacement_before_playwright_start(tmp_path: Path) -> None:
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    executable = cache / "chrome"
+    executable.write_text("chrome", encoding="utf-8")
+    executable.chmod(0o700)
+    runtime = playwright_runtime_for_testing(executable, executable)
+    outside = tmp_path / "outside-chrome"
+    outside.write_text("outside", encoding="utf-8")
+    outside.chmod(0o700)
+    executable.unlink()
+    executable.symlink_to(outside)
+    realm = BrowserRealm(
+        id="toctou-realm",
+        landing_url="https://example.invalid",
+        purposes=frozenset({BrowserPurpose.COLLECTION}),
+        lease_timeout_seconds=30,
+    )
+    with pytest.raises(BrowserManagerError) as error:
+        runtime.start(
+            lease_id="toctou-lease",
+            profile=tmp_path / "profile",
+            realm=realm,
+            mode=BrowserMode.HEADLESS,
+            record_control_process=lambda *_args: None,
+        )
+    assert error.value.code == "browser_runtime_changed"
+
+
+def test_launch_uses_pinned_approved_inode_if_path_is_replaced(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import playwright.sync_api as sync_api  # type: ignore[import-not-found]
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    executable = cache / "chrome"
+    executable.write_text("approved", encoding="utf-8")
+    executable.chmod(0o700)
+    runtime = playwright_runtime_for_testing(executable, executable)
+    observed: list[str] = []
+
+    def launch_persistent_context(**kwargs: Any) -> None:
+        attacker = cache / "attacker"
+        attacker.write_text("unapproved", encoding="utf-8")
+        attacker.chmod(0o700)
+        os.replace(attacker, executable)
+        observed.append(Path(kwargs["executable_path"]).read_text(encoding="utf-8"))
+        raise KeyboardInterrupt("probe complete")
+
+    fake_playwright = SimpleNamespace(
+        chromium=SimpleNamespace(launch_persistent_context=launch_persistent_context),
+        stop=lambda: None,
+    )
+    monkeypatch.setattr(sync_api, "sync_playwright", lambda: SimpleNamespace(start=lambda: fake_playwright))
+    monkeypatch.setattr(runtime_module, "matching_browser_processes", lambda _profile: [])
+    monkeypatch.setattr(runtime_module, "_playwright_control_process", lambda *_args: (123, 456))
+    monkeypatch.setattr(runtime_module, "_cleanup_partial", lambda *_args: None)
+    realm = BrowserRealm(
+        id="pinned-realm",
+        landing_url="https://example.invalid",
+        purposes=frozenset({BrowserPurpose.COLLECTION}),
+        lease_timeout_seconds=30,
+    )
+    with pytest.raises(KeyboardInterrupt):
+        runtime.start(
+            lease_id="pinned-lease",
+            profile=tmp_path / "profile",
+            realm=realm,
+            mode=BrowserMode.HEADLESS,
+            record_control_process=lambda *_args: None,
+        )
+    assert observed == ["approved"]
+
+
 def test_playwright_start_interrupt_runs_partial_cleanup(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     import playwright.sync_api as sync_api  # type: ignore[import-not-found]
 
-    executable = Path(sys.executable).resolve(strict=True)
+    executable = tmp_path / "approved-browser"
+    executable.write_text("#!/bin/sh\n", encoding="utf-8")
+    executable.chmod(0o700)
     runtime = playwright_runtime_for_testing(executable, executable)
     fake_playwright = SimpleNamespace()
     starter = SimpleNamespace(start=lambda: fake_playwright)
@@ -244,6 +349,134 @@ def test_manager_start_interrupt_finalizes_durable_lease(tmp_path: Path) -> None
     assert len(rows) == 1
     assert rows[0]["state"] == "failed"
     assert rows[0]["error_code"] == "browser_manager_failed"
+
+
+def test_start_failure_persistence_interrupt_guards_locks_until_reconciliation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    clock = MutableClock()
+    manager = browser_manager_for_testing(
+        paths(tmp_path),
+        runtime=FakeRuntime(fail_once=True),
+        clock=clock,
+        reconcile_on_start=False,
+    )
+    original = BrowserManager._fail_stored
+
+    def interrupt_persistence(_manager, _lease_id, _error_code):
+        raise KeyboardInterrupt("persistence")
+
+    monkeypatch.setattr(BrowserManager, "_fail_stored", interrupt_persistence)
+    with pytest.raises(BrowserManagerError) as error:
+        manager.acquire(request())
+    assert error.value.code == "browser_state_unavailable"
+    row = manager.store.nonterminal()[0]
+    assert row.state == LeaseState.STARTING
+    exclusive = FileLock(manager.layout.generation_lock, "browser_generation_busy")
+    with pytest.raises(BrowserManagerError):
+        exclusive.acquire()
+
+    monkeypatch.setattr(BrowserManager, "_fail_stored", original)
+    assert manager.reconcile() == [{"lease_id": row.lease_id, "status": "browser_launch_identity_pending"}]
+    clock.advance(3)
+    assert manager.maintain() == [{"lease_id": row.lease_id, "status": "process_absent"}]
+    exclusive.acquire()
+    exclusive.release()
+
+
+def test_partial_cleanup_continues_after_baseexception(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stopped: list[bool] = []
+
+    def interrupt() -> None:
+        raise KeyboardInterrupt("context cleanup")
+
+    monkeypatch.setattr(runtime_module, "_raw_playwright_control_process", lambda _playwright: None)
+    monkeypatch.setattr(runtime_module, "matching_browser_processes", lambda _profile: [])
+    runtime_module._cleanup_partial(
+        SimpleNamespace(stop=lambda: stopped.append(True)),
+        SimpleNamespace(close=interrupt),
+        tmp_path / "profile",
+        TEST_IDENTITY,
+    )
+    assert stopped == [True]
+
+
+def test_process_handle_interruption_continues_cleanup_then_reraises(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stopped: list[bool] = []
+
+    def interrupt() -> None:
+        raise KeyboardInterrupt("context close")
+
+    handle = ProcessRuntimeHandle(
+        context=SimpleNamespace(close=interrupt),
+        playwright=SimpleNamespace(stop=lambda: stopped.append(True)),
+        profile=tmp_path / "profile",
+        pid=123,
+        process_start_ticks=456,
+        session=ManagedBrowserSession(
+            lease_id="lease",
+            realm="amazon-operations",
+            landing_url="https://example.invalid",
+            page=object(),
+            context=object(),
+        ),
+        identity=TEST_IDENTITY,
+        control_pid=789,
+        control_process_start_ticks=1011,
+    )
+    monkeypatch.setattr(runtime_module, "process_start_ticks", lambda _pid: None)
+    with pytest.raises(KeyboardInterrupt):
+        handle.close()
+    assert stopped == [True]
+    assert handle.closed is True
+
+
+def test_release_interruption_finalizes_or_guards_generation_by_process_state(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    original_close = FakeHandle.close
+
+    def clean_then_interrupt(handle: FakeHandle) -> None:
+        handle.closed = True
+        handle.alive = False
+        raise KeyboardInterrupt("after cleanup")
+
+    monkeypatch.setattr(FakeHandle, "close", clean_then_interrupt)
+    clean_manager = browser_manager_for_testing(
+        paths(tmp_path / "clean"), runtime=FakeRuntime(), reconcile_on_start=False
+    )
+    clean_lease = clean_manager.acquire(request())
+    with pytest.raises(KeyboardInterrupt):
+        clean_lease.release()
+    assert clean_manager.status()[0]["state"] == "closed"
+    clean_exclusive = FileLock(clean_manager.layout.generation_lock, "browser_generation_busy")
+    clean_exclusive.acquire()
+    clean_exclusive.release()
+
+    def interrupt_while_alive(_handle: FakeHandle) -> None:
+        raise KeyboardInterrupt("before cleanup")
+
+    monkeypatch.setattr(FakeHandle, "close", interrupt_while_alive)
+    guarded_manager = browser_manager_for_testing(
+        paths(tmp_path / "guarded"), runtime=FakeRuntime(), reconcile_on_start=False
+    )
+    guarded_lease = guarded_manager.acquire(request())
+    with pytest.raises(KeyboardInterrupt):
+        guarded_lease.release()
+    assert guarded_manager.status()[0]["state"] == "quarantined"
+    guarded_exclusive = FileLock(guarded_manager.layout.generation_lock, "browser_generation_busy")
+    with pytest.raises(BrowserManagerError) as busy:
+        guarded_exclusive.acquire()
+    assert busy.value.code == "browser_generation_busy"
+    monkeypatch.setattr(FakeHandle, "close", original_close)
 
 
 def test_lease_lifecycle_is_durable_private_and_bounded(tmp_path: Path) -> None:
@@ -343,8 +576,14 @@ def test_maintenance_fails_crashed_and_expired_leases(tmp_path: Path) -> None:
 
 def test_interrupted_row_without_a_process_is_reconciled(tmp_path: Path) -> None:
     core_paths = paths(tmp_path)
-    first = browser_manager_for_testing(core_paths, runtime=FakeRuntime(), reconcile_on_start=False)
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    clock = MutableClock()
+    first = browser_manager_for_testing(
+        core_paths,
+        runtime=FakeRuntime(),
+        clock=clock,
+        reconcile_on_start=False,
+    )
+    now = clock.value
     created = first.store.create(
         lease_id="a" * 32,
         request=request(),
@@ -356,14 +595,53 @@ def test_interrupted_row_without_a_process_is_reconciled(tmp_path: Path) -> None
     )
     first.store.transition(created.lease_id, LeaseState.STARTING, now)
 
-    second = browser_manager_for_testing(core_paths, runtime=FakeRuntime(), reconcile_on_start=True)
+    second = browser_manager_for_testing(
+        core_paths,
+        runtime=FakeRuntime(),
+        clock=clock,
+        reconcile_on_start=True,
+    )
     row = second.store.get(created.lease_id)
     assert row.state == LeaseState.QUARANTINED
     assert row.error_code == "browser_launch_identity_pending"
+    clock.advance(3)
+    assert second.maintain() == [{"lease_id": created.lease_id, "status": "process_absent"}]
+    assert second.store.get(created.lease_id).state == LeaseState.FAILED
 
 
-def test_reconciliation_quarantines_a_lease_from_another_runtime(tmp_path: Path) -> None:
+def test_reconcile_persistence_interrupt_retains_generation_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    manager = browser_manager_for_testing(paths(tmp_path), runtime=FakeRuntime(), reconcile_on_start=False)
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    created = manager.store.create(
+        lease_id="e" * 32,
+        request=request(),
+        mode=BrowserMode.HEADLESS,
+        created_at=now,
+        expires_at=now + timedelta(minutes=5),
+        runtime_identity=TEST_IDENTITY,
+        maximum_browsers=2,
+    )
+    manager.store.transition(created.lease_id, LeaseState.STARTING, now)
+
+    def interrupt(*_args: Any, **_kwargs: Any) -> None:
+        raise KeyboardInterrupt("persistence")
+
+    monkeypatch.setattr(BrowserManager, "_quarantine_stored", interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        manager.reconcile()
+    assert created.lease_id in manager._guarded
+    exclusive = FileLock(manager.layout.generation_lock, "browser_generation_busy")
+    with pytest.raises(BrowserManagerError) as blocked:
+        exclusive.acquire()
+    assert blocked.value.code == "browser_generation_busy"
+
+
+def test_reconciliation_guards_an_absent_lease_from_another_runtime(tmp_path: Path) -> None:
     core_paths = paths(tmp_path)
+    clock = MutableClock()
     other_identity = BrowserRuntimeIdentity(
         playwright_version="other-playwright",
         chromium_version="other-chromium",
@@ -373,9 +651,10 @@ def test_reconciliation_quarantines_a_lease_from_another_runtime(tmp_path: Path)
     first = browser_manager_for_testing(
         core_paths,
         runtime=FakeRuntime(identity=other_identity),
+        clock=clock,
         reconcile_on_start=False,
     )
-    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    now = clock.value
     created = first.store.create(
         lease_id="c" * 32,
         request=request(),
@@ -387,11 +666,24 @@ def test_reconciliation_quarantines_a_lease_from_another_runtime(tmp_path: Path)
     )
     first.store.transition(created.lease_id, LeaseState.STARTING, now)
 
-    second = browser_manager_for_testing(core_paths, runtime=FakeRuntime(), reconcile_on_start=True)
+    second = browser_manager_for_testing(
+        core_paths,
+        runtime=FakeRuntime(),
+        clock=clock,
+        reconcile_on_start=True,
+    )
     row = second.store.get(created.lease_id)
 
     assert row.state == LeaseState.QUARANTINED
-    assert row.error_code == "browser_runtime_identity_mismatch"
+    assert row.error_code == "browser_launch_identity_pending"
+    exclusive = FileLock(second.layout.generation_lock, "browser_generation_busy")
+    with pytest.raises(BrowserManagerError) as busy:
+        exclusive.acquire()
+    assert busy.value.code == "browser_generation_busy"
+    clock.advance(3)
+    assert second.maintain() == [{"lease_id": created.lease_id, "status": "process_absent"}]
+    exclusive.acquire()
+    exclusive.release()
 
 
 def test_cleanup_failure_quarantines_profile_until_reconciliation(tmp_path: Path) -> None:
@@ -404,16 +696,22 @@ def test_cleanup_failure_quarantines_profile_until_reconciliation(tmp_path: Path
     assert managed.release().state == LeaseState.QUARANTINED
     with pytest.raises(BrowserManagerError) as blocked:
         manager.acquire(request())
-    assert blocked.value.code == "browser_profile_busy"
+    assert blocked.value.code == "browser_capacity_unavailable"
     with pytest.raises(BrowserManagerError) as realm_blocked:
         manager.acquire(request("amazon-operations", "scorecard"))
-    assert realm_blocked.value.code == "browser_realm_busy"
+    assert realm_blocked.value.code == "browser_capacity_unavailable"
     with pytest.raises(BrowserManagerError) as capacity_blocked:
         manager.acquire(request("paycom-client", "timecard"))
     assert capacity_blocked.value.code == "browser_capacity_unavailable"
+    exclusive = FileLock(manager.layout.generation_lock, "browser_generation_busy")
+    with pytest.raises(BrowserManagerError) as generation_blocked:
+        exclusive.acquire()
+    assert generation_blocked.value.code == "browser_generation_busy"
 
     assert manager.maintain() == [{"lease_id": managed.lease_id, "status": "process_absent"}]
     assert manager.store.get(managed.lease_id).state == LeaseState.FAILED
+    exclusive.acquire()
+    exclusive.release()
 
 
 def test_pidless_interrupted_launch_terminates_matching_orphan(tmp_path: Path) -> None:
@@ -533,7 +831,7 @@ def test_close_state_error_retains_process_ownership_and_locks(
     assert managed.lease.state == LeaseState.CLOSED
 
 
-def test_failed_launch_state_error_releases_safe_locks(
+def test_failed_launch_state_error_guards_unsafe_locks(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -548,13 +846,16 @@ def test_failed_launch_state_error_releases_safe_locks(
     assert failed.value.code == "browser_state_unavailable"
 
     row = manager.store.nonterminal()[0]
-    locks = LeaseLocks.acquire(
-        manager.layout,
-        maximum_browsers=manager.maximum_browsers,
-        realm=row.realm,
-        profile_key=row.profile_key,
-    )
-    locks.release()
+    with pytest.raises(BrowserManagerError) as blocked:
+        LeaseLocks.acquire(
+            manager.layout,
+            maximum_browsers=manager.maximum_browsers,
+            realm=row.realm,
+            profile_key=row.profile_key,
+        )
+    assert blocked.value.code in {"browser_capacity_unavailable", "browser_realm_busy"}
+    guarded = manager._guarded.pop(row.lease_id)
+    guarded[0].release()
 
 
 def test_partial_runtime_cleanup_failure_is_not_suppressed(
@@ -595,9 +896,108 @@ def test_startup_cleanup_failure_quarantines_global_capacity(tmp_path: Path) -> 
         manager.acquire(request())
     assert failed.value.code == "browser_cleanup_failed"
     assert manager.status()[0]["state"] == "quarantined"
+    exclusive = FileLock(manager.layout.generation_lock, "browser_generation_busy")
+    with pytest.raises(BrowserManagerError) as generation_blocked:
+        exclusive.acquire()
+    assert generation_blocked.value.code == "browser_generation_busy"
     with pytest.raises(BrowserManagerError) as blocked:
         manager.acquire(request("paycom-client", "timecard"))
     assert blocked.value.code == "browser_capacity_unavailable"
+
+
+def test_generation_lock_blocks_activation_while_a_lease_holds_shared_authority(tmp_path: Path) -> None:
+    layout = BrowserLayout.from_paths(paths(tmp_path))
+    layout.prepare()
+    shared = FileLock(layout.generation_lock, "browser_generation_busy", shared=True)
+    exclusive = FileLock(layout.generation_lock, "browser_generation_busy")
+    shared.acquire()
+    try:
+        with pytest.raises(BrowserManagerError) as error:
+            exclusive.acquire()
+        assert error.value.code == "browser_generation_busy"
+    finally:
+        shared.release()
+    exclusive.acquire()
+    exclusive.release()
+
+
+def test_file_lock_rejects_parent_swapped_to_symlink(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    locks = tmp_path / "locks"
+    locks.mkdir()
+    displaced = tmp_path / "locks-original"
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    original_open = runtime_module.os.open
+    swapped = False
+
+    def racing_open(path, flags, mode=0o777, *, dir_fd=None):
+        nonlocal swapped
+        if path == "generation.lock" and dir_fd is not None and not swapped:
+            locks.rename(displaced)
+            locks.symlink_to(outside, target_is_directory=True)
+            swapped = True
+        return original_open(path, flags, mode, dir_fd=dir_fd)
+
+    monkeypatch.setattr(runtime_module.os, "open", racing_open)
+    with pytest.raises(BrowserManagerError) as error:
+        FileLock(locks / "generation.lock", "browser_generation_busy").acquire()
+    assert error.value.code == "unsafe_browser_storage"
+    assert not (outside / "generation.lock").exists()
+
+
+def test_file_lock_baseexception_after_flock_closes_descriptor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    path = tmp_path / "interrupt.lock"
+    original = runtime_module.fcntl.flock
+    raised = False
+
+    def interrupt_after_lock(descriptor: int, operation: int) -> None:
+        nonlocal raised
+        original(descriptor, operation)
+        if not raised and operation & runtime_module.fcntl.LOCK_NB:
+            raised = True
+            raise KeyboardInterrupt("after flock")
+
+    before = set(Path("/proc/self/fd").iterdir())
+    monkeypatch.setattr(runtime_module.fcntl, "flock", interrupt_after_lock)
+    with pytest.raises(KeyboardInterrupt):
+        FileLock(path, "browser_profile_busy").acquire()
+    after = set(Path("/proc/self/fd").iterdir())
+    assert after == before
+    monkeypatch.setattr(runtime_module.fcntl, "flock", original)
+    retry = FileLock(path, "browser_profile_busy")
+    retry.acquire()
+    retry.release()
+
+
+def test_lease_lock_interruption_releases_shared_generation_authority(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = BrowserLayout.from_paths(paths(tmp_path))
+    layout.prepare()
+    original = FileLock.acquire
+    calls = 0
+
+    def interrupt_second(lock: FileLock) -> None:
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise KeyboardInterrupt("slot interruption")
+        original(lock)
+
+    monkeypatch.setattr(FileLock, "acquire", interrupt_second)
+    with pytest.raises(KeyboardInterrupt):
+        LeaseLocks.acquire(layout, maximum_browsers=2, realm="amazon", profile_key="profile")
+    monkeypatch.setattr(FileLock, "acquire", original)
+    exclusive = FileLock(layout.generation_lock, "browser_generation_busy")
+    exclusive.acquire()
+    exclusive.release()
 
 
 def test_lock_rejects_hard_link_without_modifying_target(tmp_path: Path) -> None:

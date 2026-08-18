@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 import pytest
 
 from authentication import AuthenticationResult
-from browser_manager import BrowserMode, BrowserPurpose, LeaseState, ManagedBrowserSession
+from browser_manager import BrowserManagerError, BrowserMode, BrowserPurpose, LeaseState, ManagedBrowserSession
 from collection_manager import (
     CollectionDisposition,
     CollectionManager,
@@ -211,6 +211,98 @@ def test_runner_failures_and_invalid_receipts_do_not_escape_details() -> None:
     assert invalid.status == "invalid_collector_receipt"
 
 
+def test_collector_keyboard_interrupt_cancels_acquired_lease() -> None:
+    browser = FakeBrowserManager()
+    authentication = FakeAuthentication(auth_result("already_authenticated", authenticated=True))
+
+    def interrupt(_context):
+        raise KeyboardInterrupt("collector interrupted")
+
+    manager = CollectionManager(browser, authentication)  # type: ignore[arg-type]
+    manager.register(registration(interrupt, authenticated=True))
+    with pytest.raises(KeyboardInterrupt):
+        manager.run(CollectionRequest("synthetic-collector"))
+    assert browser.leases[0].activated is True
+    assert browser.leases[0].closed == "cancelled"
+
+
+def test_cleanup_keyboard_interrupt_is_not_swallowed() -> None:
+    browser = FakeBrowserManager()
+    authentication = FakeAuthentication(auth_result("already_authenticated", authenticated=True))
+    manager = CollectionManager(browser, authentication)  # type: ignore[arg-type]
+    manager.register(registration(lambda _context: receipt(), authenticated=True))
+
+    def interrupt_cleanup() -> TerminalLease:
+        raise KeyboardInterrupt("cleanup interrupted")
+
+    original_acquire = browser.acquire
+
+    def acquire(request):
+        lease = original_acquire(request)
+        lease.release = interrupt_cleanup  # type: ignore[method-assign]
+        return lease
+
+    browser.acquire = acquire  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt):
+        manager.run(CollectionRequest("synthetic-collector"))
+
+
+def test_runner_failure_with_cleanup_interrupt_returns_bounded_failure() -> None:
+    browser = FakeBrowserManager()
+    authentication = FakeAuthentication(auth_result("already_authenticated", authenticated=True))
+    manager = CollectionManager(browser, authentication)  # type: ignore[arg-type]
+
+    def fail_runner(_context):
+        raise RuntimeError("collector failed")
+
+    original_acquire = browser.acquire
+
+    def acquire(request):
+        lease = original_acquire(request)
+        lease.cancel = lambda: (_ for _ in ()).throw(SystemExit("cleanup interrupted"))  # type: ignore[method-assign]
+        return lease
+
+    browser.acquire = acquire  # type: ignore[method-assign]
+    manager.register(registration(fail_runner, authenticated=True))
+    result = manager.run(CollectionRequest("synthetic-collector"))
+    assert result.status == "browser_cleanup_failed"
+
+
+def test_primary_interrupt_is_not_masked_by_cleanup_interrupt() -> None:
+    browser = FakeBrowserManager()
+    authentication = FakeAuthentication(auth_result("already_authenticated", authenticated=True))
+    manager = CollectionManager(browser, authentication)  # type: ignore[arg-type]
+
+    def interrupt_runner(_context):
+        raise KeyboardInterrupt("primary interrupt")
+
+    original_acquire = browser.acquire
+
+    def acquire(request):
+        lease = original_acquire(request)
+        lease.cancel = lambda: (_ for _ in ()).throw(SystemExit("cleanup interrupt"))  # type: ignore[method-assign]
+        return lease
+
+    browser.acquire = acquire  # type: ignore[method-assign]
+    manager.register(registration(interrupt_runner, authenticated=True))
+    with pytest.raises(KeyboardInterrupt, match="primary interrupt"):
+        manager.run(CollectionRequest("synthetic-collector"))
+
+
+def test_acquire_cleanup_failure_preserves_browser_status() -> None:
+    browser = FakeBrowserManager()
+    authentication = FakeAuthentication(auth_result("already_authenticated", authenticated=True))
+
+    def fail_acquire(_request):
+        raise BrowserManagerError("browser_cleanup_failed", "quarantined browser")
+
+    browser.acquire = fail_acquire  # type: ignore[method-assign]
+    manager = CollectionManager(browser, authentication)  # type: ignore[arg-type]
+    manager.register(registration(lambda _context: receipt(), authenticated=True))
+    result = manager.run(CollectionRequest("synthetic-collector"))
+    assert result.status == "browser_cleanup_failed"
+
+
 def test_authenticated_collection_uses_a_headed_collection_lease() -> None:
     browser = FakeBrowserManager()
     authentication = FakeAuthentication(auth_result("already_authenticated", authenticated=True))
@@ -281,6 +373,153 @@ def test_mfa_keeps_the_lease_until_explicit_resume_or_cancel() -> None:
     assert browser.leases[-1].closed == "cancelled"
 
 
+def test_durable_runner_interrupt_transitions_started_task_to_uncertain(tmp_path) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    store = CollectionTaskStore(root / "collection.sqlite3")
+    now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+    manager = CollectionManager(None, None, store, lambda: now)
+
+    def interrupt(_context):
+        raise KeyboardInterrupt("runner interrupted")
+
+    manager.register(registration(interrupt))
+    queued = manager.enqueue(CollectionRequest("synthetic-collector"))
+    with pytest.raises(KeyboardInterrupt):
+        manager.run_next("worker-one", 30)
+    current = store.get(queued.task_id)
+    assert current.state == TaskState.UNCERTAIN
+    assert current.last_error_code == "collection_interrupted"
+
+
+def test_interrupted_task_persistence_retries_terminal_interrupt(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    store = CollectionTaskStore(root / "collection.sqlite3")
+    now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+    manager = CollectionManager(None, None, store, lambda: now)
+    manager.register(registration(lambda _context: (_ for _ in ()).throw(KeyboardInterrupt("runner"))))
+    queued = manager.enqueue(CollectionRequest("synthetic-collector"))
+    original_finish = store.finish
+    interrupted = False
+
+    class SyntheticPersistenceInterrupt(BaseException):
+        pass
+
+    def interrupt_once(*args, **kwargs):
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            raise SyntheticPersistenceInterrupt("persist interrupted")
+        return original_finish(*args, **kwargs)
+
+    monkeypatch.setattr(store, "finish", interrupt_once)
+    with pytest.raises(KeyboardInterrupt, match="runner"):
+        manager.run_next("worker-one", 30)
+    current = store.get(queued.task_id)
+    assert current.state == TaskState.UNCERTAIN
+    assert current.last_error_code == "collection_interrupted"
+
+
+def test_initial_claim_read_interrupt_is_cleaned_and_rethrown(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    store = CollectionTaskStore(root / "collection.sqlite3")
+    now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+    manager = CollectionManager(None, None, store, lambda: now)
+    manager.register(registration(lambda _context: receipt()))
+    queued = manager.enqueue(CollectionRequest("synthetic-collector"))
+    claimed = manager.claim_next("worker-one", 30)
+    assert claimed is not None
+    original_get = store.get
+    interrupted = False
+
+    def interrupt_once(task_id):
+        nonlocal interrupted
+        if not interrupted:
+            interrupted = True
+            raise KeyboardInterrupt("initial read")
+        return original_get(task_id)
+
+    monkeypatch.setattr(store, "get", interrupt_once)
+    with pytest.raises(KeyboardInterrupt, match="initial read"):
+        manager.run_claimed(queued.task_id, "worker-one")
+    current = original_get(queued.task_id)
+    assert current.state == TaskState.RETRY_WAIT
+    assert current.last_error_code == "collection_interrupted"
+
+
+def test_durable_resume_interrupt_leaves_no_running_task(tmp_path) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    store = CollectionTaskStore(root / "collection.sqlite3")
+    now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+    browser = FakeBrowserManager()
+    authentication = FakeAuthentication(
+        auth_result("mfa_required", authenticated=False, manual_action="complete_mfa")
+    )
+    manager = CollectionManager(browser, authentication, store, lambda: now)  # type: ignore[arg-type]
+    manager.register(registration(lambda _context: receipt(), authenticated=True))
+    queued = manager.enqueue(CollectionRequest("synthetic-collector"))
+    waiting = manager.run_next("worker-one", 30)
+    assert waiting is not None
+    assert waiting.state == TaskState.WAITING_FOR_USER
+
+    def interrupt_resume(_session, _account):
+        raise KeyboardInterrupt("resume interrupted")
+
+    authentication.resume = interrupt_resume  # type: ignore[method-assign]
+    with pytest.raises(KeyboardInterrupt):
+        manager.resume_task(queued.task_id, 30)
+    current = store.get(queued.task_id)
+    assert current.state == TaskState.RETRY_WAIT
+    assert current.last_error_code == "collection_interrupted"
+    assert browser.leases[0].closed == "cancelled"
+
+
+@pytest.mark.parametrize("method_name,post_mutation", [("request_resume", False), ("resume_waiting", True)])
+def test_resume_state_transition_interrupt_cancels_lease_and_task(
+    tmp_path,
+    monkeypatch: pytest.MonkeyPatch,
+    method_name: str,
+    post_mutation: bool,
+) -> None:
+    root = tmp_path / "private"
+    root.mkdir(mode=0o700)
+    store = CollectionTaskStore(root / "collection.sqlite3")
+    now = datetime(2026, 8, 14, 12, 0, tzinfo=timezone.utc)
+    browser = FakeBrowserManager()
+    authentication = FakeAuthentication(
+        auth_result("mfa_required", authenticated=False, manual_action="complete_mfa")
+    )
+    manager = CollectionManager(browser, authentication, store, lambda: now)  # type: ignore[arg-type]
+    manager.register(registration(lambda _context: receipt(), authenticated=True))
+    queued = manager.enqueue(CollectionRequest("synthetic-collector"))
+    waiting = manager.run_next("worker-one", 30)
+    assert waiting is not None and waiting.state == TaskState.WAITING_FOR_USER
+    original = getattr(store, method_name)
+
+    def interrupt(*args, **kwargs):
+        if post_mutation:
+            original(*args, **kwargs)
+        raise KeyboardInterrupt(f"{method_name} interrupted")
+
+    monkeypatch.setattr(store, method_name, interrupt)
+    with pytest.raises(KeyboardInterrupt):
+        manager.resume_task(queued.task_id, 30)
+    current = store.get(queued.task_id)
+    assert current.state == TaskState.RETRY_WAIT
+    assert current.last_error_code == "collection_interrupted"
+    assert browser.leases[0].closed == "cancelled"
+    assert manager.status()["pending_manual_action"] == 0
+
+
 def test_durable_mfa_waits_and_resumes_the_same_task(tmp_path) -> None:
     root = tmp_path / "private"
     root.mkdir(mode=0o700)
@@ -328,7 +567,7 @@ def test_durable_manual_task_honors_cancellation_from_another_process(tmp_path) 
     assert browser.leases[0].closed == "cancelled"
 
 
-def test_durable_manual_cancellation_fails_if_browser_cleanup_fails(tmp_path) -> None:
+def test_durable_manual_cancellation_retains_guard_if_browser_cleanup_fails(tmp_path) -> None:
     root = tmp_path / "private"
     root.mkdir(mode=0o700)
     store = CollectionTaskStore(root / "collection.sqlite3")
@@ -341,12 +580,15 @@ def test_durable_manual_cancellation_fails_if_browser_cleanup_fails(tmp_path) ->
     manager.register(registration(lambda context: receipt(), authenticated=True))
     manager.enqueue(CollectionRequest("synthetic-collector"))
     waiting = manager.run_next("worker-one", 30)
+    assert waiting is not None
 
     def fail_cleanup():
         raise RuntimeError("private cleanup detail")
 
     browser.leases[0].cancel = fail_cleanup
-    failed = manager.cancel_task(waiting.task_id)
+    cancelled = manager.cancel_task(waiting.task_id)
 
-    assert failed.state == TaskState.FAILED
-    assert failed.last_error_code == "browser_cleanup_failed"
+    assert cancelled.state == TaskState.CANCELLED
+    assert cancelled.last_error_code == "cancelled"
+    assert manager.status()["pending_manual_action"] == 1
+    assert browser.leases[0].closed is None

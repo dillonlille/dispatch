@@ -368,6 +368,13 @@ class CollectionWorkerSupervisor:
                         status = value
                         terminal = True
                     elif kind == "error":
+                        if task_id is not None and store is not None:
+                            current = store.get(task_id)
+                            if current.state not in {TaskState.RUNNING, TaskState.WAITING_FOR_USER}:
+                                task_state = current.state.value
+                                status = current.state.value
+                                terminal = True
+                                continue
                         status = "collection_worker_failed"
                         break
                     else:

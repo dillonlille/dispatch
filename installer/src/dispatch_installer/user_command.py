@@ -12,6 +12,28 @@ from .layout import InstallLayout, InstallerError, assert_user_owned_directory, 
 
 
 def launcher_script(layout: InstallLayout) -> bytes:
+    exports = {
+        "DISPATCH_HOME": layout.dispatch_home,
+        "DISPATCH_CONFIG_ROOT": layout.config,
+        "DISPATCH_SECRETS_ROOT": layout.secrets,
+        "DISPATCH_DATA_ROOT": layout.data,
+        "DISPATCH_STATE_ROOT": layout.state,
+        "DISPATCH_CACHE_ROOT": layout.cache,
+        "DISPATCH_LOGS_ROOT": layout.logs,
+        "DISPATCH_RUNTIME_ROOT": layout.run,
+    }
+    environment = "".join(f"export {name}={shlex.quote(str(value))}\n" for name, value in exports.items())
+    return (
+        "#!/bin/sh\n"
+        "set -eu\n"
+        "umask 077\n"
+        f"{environment}"
+        f"exec {shlex.quote(str(layout.venv_python))} -I -B -m dispatch_installer.launcher \"$@\"\n"
+    ).encode("utf-8")
+
+
+def _clone_launcher_script(layout: InstallLayout) -> bytes:
+    """Clone-lifecycle launcher used before private-root projection."""
     return (
         "#!/bin/sh\n"
         "set -eu\n"
@@ -23,6 +45,10 @@ def launcher_script(layout: InstallLayout) -> bytes:
 
 def _previous_launcher_script(layout: InstallLayout) -> bytes:
     return launcher_script(layout).replace(b"umask 077\n", b"", 1)
+
+
+def _previous_clone_launcher_script(layout: InstallLayout) -> bytes:
+    return _clone_launcher_script(layout).replace(b"umask 077\n", b"", 1)
 
 
 def _legacy_launcher_script(layout: InstallLayout) -> bytes:
@@ -45,7 +71,12 @@ def install_user_command(layout: InstallLayout) -> dict[str, object]:
         if details.st_uid != os.geteuid() or details.st_nlink != 1 or details.st_size > 64 * 1024:
             raise InstallerError("command_conflict", f"existing command is not Dispatch-owned: {path}")
         current = path.read_bytes()
-        if current in {_legacy_launcher_script(layout), _previous_launcher_script(layout)}:
+        if current in {
+            _legacy_launcher_script(layout),
+            _clone_launcher_script(layout),
+            _previous_clone_launcher_script(layout),
+            _previous_launcher_script(layout),
+        }:
             path.unlink()
         elif current != desired:
             raise InstallerError("command_conflict", f"existing command is not Dispatch-owned: {path}")
@@ -90,7 +121,12 @@ def inspect_user_command(layout: InstallLayout) -> dict[str, object]:
             raise InstallerError("command_unsafe", "Dispatch launcher ownership or mode is unsafe")
         status = (
             "ready"
-            if path.read_bytes() in {launcher_script(layout), _previous_launcher_script(layout)}
+            if path.read_bytes() in {
+                launcher_script(layout),
+                _previous_launcher_script(layout),
+                _clone_launcher_script(layout),
+                _previous_clone_launcher_script(layout),
+            }
             else "unsafe"
         )
         return {"status": status, "command": str(path)}
@@ -111,7 +147,12 @@ def remove_user_command(layout: InstallLayout) -> None:
         or details.st_nlink != 1
         or details.st_size > 64 * 1024
         or stat.S_IMODE(details.st_mode) != 0o700
-        or path.read_bytes() not in {launcher_script(layout), _previous_launcher_script(layout)}
+        or path.read_bytes() not in {
+            launcher_script(layout),
+            _previous_launcher_script(layout),
+            _clone_launcher_script(layout),
+            _previous_clone_launcher_script(layout),
+        }
     ):
         raise InstallerError("command_conflict", "Dispatch launcher changed and will not be removed")
     path.unlink()

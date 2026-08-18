@@ -71,6 +71,70 @@ def test_browser_doctor_is_bounded_and_does_not_launch_a_browser(monkeypatch, tm
     assert "profiles" not in payload["data"]["browser_manager"]
 
 
+def test_browser_commands_expose_bounded_runtime_and_reserved_providers(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+
+    assert main(["browser", "providers"]) == 0
+    providers = json.loads(capsys.readouterr().out)
+    assert set(providers) == ENVELOPE
+    assert providers["action"] == "browser-providers"
+    assert [item["id"] for item in providers["data"]["providers"]] == [
+        "managed-playwright",
+        "persistent-cdp",
+        "external-cdp",
+    ]
+    assert providers["data"]["providers"][0]["implemented"] is True
+    assert providers["data"]["providers"][1]["implemented"] is False
+    assert providers["data"]["contains_secrets"] is False
+
+    assert main(["browser", "status"]) == 0
+    status = json.loads(capsys.readouterr().out)
+    assert status["action"] == "browser-status"
+    assert status["status"] == "not_ready"
+    assert status["data"]["runtime"]["ready"] is False
+    assert status["data"]["contains_secrets"] is False
+    assert not home.exists()
+
+
+def test_invalid_arguments_return_one_closed_json_error(capsys) -> None:
+    for values in (["browser"], ["browser", "invalid"], ["invalid"]):
+        assert main(values) == 1
+        captured = capsys.readouterr()
+        payload = json.loads(captured.out)
+        assert captured.err == ""
+        assert set(payload) == ENVELOPE
+        assert payload["ok"] is False
+        assert payload["error"]["code"] == "arguments_invalid"
+
+
+def test_browser_reconcile_does_not_require_playwright(monkeypatch, tmp_path, capsys) -> None:
+    import browser_manager.manager as manager_module
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(
+        manager_module,
+        "PlaywrightRuntime",
+        lambda: (_ for _ in ()).throw(ImportError("playwright unavailable")),
+    )
+    assert main(["browser", "reconcile"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["ok"] is True
+    assert payload["action"] == "browser-reconcile"
+    assert payload["data"]["outcomes"] == []
+
+
+def test_browser_status_invalid_root_returns_closed_json_error(monkeypatch, capsys) -> None:
+    monkeypatch.setenv("DISPATCH_HOME", "relative-dispatch")
+    assert main(["browser", "status"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert set(payload) == ENVELOPE
+    assert payload["ok"] is False
+    assert payload["action"] == "browser"
+    assert payload["error"]["code"] == "browser_cache_path_invalid"
+
+
 def test_auth_status_is_ready_without_creating_private_state(monkeypatch, tmp_path, capsys) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
