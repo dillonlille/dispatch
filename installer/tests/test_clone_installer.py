@@ -2066,13 +2066,45 @@ def test_direct_source_registration_writes_private_metadata_without_backend(tmp_
     assert restored == 0o022
     pth = site_packages / "__dispatch__.dispatch_installer.pth"
     generation = next(site_packages.glob(".dispatch-direct-dispatch_installer-*"))
-    assert pth.read_text(encoding="utf-8") == f"{source / 'src'}\n{generation}\n"
+    assert pth.read_text(encoding="utf-8") == f"{source / 'src'}\n{generation.name}\n"
     dist_info = generation / "dispatch_installer-1.0.0.dist-info"
     assert json.loads((dist_info / "direct_url.json").read_text(encoding="utf-8"))["url"] == source.as_uri()
     assert "dispatch-direct-source" in (dist_info / "INSTALLER").read_text(encoding="utf-8")
     record = (dist_info / "RECORD").read_text(encoding="utf-8")
     assert "__dispatch__.dispatch_installer.pth" in record
     assert not (source / "src" / "generated.egg-info").exists()
+
+
+def test_direct_source_registration_survives_venv_activation_move(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    write_test_project(source)
+    staging_venv = tmp_path / "staging" / "venv"
+    python = staging_venv / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("python", encoding="utf-8")
+    site_packages = fake_site_packages(python)
+
+    install_editable_source(python, source)
+    pth = site_packages / "__dispatch__.dispatch_installer.pth"
+    generation_name = pth.read_text(encoding="utf-8").splitlines()[-1]
+    assert generation_name.startswith(".dispatch-direct-dispatch_installer-")
+    assert not Path(generation_name).is_absolute()
+
+    active_venv = tmp_path / "active" / "venv"
+    active_venv.parent.mkdir()
+    staging_venv.rename(active_venv)
+    active_python = active_venv / "bin" / "python"
+    active_site_packages = fake_site_packages(active_python)
+    assert (active_site_packages / generation_name).is_dir()
+
+    install_editable_source(active_python, source)
+
+    generations = list(active_site_packages.glob(".dispatch-direct-dispatch_installer-*"))
+    assert len(generations) == 1
+    assert (generations[0] / "dispatch_installer-1.0.0.dist-info" / "RECORD").is_file()
+    assert (
+        active_site_packages / "__dispatch__.dispatch_installer.pth"
+    ).read_text(encoding="utf-8") == f"{source / 'src'}\n{generations[0].name}\n"
 
 
 def test_direct_source_rejects_preexisting_metadata_aliases(tmp_path: Path) -> None:
@@ -2174,7 +2206,7 @@ def test_direct_source_reinstall_interruption_keeps_previous_registration(
     install_editable_source(python, source)
     pth = site_packages / "__dispatch__.dispatch_installer.pth"
     previous_pth = pth.read_bytes()
-    previous_generation = Path(previous_pth.decode().splitlines()[-1])
+    previous_generation = site_packages / previous_pth.decode().splitlines()[-1]
     manifest = source / "pyproject.toml"
     manifest.write_text(
         manifest.read_text(encoding="utf-8").replace("version='1.0.0'", "version='2.0.0'"),
@@ -2220,7 +2252,7 @@ def test_direct_source_post_commit_interruption_leaves_complete_registration(
         install_editable_source(python, source)
     assert error.value is interruption
     pth = site_packages / "__dispatch__.dispatch_installer.pth"
-    generation = Path(pth.read_text(encoding="utf-8").splitlines()[-1])
+    generation = site_packages / pth.read_text(encoding="utf-8").splitlines()[-1]
     assert generation.is_dir()
     assert next(generation.glob("*.dist-info/RECORD")).is_file()
 
@@ -2275,7 +2307,7 @@ def test_direct_source_reinstall_cleanup_interrupt_preserves_new_registration(
         install_editable_source(python, source)
     assert error.value is interruption
     pth = site_packages / "__dispatch__.dispatch_installer.pth"
-    generation = Path(pth.read_text(encoding="utf-8").splitlines()[-1])
+    generation = site_packages / pth.read_text(encoding="utf-8").splitlines()[-1]
     assert (generation / "dispatch_installer-2.0.0.dist-info" / "RECORD").is_file()
     assert len(list(site_packages.glob(".dispatch-direct-dispatch_installer-*"))) == 1
 
