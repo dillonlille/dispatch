@@ -12,6 +12,7 @@ import re
 import stat
 import subprocess
 import sys
+import tempfile
 import tomllib
 import uuid
 from collections.abc import Callable, Sequence
@@ -24,9 +25,36 @@ from .layout import (
     atomic_json,
     read_json,
 )
-from .service import service_unit_is_owned
+from .service import (
+    disable_plugin_service,
+    enable_plugin_service,
+    inspect_plugin_services,
+    plugin_service_ids,
+    plugin_service_receipt_path,
+    prepare_plugin_service,
+    remove_plugin_service,
+    restore_plugin_service_states,
+    restore_systemd_service_state,
+    service_unit_is_owned,
+    stop_plugin_services_for_activation,
+    systemd_service_state,
+)
 
 RunCommand = Callable[[Sequence[str], Path | None], subprocess.CompletedProcess[str]]
+
+_PLUGIN_ID = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
+_PINNED_DEPENDENCY = re.compile(
+    r"^[A-Za-z0-9][A-Za-z0-9._-]*(?:\[[A-Za-z0-9_,.-]+\])?==[A-Za-z0-9][A-Za-z0-9._+-]*$"
+)
+_PLUGIN_CAPABILITIES = {
+    "read_local_data",
+    "mutate_data",
+    "collect",
+    "network",
+    "authentication",
+    "direct_delivery",
+    "long_running",
+}
 
 
 def _run(command: Sequence[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -61,6 +89,92 @@ def _assert_editable_source_safe(source: Path) -> Path:
         ):
             raise InstallerError("editable_source_unsafe", "editable source entries are unsafe")
     return absolute
+
+
+def _plugin_project(source: Path, *, expected_id: str | None = None) -> dict[str, object]:
+    """Read the trusted built-in plugin metadata used by installer projections.
+
+    The checkout has already passed the repository authority checks when this is
+    called from lifecycle code.  We still validate the source boundary and the
+    small metadata subset that is allowed to influence pip or systemd.  In
+    particular, dependencies are returned as individual, bounded arguments and
+    never as shell text.
+    """
+
+    source = _assert_editable_source_safe(source)
+    manifest = source / "pyproject.toml"
+    try:
+        configuration = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
+        raise InstallerError("plugin_manifest_invalid", "built-in plugin metadata cannot be read") from exc
+    if not isinstance(configuration, dict):
+        raise InstallerError("plugin_manifest_invalid", "built-in plugin metadata is invalid")
+    project = configuration.get("project")
+    tool = configuration.get("tool")
+    dispatch = tool.get("dispatch") if isinstance(tool, dict) else None
+    if not isinstance(project, dict) or not isinstance(dispatch, dict):
+        raise InstallerError("plugin_manifest_invalid", "built-in plugin metadata is incomplete")
+    plugin_id = dispatch.get("id")
+    if not isinstance(plugin_id, str) or not _PLUGIN_ID.fullmatch(plugin_id):
+        raise InstallerError("plugin_manifest_invalid", "built-in plugin ID is invalid")
+    if expected_id is not None and plugin_id != expected_id:
+        raise InstallerError("plugin_manifest_invalid", "built-in plugin ID does not match its source directory")
+    capabilities = dispatch.get("capabilities")
+    if (
+        not isinstance(capabilities, list)
+        or not capabilities
+        or any(not isinstance(value, str) or value not in _PLUGIN_CAPABILITIES for value in capabilities)
+        or len(capabilities) != len(set(capabilities))
+    ):
+        raise InstallerError("plugin_manifest_invalid", f"plugin capabilities are invalid: {plugin_id}")
+    dependencies = project.get("dependencies", [])
+    if not isinstance(dependencies, list) or any(not isinstance(value, str) for value in dependencies):
+        raise InstallerError("plugin_manifest_invalid", f"plugin dependencies are invalid: {plugin_id}")
+    safe_dependencies: list[str] = []
+    for dependency in dependencies:
+        if (
+            not dependency
+            or len(dependency) > 512
+            or dependency[0] in "-_"
+            or not _PINNED_DEPENDENCY.fullmatch(dependency)
+            or any(ord(character) < 32 or ord(character) == 127 for character in dependency)
+        ):
+            raise InstallerError("plugin_dependency_invalid", f"plugin dependency is invalid: {plugin_id}")
+        safe_dependencies.append(dependency)
+    service_points = project.get("entry-points", {}).get("dispatch.services", {}) if isinstance(project.get("entry-points"), dict) else {}
+    if not isinstance(service_points, dict) or any(
+        not isinstance(name, str) or not isinstance(value, str)
+        for name, value in service_points.items()
+    ):
+        raise InstallerError("plugin_manifest_invalid", f"plugin service entry points are invalid: {plugin_id}")
+    long_running = "long_running" in capabilities
+    if long_running and set(service_points) != {plugin_id}:
+        raise InstallerError("plugin_service_missing", f"long-running plugin has no unique service entry point: {plugin_id}")
+    if not long_running and service_points:
+        raise InstallerError("plugin_service_unexpected", f"non-service plugin publishes a service entry point: {plugin_id}")
+    return {
+        "id": plugin_id,
+        "capabilities": list(capabilities),
+        "dependencies": safe_dependencies,
+        "long_running": long_running,
+        "project": project,
+        "configuration": configuration,
+    }
+
+
+def plugin_metadata(source: Path, *, expected_id: str | None = None) -> dict[str, object]:
+    """Return validated metadata for a source-owned built-in plugin."""
+
+    return _plugin_project(source, expected_id=expected_id)
+
+
+def plugin_dependencies(source: Path, *, expected_id: str | None = None) -> tuple[str, ...]:
+    """Return trusted built-in runtime dependencies for explicit pip install."""
+
+    metadata = _plugin_project(source, expected_id=expected_id)
+    dependencies = metadata["dependencies"]
+    assert isinstance(dependencies, list)
+    return tuple(str(value) for value in dependencies)
 
 
 def _site_packages_for_python(python: Path) -> tuple[Path, tuple[int, int]]:
@@ -661,6 +775,67 @@ def _plugin_config(layout: InstallLayout, selected: list[str]) -> dict[str, obje
     }
 
 
+def _long_running_plugin_ids(layout: InstallLayout, selected: Sequence[str]) -> list[str]:
+    catalog = _plugin_id_map(layout)
+    unknown = sorted(set(selected) - set(catalog))
+    if unknown:
+        raise InstallerError("plugin_unknown", f"selected plugin source is missing: {unknown[0]}")
+    result: list[str] = []
+    for plugin_id in selected:
+        metadata = plugin_metadata(catalog[plugin_id], expected_id=plugin_id)
+        if metadata.get("long_running") is True:
+            result.append(plugin_id)
+    return result
+
+
+def reconcile_plugin_services(
+    layout: InstallLayout,
+    selected: Sequence[str],
+    *,
+    run: RunCommand = _run,
+) -> dict[str, object]:
+    """Publish selected long-running units and remove deselected projections.
+
+    Selection only prepares a disabled projection.  A previously explicitly
+    enabled service is re-enabled after an update/repair projection refresh;
+    no first-time selection is ever started implicitly.
+    """
+
+    selected_ids = list(selected)
+    desired = set(_long_running_plugin_ids(layout, selected_ids))
+    existing = plugin_service_ids(layout)
+    inspected = inspect_plugin_services(layout, existing, run=run)
+    if inspected.get("status") != "ready":
+        raise InstallerError(
+            "plugin_service_unsafe",
+            "plugin service projections are incomplete or not receipt-owned",
+        )
+    services_value = inspected.get("services", {})
+    services = services_value if isinstance(services_value, dict) else {}
+    previously_enabled = {
+        plugin_id
+        for plugin_id, value in services.items()
+        if isinstance(value, dict)
+        and (value.get("receipt_status") == "enabled" or value.get("enabled") is True)
+    }
+    removed: list[str] = []
+    for plugin_id in sorted(existing - desired):
+        remove_plugin_service(layout, plugin_id, run=run)
+        removed.append(plugin_id)
+    prepared: list[dict[str, object]] = []
+    enabled: list[dict[str, object]] = []
+    for plugin_id in sorted(desired):
+        prepared.append(prepare_plugin_service(layout, plugin_id))
+        if plugin_id in previously_enabled:
+            enabled.append(enable_plugin_service(layout, plugin_id, run=run))
+    return {
+        "status": "ready",
+        "prepared": prepared,
+        "enabled": enabled,
+        "removed": removed,
+    }
+
+
 def configure_plugins(
     layout: InstallLayout,
     selected: Sequence[str],
@@ -677,18 +852,188 @@ def configure_plugins(
     service_present = layout.service_path.exists() or layout.service_path.is_symlink()
     if service_present and not service_unit_is_owned(layout):
         raise InstallerError("service_unit_unsafe", "Dispatch service unit is not Dispatch-owned")
-    for plugin_id in selected_ids:
-        source = catalog[plugin_id]
-        completed = install_editable_source(layout.venv_python, source, run=run)
-        if completed.returncode != 0:
-            raise InstallerError("plugin_install_failed", f"could not install built-in plugin: {plugin_id}")
-    config = _plugin_config(layout, selected_ids)
-    atomic_json(layout.config / "plugins.json", config)
-    if service_present:
-        completed = run(("systemctl", "--user", "restart", "dispatch.service"), None)
-        if completed.returncode != 0:
-            raise InstallerError("service_restart_failed", "Dispatch service could not be restarted after setup")
-    return {"status": "complete", "selected_plugins": selected_ids, "plugins": config["plugins"]}
+    main_service_state = (
+        systemd_service_state("dispatch.service", run=run)
+        if service_present
+        else {"active": False, "enabled": False}
+    )
+
+    metadata = {
+        plugin_id: plugin_metadata(catalog[plugin_id], expected_id=plugin_id)
+        for plugin_id in selected_ids
+    }
+    dependencies: dict[str, tuple[str, ...]] = {}
+    for plugin_id, value in metadata.items():
+        raw_dependencies = value.get("dependencies")
+        if isinstance(raw_dependencies, list):
+            dependencies[plugin_id] = tuple(str(item) for item in raw_dependencies)
+    replacement_ready = (
+        layout.venv.is_dir()
+        and not layout.venv.is_symlink()
+        and (layout.clone / "dispatch-core" / "requirements.txt").is_file()
+        and not (layout.clone / "dispatch-core" / "requirements.txt").is_symlink()
+        and layout.installer_source.is_dir()
+        and not layout.installer_source.is_symlink()
+    )
+    if any(dependencies.values()) and not replacement_ready:
+        raise InstallerError(
+            "plugin_environment_unavailable",
+            "plugin dependencies require a complete replacement environment",
+        )
+
+    previous_config = load_plugin_config(layout) if (layout.config / "plugins.json").exists() else None
+    previous_selected = previous_config.get("selected_plugins", []) if previous_config else []
+    if not isinstance(previous_selected, list) or any(not isinstance(value, str) for value in previous_selected):
+        raise InstallerError("plugin_config_invalid", "plugin configuration selection is invalid")
+
+    # A dependency-bearing setup, deselection, or any fully installed clone is
+    # rebuilt as one replacement venv. The compatibility fallback retains the
+    # old direct-source behavior for lightweight unit fixtures that do not have
+    # Core's requirements and installer source available.
+    use_replacement = replacement_ready
+    work: Path | None = None
+    backup: Path | None = None
+    stopped_plugin_services: list[dict[str, object]] = []
+    main_service_stopped = False
+    config: dict[str, object] | None = None
+    try:
+        if use_replacement:
+            from .lifecycle import _safe_remove, _swap_directory, ensure_venv
+
+            work = Path(tempfile.mkdtemp(prefix=".dispatch-plugin-", dir=layout.dispatch_home))
+            work.chmod(0o700)
+            replacement = work / "venv"
+            ensure_venv(
+                layout,
+                destination=replacement,
+                selected_plugins=selected_ids,
+                provision_browser=False,
+                run=run,
+            )
+            stopped_plugin_services = stop_plugin_services_for_activation(
+                layout,
+                previous_selected,
+                run=run,
+            )
+            if service_present:
+                stopped = run(("systemctl", "--user", "stop", "dispatch.service"), None)
+                if stopped.returncode != 0:
+                    raise InstallerError(
+                        "service_stop_failed",
+                        "Dispatch service could not be stopped before plugin environment activation",
+                    )
+                main_service_stopped = True
+            backup = _swap_directory(replacement, layout.venv)
+        else:
+            for plugin_id in selected_ids:
+                source = catalog[plugin_id]
+                plugin_deps = dependencies.get(plugin_id, ())
+                if plugin_deps:
+                    completed = run(
+                        (str(layout.venv_python), "-m", "pip", "install", "--disable-pip-version-check", *plugin_deps),
+                        None,
+                    )
+                    if completed.returncode != 0:
+                        raise InstallerError("plugin_dependencies_failed", f"could not install dependencies for selected plugin: {plugin_id}")
+                completed = install_editable_source(layout.venv_python, source, no_deps=True, run=run)
+                if completed.returncode != 0:
+                    raise InstallerError("plugin_install_failed", f"could not install built-in plugin: {plugin_id}")
+
+        config = _plugin_config(layout, selected_ids)
+        atomic_json(layout.config / "plugins.json", config)
+        plugin_services = reconcile_plugin_services(layout, selected_ids, run=run)
+        restore_plugin_service_states(
+            layout,
+            stopped_plugin_services,
+            allowed_ids=selected_ids,
+            run=run,
+        )
+        if service_present:
+            if main_service_state.get("active") is True:
+                completed = run(("systemctl", "--user", "restart", "dispatch.service"), None)
+                if completed.returncode != 0:
+                    raise InstallerError("service_restart_failed", "Dispatch service could not be restarted after setup")
+            else:
+                restore_systemd_service_state(
+                    "dispatch.service",
+                    main_service_state,
+                    run=run,
+                )
+    except BaseException:
+        if use_replacement and backup is not None:
+            try:
+                from .lifecycle import _restore_directory
+
+                _restore_directory(layout.venv, backup)
+            except BaseException:
+                raise InstallerError("plugin_environment_rollback_failed", "plugin environment rollback failed")
+        if previous_config is None:
+            (layout.config / "plugins.json").unlink(missing_ok=True)
+        else:
+            atomic_json(layout.config / "plugins.json", previous_config)
+        if work is not None:
+            try:
+                from .lifecycle import _safe_remove
+
+                _safe_remove(work)
+            except BaseException:
+                pass
+        if previous_selected != selected_ids:
+            try:
+                reconcile_plugin_services(layout, previous_selected, run=run)
+            except BaseException:
+                pass
+        try:
+            restore_plugin_service_states(layout, stopped_plugin_services, run=run)
+        except BaseException:
+            raise InstallerError(
+                "plugin_environment_rollback_failed",
+                "plugin setup failed and a prior plugin service could not be restored",
+            )
+        if service_present and (backup is not None or main_service_stopped):
+            try:
+                restore_systemd_service_state(
+                    "dispatch.service",
+                    main_service_state,
+                    run=run,
+                )
+            except InstallerError:
+                raise InstallerError(
+                    "plugin_environment_rollback_failed",
+                    "plugin setup failed and the prior Dispatch service could not be restored",
+                )
+        raise
+    else:
+        if backup is not None:
+            try:
+                from .lifecycle import _safe_remove
+
+                _safe_remove(backup)
+            except BaseException:
+                pass
+        if work is not None:
+            try:
+                from .lifecycle import _safe_remove
+
+                _safe_remove(work)
+            except BaseException:
+                pass
+
+    assert config is not None
+    return {
+        "status": "complete",
+        "selected_plugins": selected_ids,
+        "plugins": config["plugins"],
+        "services": plugin_services,
+    }
+
+
+def selected_long_running_plugins(layout: InstallLayout) -> list[str]:
+    config = load_plugin_config(layout)
+    selected = config.get("selected_plugins", [])
+    if not isinstance(selected, list) or any(not isinstance(value, str) for value in selected):
+        raise InstallerError("plugin_config_invalid", "plugin configuration selection is invalid")
+    return _long_running_plugin_ids(layout, selected)
 
 
 def load_plugin_config(layout: InstallLayout) -> dict[str, object]:
@@ -805,4 +1150,14 @@ def run_setup(layout: InstallLayout, argv: list[str] | None = None, *, human: bo
     return 0
 
 
-__all__ = ["available_plugins", "configure_plugins", "load_plugin_config", "migrate_legacy_plugin_config", "run_setup"]
+__all__ = [
+    "available_plugins",
+    "configure_plugins",
+    "load_plugin_config",
+    "migrate_legacy_plugin_config",
+    "plugin_dependencies",
+    "plugin_metadata",
+    "reconcile_plugin_services",
+    "selected_long_running_plugins",
+    "run_setup",
+]

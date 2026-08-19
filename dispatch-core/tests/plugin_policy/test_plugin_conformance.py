@@ -178,6 +178,110 @@ def test_flat_response_envelope_fails(tmp_path: Path) -> None:
     assert any("exact seven-field response envelope" in failure for failure in result.failures)
 
 
+def test_long_running_capability_requires_same_id_service_entry_point(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    project = root / "pyproject.toml"
+    text = project.read_text(encoding="utf-8").replace(
+        'capabilities = ["read_local_data"]',
+        'capabilities = ["read_local_data", "long_running"]',
+    )
+    project.write_text(text, encoding="utf-8")
+
+    result = MODULE.audit_owner(root)
+
+    assert any("long_running capability must match" in failure for failure in result.failures)
+
+
+def test_service_and_configurator_entry_points_must_be_loadable(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    service = root / "src/example_plugin/service.py"
+    service.write_text(
+        service.read_text(encoding="utf-8")
+        + "\ndef serve(context):\n    return None\n"
+        + "\ndef configure(context):\n    return envelope('configure')\n",
+        encoding="utf-8",
+    )
+    project = root / "pyproject.toml"
+    text = project.read_text(encoding="utf-8").replace(
+        'capabilities = ["read_local_data"]',
+        'capabilities = ["read_local_data", "long_running"]',
+    )
+    text += (
+        '\n[project.entry-points."dispatch.services"]\n'
+        'example = "example_plugin.service:serve"\n'
+        '\n[project.entry-points."dispatch.configurators"]\n'
+        'example = "example_plugin.service:configure"\n'
+    )
+    project.write_text(text, encoding="utf-8")
+
+    result = MODULE.audit_owner(root)
+
+    assert result.failures == []
+
+
+def test_auxiliary_entry_point_must_accept_context(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    service = root / "src/example_plugin/service.py"
+    service.write_text(
+        service.read_text(encoding="utf-8") + "\ndef serve():\n    return None\n",
+        encoding="utf-8",
+    )
+    project = root / "pyproject.toml"
+    text = project.read_text(encoding="utf-8").replace(
+        'capabilities = ["read_local_data"]',
+        'capabilities = ["read_local_data", "long_running"]',
+    )
+    text += (
+        '\n[project.entry-points."dispatch.services"]\n'
+        'example = "example_plugin.service:serve"\n'
+    )
+    project.write_text(text, encoding="utf-8")
+
+    result = MODULE.audit_owner(root)
+
+    assert any("must accept one context argument" in failure for failure in result.failures)
+
+
+def test_entry_point_rejects_symlinked_source_parent(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "__init__.py").write_text("", encoding="utf-8")
+    (external / "service.py").write_text(
+        "def handle(request):\n    return {}\n",
+        encoding="utf-8",
+    )
+    (root / "src" / "linked").symlink_to(external, target_is_directory=True)
+    project = root / "pyproject.toml"
+    project.write_text(
+        project.read_text(encoding="utf-8").replace(
+            'example = "example_plugin.service:handle"',
+            'example = "linked.service:handle"',
+        ),
+        encoding="utf-8",
+    )
+
+    result = MODULE.audit_owner(root)
+
+    assert any("entry point target is not a source callable" in failure for failure in result.failures)
+
+
+def test_policy_bounds_plugin_base_exception(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    service = root / "src/example_plugin/service.py"
+    service.write_text(
+        service.read_text(encoding="utf-8").replace(
+            "def handle(request):\n    action = request.get(\"action\") if isinstance(request, dict) else \"invalid\"",
+            "def handle(request):\n    raise KeyboardInterrupt",
+        ),
+        encoding="utf-8",
+    )
+
+    result = MODULE.audit_owner(root)
+
+    assert any("request probe failed: KeyboardInterrupt" in failure for failure in result.failures)
+
+
 def test_manifest_is_optional_for_source_plugin(tmp_path: Path) -> None:
     root = fixture(tmp_path)
     (root / "dispatch-plugin.yaml").unlink()

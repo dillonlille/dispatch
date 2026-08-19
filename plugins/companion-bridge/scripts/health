@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+CODE_ROOT=${DISPATCH_CODE_ROOT:-$(CDPATH= cd -- "$ROOT/../.." && pwd)}
+export PYTHONDONTWRITEBYTECODE=1
+export PYTHONPATH="$ROOT/src:$CODE_ROOT/dispatch-core${PYTHONPATH:+:$PYTHONPATH}"
+exec python3 -B -c 'import json; from companion_bridge.service import health; print(json.dumps(health(), sort_keys=True))'

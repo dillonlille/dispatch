@@ -18,7 +18,7 @@ env:
 
 jobs:
   test:
-    name: Source, Core, installer, and Handbook tests
+    name: Source, Core, installer, and built-in plugin tests
     runs-on: ubuntu-24.04
     timeout-minutes: 25
     steps:
@@ -36,17 +36,19 @@ jobs:
             dispatch-core/requirements-dev.txt
             installer/pyproject.toml
             plugins/handbook/pyproject.toml
+            plugins/companion-bridge/pyproject.toml
+
+      - name: Verify source safety
+        run: python -B scripts/verify-source-export . --json
 
       - name: Install test dependencies and editable components
         run: |
           python -m pip install -r dispatch-core/requirements-dev.txt
           python -m pip install --no-deps --editable ./installer --editable ./plugins/handbook
+          python -m pip install --editable ./plugins/companion-bridge
 
-      - name: Verify source safety
-        run: python -B scripts/verify-source-export . --json
-
-      - name: Run source, Core, installer, and Handbook tests
-        run: python -B -m pytest -q -p no:cacheprovider tests dispatch-core/tests installer/tests plugins/handbook/tests
+      - name: Run source, Core, installer, and built-in plugin tests
+        run: python -B -m pytest -q -p no:cacheprovider tests dispatch-core/tests installer/tests plugins/handbook/tests plugins/companion-bridge/tests
 
       - name: Shell-check installation scripts
         run: |

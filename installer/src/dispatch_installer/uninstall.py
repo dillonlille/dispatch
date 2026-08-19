@@ -33,9 +33,18 @@ from .layout import (
 from .repository import canonical_record_has_remote_authority, local_checkout_matches_record
 from .service import (
     legacy_service_unit_is_owned,
+    plugin_service_ids,
+    plugin_service_path,
+    plugin_service_receipt_path,
+    plugin_service_unit_is_owned,
     remove_legacy_user_service,
+    remove_plugin_service,
     remove_user_service,
+    restore_plugin_service_states,
+    restore_systemd_service_state,
     service_unit_is_owned,
+    status_plugin_service,
+    systemd_service_state,
 )
 from .user_command import inspect_user_command, remove_user_command
 
@@ -262,6 +271,18 @@ def _uninstall_blockers(
         if not legacy_service_unit_is_owned(layout):
             blockers.append(f"legacy service unit is not Dispatch-owned: {legacy_service}")
 
+    for plugin_id in _plugin_service_ids(layout):
+        unit = plugin_service_path(layout, plugin_id)
+        receipt = plugin_service_receipt_path(layout, plugin_id)
+        status = status_plugin_service(layout, plugin_id)
+        if status.get("status") == "unsafe":
+            blockers.append(f"plugin service projection is unsafe: {plugin_id}")
+        if unit.exists() or unit.is_symlink():
+            if not plugin_service_unit_is_owned(layout, plugin_id):
+                blockers.append(f"plugin service unit is not Dispatch-owned: {unit}")
+        if receipt.is_symlink() or (receipt.exists() and not receipt.is_file()):
+            blockers.append(f"plugin service receipt is unsafe: {receipt}")
+
     if purge:
         for path in _external_private_roots(layout):
             if not path.exists() and not path.is_symlink():
@@ -324,6 +345,10 @@ def _external_private_roots(layout: InstallLayout) -> list[Path]:
     return [path for path in roots if path != layout.dispatch_home and layout.dispatch_home not in path.parents]
 
 
+def _plugin_service_ids(layout: InstallLayout) -> list[str]:
+    return sorted(plugin_service_ids(layout))
+
+
 def plan_uninstall(
     layout: InstallLayout,
     *,
@@ -334,7 +359,9 @@ def plan_uninstall(
         layout.command_path,
         layout.service_path,
         layout.service_directory / "dispatch-core.service",
+        *(plugin_service_path(layout, plugin_id) for plugin_id in _plugin_service_ids(layout)),
     ]
+    plugin_receipts = [plugin_service_receipt_path(layout, plugin_id) for plugin_id in _plugin_service_ids(layout)]
     remove = [
         layout.clone,
         layout.venv,
@@ -343,6 +370,7 @@ def plan_uninstall(
         layout.installation_record,
         layout.browser_installation_record,
         layout.dispatch_home / ".install-tmp",
+        *plugin_receipts,
         *external,
     ]
     preserve_names = ["config", "secrets", "data", "state", "logs"]
@@ -388,6 +416,11 @@ def uninstall(
         if locked_blockers:
             raise InstallerError("uninstall_blocked", "; ".join(locked_blockers))
         service_present = layout.service_path.exists() or layout.service_path.is_symlink()
+        main_service_state = (
+            systemd_service_state("dispatch.service", run=run)
+            if service_present
+            else {"active": False, "enabled": False}
+        )
         if service_present:
             stopped = run(("systemctl", "--user", "stop", "dispatch.service"), None)
             if stopped.returncode != 0:
@@ -402,18 +435,32 @@ def uninstall(
             generation_lock = None
             if service_present:
                 try:
-                    restarted = run(("systemctl", "--user", "enable", "--now", "dispatch.service"), None)
+                    restore_systemd_service_state(
+                        "dispatch.service",
+                        main_service_state,
+                        run=run,
+                    )
                 except BaseException as restart_exc:
                     raise InstallerError(
                         "service_rollback_failed",
                         "uninstall was blocked and the Dispatch service could not be restored",
                     ) from restart_exc
-                if restarted.returncode != 0:
-                    raise InstallerError(
-                        "service_rollback_failed",
-                        "uninstall was blocked and the Dispatch service could not be restored",
-                    ) from exc
+
             raise
+        plugin_ids = _plugin_service_ids(layout)
+        plugin_states: list[dict[str, object]] = []
+        for plugin_id in plugin_ids:
+            status = status_plugin_service(layout, plugin_id, run=run)
+            if status.get("status") == "unsafe":
+                raise InstallerError("plugin_service_unsafe", "plugin service state is unsafe")
+            plugin_states.append(
+                {
+                    "plugin_id": plugin_id,
+                    "active": status.get("active") is True,
+                    "enabled": status.get("enabled") is True,
+                    "receipt_status": status.get("receipt_status"),
+                }
+            )
         files = {
             layout.command_path: _snapshot_file(layout.command_path),
             layout.service_path: _snapshot_file(layout.service_path),
@@ -428,6 +475,13 @@ def uninstall(
             layout.browser_installation_record: _snapshot_file(layout.browser_installation_record),
             layout.state / "uninstall.json": _snapshot_file(layout.state / "uninstall.json"),
         }
+        for plugin_id in plugin_ids:
+            files[plugin_service_path(layout, plugin_id)] = _snapshot_file(
+                plugin_service_path(layout, plugin_id)
+            )
+            files[plugin_service_receipt_path(layout, plugin_id)] = _snapshot_file(
+                plugin_service_receipt_path(layout, plugin_id)
+            )
         legacy_present = files[layout.service_directory / "dispatch-core.service"] is not None
         stages: list[_DirectoryStage] = []
         committed = False
@@ -437,6 +491,8 @@ def uninstall(
             if service_present:
                 remove_user_service(layout, run=run)
             remove_legacy_user_service(layout, run=run)
+            for plugin_id in plugin_ids:
+                remove_plugin_service(layout, plugin_id, run=run)
             if layout.command_path.exists() or layout.command_path.is_symlink():
                 remove_user_command(layout)
 
@@ -493,13 +549,16 @@ def uninstall(
                 if reloaded.returncode != 0:
                     raise InstallerError("service_rollback_failed", "systemd reload failed during uninstall rollback")
                 if service_present:
-                    restarted = run(("systemctl", "--user", "enable", "--now", "dispatch.service"), None)
-                    if restarted.returncode != 0:
-                        raise InstallerError("service_rollback_failed", "Dispatch service restart failed during rollback")
+                    restore_systemd_service_state(
+                        "dispatch.service",
+                        main_service_state,
+                        run=run,
+                    )
                 elif legacy_present:
                     restarted = run(("systemctl", "--user", "enable", "--now", "dispatch-core.service"), None)
                     if restarted.returncode != 0:
                         raise InstallerError("service_rollback_failed", "legacy service restart failed during rollback")
+                restore_plugin_service_states(layout, plugin_states, run=run)
             except BaseException as exc:
                 rollback_failure = rollback_failure or exc
             if rollback_failure is not None:

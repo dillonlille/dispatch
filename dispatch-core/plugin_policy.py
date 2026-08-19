@@ -6,6 +6,7 @@ import argparse
 import ast
 import importlib
 import importlib.util
+import inspect
 import json
 import os
 from pathlib import Path
@@ -140,7 +141,24 @@ def _target_path(root: Path, source_root: Path, target: str) -> tuple[Path, str]
     module_path = source_root / f"{relative}.py"
     if not module_path.is_file():
         module_path = source_root / relative / "__init__.py"
-    if not module_path.is_file() or module_path.is_symlink():
+    try:
+        canonical_source = source_root.resolve(strict=True)
+        canonical_module = module_path.resolve(strict=True)
+        relative_module = module_path.relative_to(source_root)
+    except (OSError, ValueError):
+        return None
+    cursor = source_root
+    if source_root.is_symlink():
+        return None
+    for part in relative_module.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            return None
+    if (
+        not module_path.is_file()
+        or module_path.is_symlink()
+        or not canonical_module.is_relative_to(canonical_source)
+    ):
         return None
     return module_path, attribute
 
@@ -149,7 +167,7 @@ def _load_target(root: Path, source_root: Path, target: str) -> Any | None:
     resolved = _target_path(root, source_root, target)
     if resolved is None:
         return None
-    _module_path, attribute = resolved
+    module_path, attribute = resolved
     module_name, _ = target.split(":", 1)
     package_name = module_name.split(".", 1)[0]
     for loaded_name, loaded_module in list(sys.modules.items()):
@@ -161,11 +179,15 @@ def _load_target(root: Path, source_root: Path, target: str) -> Any | None:
     sys.path.insert(0, str(source_root))
     try:
         importlib.invalidate_caches()
-        value: Any = importlib.import_module(module_name)
+        module: Any = importlib.import_module(module_name)
+        loaded_file = getattr(module, "__file__", None)
+        if not isinstance(loaded_file, str) or Path(loaded_file).resolve(strict=True) != module_path.resolve(strict=True):
+            return None
+        value: Any = module
         for part in attribute.split("."):
             value = getattr(value, part)
         return value
-    except (AttributeError, ImportError, ModuleNotFoundError, OSError, TypeError, ValueError):
+    except BaseException:
         return None
     finally:
         try:
@@ -192,11 +214,57 @@ def _check_entry_point(audit: Audit, project: dict[str, Any], source_root: Path,
     try:
         response = handler({"action": "health"})
         invalid_response = handler({"action": "__invalid__"})
-    except Exception as exc:  # pragma: no cover - exercised by plugin-specific failures
+    except BaseException as exc:  # pragma: no cover - exercised by plugin-specific failures
         audit.fail(f"dispatch.plugins request probe failed: {type(exc).__name__}")
         return
     _check_envelope(audit, response, "dispatch.plugins health response", health=True)
     _check_envelope(audit, invalid_response, "dispatch.plugins invalid-input response")
+
+
+def _check_auxiliary_entry_points(
+    audit: Audit,
+    project: dict[str, Any],
+    source_root: Path,
+    plugin_id: str,
+    capabilities: list[str],
+) -> None:
+    groups = project.get("project", {}).get("entry-points", {})
+    if not isinstance(groups, dict):
+        return
+    service_points = groups.get("dispatch.services", {})
+    if not isinstance(service_points, dict):
+        audit.fail("dispatch.services entry points are invalid")
+        return
+    long_running = "long_running" in capabilities
+    expected_services = {plugin_id} if long_running else set()
+    if set(service_points) != expected_services:
+        audit.fail(
+            "long_running capability must match exactly one same-ID dispatch.services entry point"
+        )
+    elif long_running:
+        target = service_points.get(plugin_id)
+        handler = _load_target(audit.root, source_root, target) if isinstance(target, str) else None
+        if not callable(handler):
+            audit.fail("dispatch.services entry point target is not a source callable")
+        else:
+            try:
+                inspect.signature(handler).bind(object())
+            except (TypeError, ValueError):
+                audit.fail("dispatch.services entry point must accept one context argument")
+
+    configurators = groups.get("dispatch.configurators", {})
+    if not isinstance(configurators, dict) or set(configurators) not in (set(), {plugin_id}):
+        audit.fail("dispatch.configurators must be empty or contain exactly the declared plugin id")
+    elif configurators:
+        target = configurators.get(plugin_id)
+        handler = _load_target(audit.root, source_root, target) if isinstance(target, str) else None
+        if not callable(handler):
+            audit.fail("dispatch.configurators entry point target is not a source callable")
+        else:
+            try:
+                inspect.signature(handler).bind(object())
+            except (TypeError, ValueError):
+                audit.fail("dispatch.configurators entry point must accept one context argument")
 
 
 def _manifest_actions(manifest: dict[str, Any], component_id: str | None = None) -> set[str] | None:
@@ -396,7 +464,8 @@ def audit_owner(root: Path) -> Audit:
     capabilities = dispatch.get("capabilities")
     if audit.require(isinstance(capabilities, list) and bool(capabilities), "tool.dispatch.capabilities must be a non-empty list"):
         audit.require(
-            len(capabilities) == len(set(capabilities)) and all(isinstance(value, str) and value in CAPABILITIES for value in capabilities),
+            all(isinstance(value, str) and value in CAPABILITIES for value in capabilities)
+            and len(capabilities) == len(set(capabilities)),
             "tool.dispatch.capabilities contains invalid or duplicate values",
         )
     audit.require(root.name == plugin_id, f"tool.dispatch.id {plugin_id} does not match the source directory {root.name}")
@@ -415,7 +484,10 @@ def audit_owner(root: Path) -> Audit:
         else:
             audit.fail("dispatch-plugin.yaml must contain a mapping")
 
-    _check_entry_point(audit, project, _source_root(root, project), plugin_id)
+    source_root = _source_root(root, project)
+    _check_entry_point(audit, project, source_root, plugin_id)
+    if isinstance(capabilities, list) and all(isinstance(value, str) for value in capabilities):
+        _check_auxiliary_entry_points(audit, project, source_root, plugin_id, capabilities)
 
     scripts = root / "scripts"
     if audit.require(scripts.is_dir() and not scripts.is_symlink(), "missing scripts directory"):

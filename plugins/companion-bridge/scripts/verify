@@ -1,0 +1,6 @@
+#!/usr/bin/env sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+CODE_ROOT=${DISPATCH_CODE_ROOT:-$(CDPATH= cd -- "$ROOT/../.." && pwd)}
+export PYTHONDONTWRITEBYTECODE=1
+exec python3 -B "$CODE_ROOT/dispatch-core/plugin_policy.py" "$ROOT"

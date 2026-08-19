@@ -126,6 +126,21 @@ class VerifySourceExportTests(unittest.TestCase):
         payload = json.loads(result.stdout)
         self.assertTrue(any("non-placeholder" in item for item in payload["errors"]))
 
+    def test_python_identity_type_annotations_are_not_configuration(self) -> None:
+        temporary, root = self.make_root()
+        self.addCleanup(temporary.cleanup)
+        (root / "model.py").write_text(
+            "from pathlib import Path\n"
+            "class Record:\n"
+            "    channel_id: str\n"
+            "    user_id: str | None\n"
+            "    account_id: int\n"
+            "    host: Path\n",
+            encoding="utf-8",
+        )
+        result = run_verifier(root)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_non_placeholder_identity_and_private_hostname_fail(self) -> None:
         temporary, root = self.make_root()
         self.addCleanup(temporary.cleanup)

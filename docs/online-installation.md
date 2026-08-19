@@ -57,7 +57,17 @@ After installation, the bootstrap offers **Start Setup** or **Skip for Now**. Se
 ```text
 dispatch setup
 dispatch setup --plugin handbook --yes
+dispatch setup --plugin companion-bridge --yes
+dispatch plugin configure companion-bridge
+dispatch auth enroll amazon-operations
+dispatch plugin-service enable companion-bridge
 ```
+
+Selecting a long-running plugin installs its approved dependency closure and
+publishes a disabled, receipt-owned user-service projection. Companion Bridge
+still requires an explicit private configurator run for Slack credentials and
+allowlists before its service may be enabled. Installation and plugin selection
+never import credentials from another application or operational checkout.
 
 Lifecycle commands are explicit:
 
@@ -74,6 +84,6 @@ A development update refuses a dirty checkout, fetches `origin/dev`, and merges 
 
 ## Boundaries
 
-Installation may modify only the user-owned Dispatch layout, its launcher and systemd user unit, and approved Playwright operating-system dependencies. It never installs, modifies, inspects, or removes Hermes. Authentication and external integration setup remain explicit operations; installation does not read or import credentials.
+Installation may modify only the user-owned Dispatch layout, its launcher and systemd user unit, and approved Playwright operating-system dependencies. It never installs, modifies, inspects, or removes Hermes. Authentication and external integration setup remain explicit operations; installation does not read or import credentials. Slack tokens, Amazon credentials, browser profiles, allowlists, conversation mappings, and logs remain below the private Dispatch roots and never enter the Git checkout or service-unit environment.
 
 The canonical bootstrap is the repository-root `install.sh`. Explicitly approved private operator tooling outside this repository fetches that exact file from the latest immutable Release, stages it transiently for Cloudflare, and verifies the public bytes and headers; no second tracked bootstrap implementation exists.

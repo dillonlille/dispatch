@@ -8,12 +8,15 @@ Dispatch is a per-user Linux application developed and installed directly from G
 dispatch-core/                 directly executable Core source
 installer/                     source installer and lifecycle helpers
 plugins/handbook/              independently owned built-in example plugin
+plugins/companion-bridge/      optional DSP Companion Slack service plugin
 scripts/                       source-safety checks
 .github/workflows/             source CI and manual release workflow
 docs/                          installation, path, release, and security contracts
 ```
 
-Core is a root-level application component, not a plugin. The Handbook proves the plugin boundary and is enabled only through explicit setup.
+Core is a root-level application component, not a plugin. The Handbook proves the
+bounded query-plugin boundary. Companion Bridge proves the separately selected,
+configured, and enabled long-running service boundary; it is not a Hermes tool.
 
 ## Install channels
 
@@ -68,13 +71,14 @@ Install the test dependencies and editable installer/plugin adapters:
 ```bash
 python3 -m pip install -r dispatch-core/requirements-dev.txt
 python3 -m pip install --no-deps --editable ./installer --editable ./plugins/handbook
+python3 -m pip install --editable ./plugins/companion-bridge
 ```
 
 Then run:
 
 ```bash
 python3 -B scripts/verify-source-export . --json
-python3 -B -m pytest -q -p no:cacheprovider tests dispatch-core/tests installer/tests plugins/handbook/tests
+python3 -B -m pytest -q -p no:cacheprovider tests dispatch-core/tests installer/tests plugins/handbook/tests plugins/companion-bridge/tests
 shellcheck install.sh
 sh -n install.sh
 python3 dispatch-core --help
