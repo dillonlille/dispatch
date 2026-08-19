@@ -91,7 +91,7 @@ def _stored_json_array(value: object, *, maximum: int, item_maximum: int | None 
         raise QueryError("schema_invalid", "A stored Paycom JSON value is invalid.")
     try:
         result = json.loads(value)
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise QueryError("schema_invalid", "A stored Paycom JSON value is invalid.") from exc
     if not isinstance(result, list) or len(result) > maximum:
         raise QueryError("schema_invalid", "A stored Paycom JSON value is invalid.")
@@ -426,7 +426,7 @@ class PaycomQuery:
             _stored_text(row["approvedBy"], 80)
             try:
                 evidence = json.loads(row["evidenceJson"])
-            except (TypeError, ValueError) as exc:
+            except (TypeError, ValueError, RecursionError) as exc:
                 raise QueryError("schema_invalid", "The identity crosswalk evidence is invalid.") from exc
             if not isinstance(evidence, list) or not 1 <= len(evidence) <= 4 or len(set(evidence)) != len(evidence) or any(item not in allowed_evidence for item in evidence):
                 raise QueryError("schema_invalid", "The identity crosswalk evidence is invalid.")

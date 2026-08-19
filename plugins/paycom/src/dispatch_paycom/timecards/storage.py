@@ -71,7 +71,10 @@ def _record_flag(value: Any) -> int:
 def _stored_json(value: Any) -> str:
     if type(value) is not str:
         raise ValueError("timecard_projection_invalid")
-    return _json(json.loads(value))
+    try:
+        return _json(json.loads(value))
+    except (TypeError, ValueError, RecursionError) as exc:
+        raise ValueError("timecard_projection_invalid") from exc
 
 
 class TimecardStore:

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, timezone
+import json
 import os
 from pathlib import Path
 import sqlite3
@@ -16,10 +17,11 @@ CORE = ROOT / "dispatch-core"
 sys.path.insert(0, str(CORE))
 sys.path.insert(0, str(SOURCE))
 
-from dispatch_paycom.roster.browser import ROSTER_URL
+from dispatch_paycom.roster.browser import ROSTER_API_URL, ROSTER_URL
 from dispatch_paycom.roster.collector import LANDING_URL, collect_roster
 from dispatch_paycom.roster.models import HEADERS
 from dispatch_paycom.timecards.browser import TimecardBrowserError, capture_timecard
+from dispatch_paycom.timecards.artifacts import TimecardArtifactWriter
 from dispatch_paycom.timecards.collector import TimecardCollectorError, collect_timecards, verify_timecard_publication
 from dispatch_paycom.timecards.extraction import EXTRACTION_SCRIPT
 from dispatch_paycom.timecards.models import HEADERS as TIMECARD_HEADERS
@@ -123,6 +125,49 @@ class RosterResponse:
         return ROSTER_BYTES
 
 
+class RosterRequest:
+    method = "POST"
+    url = ROSTER_API_URL
+    post_data_json = {"startDate": "2026-07-26", "endDate": "2026-08-08", "eeCodes": ["A001"]}
+
+
+ROSTER_API_BYTES = json.dumps({
+    "eeCodes": ["A001"],
+    "employees": [{
+        "employeeCode": "A001", "fullName": "Alpha Driver", "eestatus": "A",
+        "allocation": {"selections": [
+            {"categoryName": "Department", "isDepartment": True, "code": "00004", "description": "Driver"},
+            {"categoryName": "Delivery Station Code", "isDepartment": False, "code": "STA", "description": "Station"},
+        ]},
+        "position": "Driver", "payClassCode": "DOT4", "terminalCode": "DOT4", "payType": "Hourly",
+        "primarySupervisor": "Supervisor", "missingPunches": 0,
+        "totals": {"totalHours": 40, "otHours": 0},
+        "approvalPercentages": {"employee": 100, "supervisor": 100},
+    }],
+}, separators=(",", ":")).encode()
+
+
+class RosterApiResponse:
+    url = ROSTER_API_URL
+    status = 200
+    headers = {"content-type": "application/json"}
+    request = RosterRequest()
+
+    def body(self):
+        return ROSTER_API_BYTES
+
+
+class RosterResponseInfo:
+    def __init__(self, response):
+        self.value = response
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return None
+
+
 class Page:
     def __init__(self, *, dates=None, headers=TIMECARD_HEADERS):
         self.url = ""
@@ -134,6 +179,11 @@ class Page:
         self.url = url
         self.gotos.append(url)
         return RosterResponse() if "timecardsearch" in url else None
+
+    def expect_response(self, predicate, *, timeout):
+        response = RosterApiResponse()
+        assert timeout == 60_000 and predicate(response)
+        return RosterResponseInfo(response)
 
     def wait_for_load_state(self, state, *, timeout):
         return None
@@ -207,6 +257,21 @@ def test_timecard_browser_rejects_wrong_or_reordered_projection_dates():
     for dates in (period.dates[:-1] + ("2026-08-23",), (period.dates[1], period.dates[0], *period.dates[2:])):
         with pytest.raises(TimecardBrowserError, match="timecard_projection_invalid"):
             capture_timecard(Page(dates=dates), employee_code="A001", period=period)
+
+
+def test_timecard_unsealed_cleanup_rejects_stage_symlink_swap_without_touching_target(tmp_path):
+    period = period_from_end("2026-08-22")
+    writer = TimecardArtifactWriter(tmp_path / "timecard-data", period, ["A001"])
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    sentinel = outside / "sentinel"
+    sentinel.write_bytes(b"do not touch")
+    stage = writer.stage
+    stage.rmdir()
+    stage.symlink_to(outside, target_is_directory=True)
+    with pytest.raises(ValueError, match="artifact_cleanup_failed"):
+        writer.cleanup()
+    assert sentinel.read_bytes() == b"do not touch"
 
 
 def test_timecard_url_binds_employee_period_and_rejects_extra_query():

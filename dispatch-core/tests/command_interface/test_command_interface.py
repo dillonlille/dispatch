@@ -272,6 +272,28 @@ def test_collection_submit_converts_json_recursion_to_stable_error(monkeypatch) 
     assert str(error.value) == "collection parameters must be valid JSON"
 
 
+def test_plugin_invoke_converts_deeply_nested_json_to_stable_error(monkeypatch, capsys) -> None:
+    request = '{"nested":' + "[" * 2000 + "0" + "]" * 2000 + "}"
+    original_loads = command_interface.json.loads
+
+    def loads(value, *args, **kwargs):
+        if value == request:
+            raise RecursionError
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(command_interface.json, "loads", loads)
+
+    assert main(["plugin", "invoke", "example", "--request", request]) == 1
+    monkeypatch.setattr(command_interface.json, "loads", original_loads)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["action"] == "plugin-invoke"
+    assert payload["error"] == {
+        "code": "plugin_request_invalid",
+        "message": "plugin request must be valid JSON",
+    }
+
+
 def test_collection_status_is_read_only_with_no_queue(monkeypatch, tmp_path, capsys) -> None:
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))

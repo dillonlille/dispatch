@@ -50,6 +50,28 @@ def test_symlink_parent_is_rejected_without_touching_target(tmp_path: Path) -> N
     assert not (outside / "child").exists()
 
 
+def test_private_directory_creation_rejects_child_swap_without_touching_target(tmp_path: Path, monkeypatch) -> None:
+    import dispatch_paycom.filesystem as filesystem
+
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o755)
+    original_mkdir = filesystem.os.mkdir
+
+    def race_mkdir(name, mode=0o777, *, dir_fd=None):
+        result = original_mkdir(name, mode, dir_fd=dir_fd)
+        if name == "nested":
+            os.rmdir(name, dir_fd=dir_fd)
+            (private / "nested").symlink_to(outside, target_is_directory=True)
+        return result
+
+    monkeypatch.setattr(filesystem.os, "mkdir", race_mkdir)
+    with pytest.raises(FilesystemError):
+        ensure_private_directory(private / "nested" / "child")
+    assert not (outside / "child").exists()
+
+
 def test_pinned_directory_matches_validated_inode(tmp_path: Path) -> None:
     root = tmp_path / "private"
     root.mkdir(mode=0o700)

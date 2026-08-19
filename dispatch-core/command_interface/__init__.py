@@ -224,7 +224,7 @@ def _plugin_result(args: argparse.Namespace) -> dict[str, Any]:
     elif args.plugin_action == "invoke":
         try:
             request = json.loads(args.request)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, RecursionError) as exc:
             raise CommandInterfaceError("plugin_request_invalid", "plugin request must be valid JSON") from exc
         if type(request) is not dict:
             raise CommandInterfaceError("plugin_request_invalid", "plugin request must be a JSON object")

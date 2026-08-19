@@ -352,7 +352,7 @@ def read_json(path: Path, *, maximum: int = 128 * 1024) -> dict[str, object]:
         raise InstallerError("record_unsafe", f"record is unsafe: {path}")
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise InstallerError("record_invalid", f"record is invalid: {path}") from exc
     if not isinstance(payload, dict):
         raise InstallerError("record_invalid", f"record is invalid: {path}")

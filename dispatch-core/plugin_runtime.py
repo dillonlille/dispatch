@@ -775,7 +775,7 @@ def list_plugins() -> list[dict[str, str]]:
 def _json_bytes(value: Any, *, limit: int, message: str, code: str) -> bytes:
     try:
         encoded = json.dumps(value, sort_keys=True, allow_nan=False).encode()
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise PluginRuntimeError(code, message) from exc
     if len(encoded) > limit:
         raise PluginRuntimeError(code, message)

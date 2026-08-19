@@ -50,7 +50,7 @@ def _setup_state(paths: DispatchPaths) -> dict[str, Any]:
         with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
             descriptor = -1
             payload = json.load(stream)
-    except (OSError, UnicodeError, json.JSONDecodeError):
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
         return {"complete": False, "selected_plugins": [], "capabilities": [], "invalid": True}
     finally:
         if descriptor >= 0:
@@ -174,7 +174,29 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
                     authentication = AuthenticationManager(paths).status()
                 except AuthenticationError as exc:
                     authentication_error = exc
-        authentication_ready = authentication_dependency_installed and authentication_error is None
+        required_authentication_realms = {
+            registration.browser_realm
+            for registration in collector_registrations
+            if getattr(registration, "authentication_required", False)
+            and isinstance(getattr(registration, "browser_realm", None), str)
+        }
+        configured_authentication_realms = {
+            item.get("id")
+            for item in authentication.get("realms", [])
+            if isinstance(authentication, dict)
+            and isinstance(item, dict)
+            and item.get("status") == "configured"
+        } if isinstance(authentication, dict) else set()
+        authentication_ready = (
+            authentication_dependency_installed
+            and authentication_error is None
+            and isinstance(authentication, dict)
+            and authentication.get("configured") is True
+            and (
+                not required_authentication_realms
+                or required_authentication_realms.issubset(configured_authentication_realms)
+            )
+        )
         collection = collection_manager.status()
         if action in {"health", "verify"}:
             try:
@@ -264,7 +286,7 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             identity = paths.dispatch_home / "installation.json"
             try:
                 installed = json.loads(identity.read_text(encoding="utf-8"))
-            except (OSError, UnicodeError, json.JSONDecodeError):
+            except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
                 installed = {}
             data["version"] = installed.get("ref") or "development"
             data["channel"] = installed.get("channel")

@@ -56,7 +56,7 @@ def _published_releases(*, opener=urlopen) -> list[dict[str, object]]:
     try:
         with opener(request, timeout=20) as response:
             payload = json.loads(response.read().decode("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
         raise InstallerError("release_lookup_failed", "could not resolve published GitHub releases") from exc
     if not isinstance(payload, list):
         raise InstallerError("release_lookup_invalid", "GitHub release response is not a list")
@@ -103,7 +103,7 @@ def _github_object(url: str, *, opener=urlopen) -> dict[str, object]:
         if len(raw) > 10 * 1024 * 1024:
             raise InstallerError("repository_authority_invalid", "canonical repository response is too large")
         payload = json.loads(raw.decode("utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError, TypeError, ValueError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError, TypeError, ValueError) as exc:
         raise InstallerError("repository_authority_unavailable", "canonical repository authority is unavailable") from exc
     if not isinstance(payload, dict):
         raise InstallerError("repository_authority_invalid", "canonical repository authority returned invalid data")

@@ -174,7 +174,7 @@ def parse_roster_api(source: bytes | bytearray | Mapping[str, Any]) -> dict[str,
             _invalid("roster_source_invalid")
         try:
             value = json.loads(bytes(source).decode("utf-8"))
-        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
             raise RosterSourceError("roster_source_invalid") from exc
         source_bytes = len(source)
     if not isinstance(value, dict) or not isinstance(value.get("eeCodes"), list) or not isinstance(value.get("employees"), list):

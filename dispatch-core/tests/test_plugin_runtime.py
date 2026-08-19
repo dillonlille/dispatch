@@ -224,6 +224,52 @@ def test_invalid_response_envelope_is_rejected(monkeypatch) -> None:
     assert error.value.code == "plugin_response_invalid"
 
 
+def test_deeply_nested_plugin_request_is_rejected_as_bounded_json(monkeypatch) -> None:
+    request: dict[str, Any] = {"leaf": True}
+    for _ in range(2000):
+        request = {"nested": request}
+    monkeypatch.setattr(
+        plugin_runtime.json,
+        "dumps",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RecursionError()),
+    )
+
+    with pytest.raises(PluginRuntimeError) as error:
+        invoke_plugin("example", request)
+
+    assert error.value.code == "plugin_request_invalid"
+    assert str(error.value) == "plugin request is not valid bounded JSON"
+
+
+def test_deeply_nested_plugin_response_is_rejected_as_bounded_json(monkeypatch) -> None:
+    response: dict[str, Any] = {}
+
+    def handle(request):
+        data: dict[str, Any] = {"leaf": True}
+        for _ in range(2000):
+            data = {"nested": data}
+        result = {**_envelope(request["action"]), "data": data}
+        response["value"] = result
+        return result
+
+    _install_metadata(monkeypatch, _EntryPoint("example", handle))
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+    original_dumps = plugin_runtime.json.dumps
+
+    def dumps(value, *args, **kwargs):
+        if response.get("value") is value:
+            raise RecursionError
+        return original_dumps(value, *args, **kwargs)
+
+    monkeypatch.setattr(plugin_runtime.json, "dumps", dumps)
+
+    with pytest.raises(PluginRuntimeError) as error:
+        invoke_plugin("example", {"action": "health"})
+
+    assert error.value.code == "plugin_response_invalid"
+    assert str(error.value) == "plugin example response is not valid bounded JSON"
+
+
 def test_service_entry_point_is_active_and_receives_core_context(monkeypatch, tmp_path) -> None:
     home = tmp_path / "home"
     paths = DispatchPaths.from_environment({"HOME": str(home)}, code_root=Path(__file__).resolve().parents[2])

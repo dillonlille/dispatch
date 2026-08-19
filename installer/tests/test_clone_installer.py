@@ -432,6 +432,65 @@ def test_release_resolver_ignores_drafts_and_prereleases() -> None:
     assert resolve_latest_release(opener=Mock(return_value=response)) == "v-new"
 
 
+def test_installer_json_boundaries_normalize_deep_nesting(monkeypatch, tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    deep_json = '{"nested":' + "[" * 2000 + "0" + "]" * 2000 + "}"
+
+    installation = layout.installation_record
+    installation.write_text(deep_json, encoding="utf-8")
+    installation.chmod(0o600)
+    monkeypatch.setattr(
+        layout_runtime.json,
+        "loads",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RecursionError()),
+    )
+    with pytest.raises(InstallerError) as installation_error:
+        read_installation(layout)
+    assert installation_error.value.code == "record_invalid"
+
+    plugin_config = layout.config / "plugins.json"
+    plugin_config.write_text(deep_json, encoding="utf-8")
+    plugin_config.chmod(0o600)
+    with pytest.raises(InstallerError) as config_error:
+        load_plugin_config(layout)
+    assert config_error.value.code == "plugin_config_invalid"
+
+    with pytest.raises(InstallerError) as selection_error:
+        lifecycle_runtime._selected_plugins(layout)
+    assert selection_error.value.code == "plugin_config_invalid"
+
+
+def test_github_json_boundaries_normalize_deep_nesting(monkeypatch) -> None:
+    deep_json = '{"nested":' + "[" * 2000 + "0" + "]" * 2000 + "}"
+    monkeypatch.setattr(
+        layout_runtime.json,
+        "loads",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RecursionError()),
+    )
+
+    response = Mock()
+    response.__enter__ = Mock(return_value=response)
+    response.__exit__ = Mock(return_value=False)
+    response.read.return_value = deep_json.encode()
+    with pytest.raises(InstallerError) as release_error:
+        resolve_latest_release(opener=Mock(return_value=response))
+    assert release_error.value.code == "release_lookup_failed"
+
+    dev_record: dict[str, object] = {
+        "channel": "dev",
+        "ref": DEVELOPMENT_BRANCH,
+        "commit": "a" * 40,
+    }
+    response = Mock()
+    response.__enter__ = Mock(return_value=response)
+    response.__exit__ = Mock(return_value=False)
+    response.read.return_value = deep_json.encode()
+    with pytest.raises(InstallerError) as authority_error:
+        canonical_record_has_remote_authority(dev_record, opener=Mock(return_value=response))
+    assert authority_error.value.code == "repository_authority_unavailable"
+
+
 def test_remote_authority_binds_dev_and_stable_records() -> None:
     commit = "a" * 40
 
