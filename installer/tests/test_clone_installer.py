@@ -201,6 +201,10 @@ def authority_response(command) -> subprocess.CompletedProcess[str] | None:
         return completed(stdout=f"{AUTHORITY_COMMIT}\n")
     if "symbolic-ref" in values:
         return completed(stdout=f"{DEVELOPMENT_BRANCH}\n")
+    if values[-2:] == ("--get", f"branch.{DEVELOPMENT_BRANCH}.remote"):
+        return completed(stdout="origin\n")
+    if values[-2:] == ("--get", f"branch.{DEVELOPMENT_BRANCH}.merge"):
+        return completed(stdout=f"refs/heads/{DEVELOPMENT_BRANCH}\n")
     return None
 
 
@@ -544,6 +548,14 @@ def test_dev_clone_is_complete_and_update_is_fast_forward_only(tmp_path: Path) -
         command[-3:] == ("merge", "--ff-only", f"origin/{DEVELOPMENT_BRANCH}")
         for command in commands
     )
+    assert (
+        "git", "-C", str(destination), "config",
+        f"branch.{DEVELOPMENT_BRANCH}.remote", "origin",
+    ) in commands
+    assert (
+        "git", "-C", str(destination), "config",
+        f"branch.{DEVELOPMENT_BRANCH}.merge", f"refs/heads/{DEVELOPMENT_BRANCH}",
+    ) in commands
 
     commands.clear()
     checkout_existing(destination, channel="stable", ref="1.2.3", run=fake_run)
@@ -607,6 +619,8 @@ def test_real_git_switches_shallow_stable_clone_to_tracking_dev(tmp_path: Path) 
     )
     subprocess.run(("git", "-C", str(clone), "fetch", "--depth", "1", "origin", "tag", "1.0.0"), check=True)
     subprocess.run(("git", "-C", str(clone), "checkout", "--detach", "refs/tags/1.0.0"), check=True)
+    subprocess.run(("git", "-C", str(clone), "config", f"branch.{DEVELOPMENT_BRANCH}.remote", "malicious"), check=True)
+    subprocess.run(("git", "-C", str(clone), "config", f"branch.{DEVELOPMENT_BRANCH}.merge", "refs/heads/wrong"), check=True)
     checkout_existing(clone, channel="dev", ref=DEVELOPMENT_BRANCH, repository_url=upstream.as_uri())
 
     branch = subprocess.run(
@@ -616,6 +630,13 @@ def test_real_git_switches_shallow_stable_clone_to_tracking_dev(tmp_path: Path) 
         text=True,
     ).stdout.strip()
     assert branch == DEVELOPMENT_BRANCH
+    upstream_ref = subprocess.run(
+        ("git", "-C", str(clone), "rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    assert upstream_ref == f"origin/{DEVELOPMENT_BRANCH}"
     assert current_commit(clone) == expected
     history_count = subprocess.run(
         ("git", "-C", str(clone), "rev-list", "--count", DEVELOPMENT_BRANCH),
@@ -650,10 +671,41 @@ def test_staged_dev_checkout_must_match_github_fetch_head(tmp_path: Path) -> Non
             return completed(stdout=f"{'f' * 40}\n")
         if "symbolic-ref" in values:
             return completed(stdout=f"{DEVELOPMENT_BRANCH}\n")
+        if values[-2:] == ("--get", f"branch.{DEVELOPMENT_BRANCH}.remote"):
+            return completed(stdout="origin\n")
+        if values[-2:] == ("--get", f"branch.{DEVELOPMENT_BRANCH}.merge"):
+            return completed(stdout=f"refs/heads/{DEVELOPMENT_BRANCH}\n")
         return completed()
 
     with pytest.raises(InstallerError, match="exactly track"):
         verify_checkout_authority(clone, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
+
+
+def test_staged_dev_checkout_rejects_wrong_upstream_tracking(tmp_path: Path) -> None:
+    clone = tmp_path / "clone"
+    (clone / ".git").mkdir(parents=True)
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        if values[-2:] == ("rev-parse", "--is-shallow-repository"):
+            return completed(stdout="false\n")
+        if values[-2:] in {("rev-parse", "HEAD"), ("rev-parse", "FETCH_HEAD")}:
+            return completed(stdout=f"{AUTHORITY_COMMIT}\n")
+        if "symbolic-ref" in values:
+            return completed(stdout=f"{DEVELOPMENT_BRANCH}\n")
+        if values[-2:] == ("--get", f"branch.{DEVELOPMENT_BRANCH}.remote"):
+            return completed(stdout="malicious\n")
+        if values[-2:] == ("--get", f"branch.{DEVELOPMENT_BRANCH}.merge"):
+            return completed(stdout="refs/heads/wrong\n")
+        return completed()
+
+    with pytest.raises(InstallerError, match="exactly track origin/main"):
+        verify_checkout_authority(
+            clone,
+            channel="dev",
+            ref=DEVELOPMENT_BRANCH,
+            run=fake_run,
+        )
 
 
 def test_install_from_staged_clone_writes_atomic_record(tmp_path: Path) -> None:
@@ -1655,6 +1707,17 @@ def test_uninstall_preserves_user_data_and_purge_removes_root(tmp_path: Path) ->
     ).stdout.strip()
     subprocess.run(
         ("git", "-C", str(layout.clone), "update-ref", f"refs/remotes/origin/{DEVELOPMENT_BRANCH}", commit),
+        check=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(layout.clone), "config", f"branch.{DEVELOPMENT_BRANCH}.remote", "origin"),
+        check=True,
+    )
+    subprocess.run(
+        (
+            "git", "-C", str(layout.clone), "config",
+            f"branch.{DEVELOPMENT_BRANCH}.merge", f"refs/heads/{DEVELOPMENT_BRANCH}",
+        ),
         check=True,
     )
     (layout.venv / "bin").mkdir(parents=True)
