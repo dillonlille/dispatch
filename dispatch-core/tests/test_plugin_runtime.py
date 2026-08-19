@@ -291,6 +291,31 @@ def test_context_entry_point_must_accept_context(monkeypatch) -> None:
     assert error.value.code == "plugin_entry_point_invalid"
 
 
+def test_plugin_invocation_discards_direct_stdout(monkeypatch, capsys) -> None:
+    def handler(request):
+        print("DIRECT_STDOUT_CONTAMINATION")
+        return _envelope(request["action"])
+
+    _install_metadata(monkeypatch, _EntryPoint("example", handler))
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+
+    result = invoke_plugin("example", {"action": "summary"})
+    assert result["ok"] is True
+    assert capsys.readouterr().out == ""
+
+
+def test_plugin_base_exceptions_are_bounded(monkeypatch) -> None:
+    def handler(request):
+        raise KeyboardInterrupt
+
+    _install_metadata(monkeypatch, _EntryPoint("example", handler))
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+
+    with pytest.raises(PluginRuntimeError) as error:
+        invoke_plugin("example", {"action": "summary"})
+    assert error.value.code == "plugin_invocation_failed"
+
+
 def test_service_context_factories_keep_managers_in_process(monkeypatch, tmp_path) -> None:
     paths = DispatchPaths.from_environment({"HOME": str(tmp_path / "home")}, code_root=Path(__file__).resolve().parents[2])
     managers = []

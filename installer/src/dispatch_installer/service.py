@@ -92,6 +92,9 @@ def _plugin_receipt(layout: InstallLayout, plugin_id: str, content: bytes, statu
 
 
 def _read_plugin_receipt(layout: InstallLayout, plugin_id: str) -> dict[str, object] | None:
+    root = plugin_service_receipt_path(layout, plugin_id).parent
+    if not _plugin_receipt_root_is_owned(root):
+        return None
     try:
         payload = read_json(plugin_service_receipt_path(layout, plugin_id), maximum=16 * 1024)
     except InstallerError:
@@ -109,6 +112,20 @@ def _read_plugin_receipt(layout: InstallLayout, plugin_id: str) -> dict[str, obj
     ):
         return None
     return payload
+
+
+def _plugin_receipt_root_is_owned(path: Path) -> bool:
+    try:
+        assert_user_owned_directory(path, "plugin service state")
+        details = path.lstat()
+    except (InstallerError, OSError):
+        return False
+    return (
+        not path.is_symlink()
+        and stat.S_ISDIR(details.st_mode)
+        and details.st_uid == os.geteuid()
+        and stat.S_IMODE(details.st_mode) == 0o700
+    )
 
 
 def _plugin_receipt_is_owned(layout: InstallLayout, plugin_id: str) -> bool:
@@ -307,14 +324,21 @@ def status_plugin_service(
     active = run(("systemctl", "--user", "is-active", "--quiet", service), None).returncode == 0
     enabled = run(("systemctl", "--user", "is-enabled", "--quiet", service), None).returncode == 0
     receipt = _read_plugin_receipt(layout, plugin_id)
+    receipt_status = receipt.get("status") if receipt else None
+    if active and enabled and receipt_status == "enabled":
+        status = "ready"
+    elif not active and not enabled and receipt_status in {"prepared", "disabled"}:
+        status = "prepared"
+    else:
+        status = "incomplete"
     return {
-        "status": "ready" if active and enabled else ("prepared" if not active and not enabled else "incomplete"),
+        "status": status,
         "plugin_id": plugin_id,
         "unit": str(path),
         "service": service,
         "active": active,
         "enabled": enabled,
-        "receipt_status": receipt.get("status") if receipt else None,
+        "receipt_status": receipt_status,
     }
 
 
@@ -342,15 +366,29 @@ def remove_plugin_service(
     content = path.read_bytes()
     path.unlink()
     if run(("systemctl", "--user", "daemon-reload"), None).returncode != 0:
+        rollback_failure: BaseException | None = None
         try:
             _atomic_bytes(path, content)
             if previous_receipt is not None:
                 atomic_json(receipt_path, previous_receipt)
+        except BaseException as exc:
+            rollback_failure = exc
+        try:
             reload_result = run(("systemctl", "--user", "daemon-reload"), None)
-            if reload_result.returncode == 0 and previous_receipt is not None and previous_receipt.get("status") == "enabled":
-                run(("systemctl", "--user", "enable", "--now", service), None)
-        finally:
-            raise InstallerError("plugin_service_reload_failed", "systemd user manager could not reload")
+            if reload_result.returncode != 0:
+                raise InstallerError("plugin_service_rollback_failed", "systemd reload failed during plugin service rollback")
+            if previous_receipt is not None and previous_receipt.get("status") == "enabled":
+                restored = run(("systemctl", "--user", "enable", "--now", service), None)
+                if restored.returncode != 0:
+                    raise InstallerError("plugin_service_rollback_failed", "plugin service restart failed during rollback")
+        except BaseException as exc:
+            rollback_failure = rollback_failure or exc
+        if rollback_failure is not None:
+            raise InstallerError(
+                "plugin_service_rollback_failed",
+                "plugin service removal failed and its previous state could not be restored",
+            ) from rollback_failure
+        raise InstallerError("plugin_service_reload_failed", "systemd user manager could not reload")
     receipt_path.unlink(missing_ok=True)
 
 
@@ -360,8 +398,9 @@ def inspect_plugin_services(
     *,
     run: RunCommand = _run,
 ) -> dict[str, object]:
+    required = set(plugin_ids)
     try:
-        ids = plugin_service_ids(layout, plugin_ids)
+        ids = plugin_service_ids(layout, required)
     except InstallerError as exc:
         return {"status": "unsafe", "services": {}, "error": str(exc)[:256]}
     services: dict[str, object] = {}
@@ -371,8 +410,10 @@ def inspect_plugin_services(
         except (InstallerError, OSError) as exc:
             services[plugin_id] = {"status": "unsafe", "plugin_id": plugin_id, "error": str(exc)[:256]}
     healthy = all(
-        isinstance(item, dict) and item.get("status") in {"ready", "prepared", "missing"}
-        for item in services.values()
+        isinstance(item, dict)
+        and item.get("status") in {"ready", "prepared", "missing"}
+        and not (plugin_id in required and item.get("status") == "missing")
+        for plugin_id, item in services.items()
     )
     return {"status": "ready" if healthy else "unsafe", "services": services}
 
@@ -381,7 +422,7 @@ def plugin_service_ids(layout: InstallLayout, plugin_ids: Iterable[str] = ()) ->
     ids = {_plugin_service_id(plugin_id) for plugin_id in plugin_ids}
     receipt_root = layout.state / "plugins" / "services"
     if receipt_root.exists() or receipt_root.is_symlink():
-        if receipt_root.is_symlink() or not receipt_root.is_dir():
+        if not _plugin_receipt_root_is_owned(receipt_root):
             raise InstallerError("plugin_service_unsafe", "plugin service receipt root is unsafe")
         for receipt in receipt_root.glob("*.json"):
             if receipt.is_symlink() or not receipt.is_file():

@@ -59,11 +59,13 @@ from dispatch_installer.setup import (
 from dispatch_installer.service import (
     disable_plugin_service,
     enable_plugin_service,
+    inspect_plugin_services,
     inspect_user_service,
     install_user_service,
     legacy_service_unit,
     legacy_service_unit_is_owned,
     remove_legacy_user_service,
+    remove_plugin_service,
     remove_user_service,
     plugin_service_path,
     plugin_service_receipt_path,
@@ -1898,6 +1900,7 @@ def test_uninstall_rolls_back_plugin_service_after_later_failure(
     layout.prepare()
     layout.clone.mkdir()
     prepare_plugin_service(layout, "worker")
+    enable_plugin_service(layout, "worker", run=lambda *args, **kwargs: completed())
     commands: list[tuple[str, ...]] = []
     service_state = {"active": True, "enabled": True}
 
@@ -3189,9 +3192,23 @@ def test_long_running_selection_prepares_secret_free_unit_and_deselection_remove
     layout.venv_python.chmod(0o700)
     fake_site_packages(layout.venv_python)
     commands: list[tuple[str, ...]] = []
+    service_state = {"active": False, "enabled": False}
 
     def fake_run(command, cwd=None):
-        commands.append(tuple(str(value) for value in command))
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        if values[:3] == ("systemctl", "--user", "is-active"):
+            return completed(returncode=0 if service_state["active"] else 1)
+        if values[:3] == ("systemctl", "--user", "is-enabled"):
+            return completed(returncode=0 if service_state["enabled"] else 1)
+        if values[:3] == ("systemctl", "--user", "enable"):
+            service_state.update(active=True, enabled=True)
+        elif values[:3] == ("systemctl", "--user", "restart"):
+            service_state["active"] = True
+        elif values[:3] == ("systemctl", "--user", "disable"):
+            service_state.update(active=False, enabled=False)
+        elif values[:3] == ("systemctl", "--user", "stop"):
+            service_state["active"] = False
         return completed()
 
     result = configure_plugins(layout, ["worker"], run=fake_run)
@@ -3369,3 +3386,86 @@ def test_replacement_venv_rejects_conflicting_plugin_pins(tmp_path: Path) -> Non
             run=fake_run,
         )
     assert error.value.code == "plugin_dependency_conflict"
+
+
+def test_remove_plugin_service_rejects_symlinked_receipt_root(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    receipt_parent = layout.state / "plugins"
+    receipt_parent.mkdir(mode=0o700)
+    external = tmp_path / "external-receipts"
+    external.mkdir(mode=0o700)
+    services = receipt_parent / "services"
+    services.symlink_to(external, target_is_directory=True)
+    receipt = external / "worker.json"
+    content = plugin_service_unit(layout, "worker")
+    atomic_json(
+        receipt,
+        {
+            "schema_version": 1,
+            "plugin_id": "worker",
+            "unit": str(plugin_service_path(layout, "worker")),
+            "unit_sha256": hashlib.sha256(content).hexdigest(),
+            "service": "dispatch-plugin-worker.service",
+            "status": "prepared",
+            "contains_secrets": False,
+        },
+    )
+
+    with pytest.raises(InstallerError) as error:
+        remove_plugin_service(layout, "worker", run=lambda *args, **kwargs: completed())
+    assert error.value.code == "plugin_service_unsafe"
+    assert receipt.exists()
+
+
+def test_remove_plugin_service_reports_failed_restart_rollback(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    prepare_plugin_service(layout, "worker")
+    enable_plugin_service(layout, "worker", run=lambda *args, **kwargs: completed())
+    reloads = 0
+
+    def fake_run(command, cwd=None):
+        nonlocal reloads
+        values = tuple(str(value) for value in command)
+        if values[:3] == ("systemctl", "--user", "daemon-reload"):
+            reloads += 1
+            return completed(returncode=1 if reloads == 1 else 0)
+        if values[:3] == ("systemctl", "--user", "enable"):
+            return completed(returncode=1)
+        return completed()
+
+    with pytest.raises(InstallerError) as error:
+        remove_plugin_service(layout, "worker", run=fake_run)
+    assert error.value.code == "plugin_service_rollback_failed"
+    assert plugin_service_path(layout, "worker").exists()
+    assert plugin_service_receipt_path(layout, "worker").exists()
+
+
+def test_enabled_receipt_with_stopped_service_is_incomplete(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    prepare_plugin_service(layout, "worker")
+    enable_plugin_service(layout, "worker", run=lambda *args, **kwargs: completed())
+
+    status = status_plugin_service(
+        layout,
+        "worker",
+        run=lambda *args, **kwargs: completed(returncode=1),
+    )
+    assert status["receipt_status"] == "enabled"
+    assert status["status"] == "incomplete"
+
+
+def test_required_plugin_service_cannot_be_missing(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    report = inspect_plugin_services(
+        layout,
+        ["worker"],
+        run=lambda *args, **kwargs: completed(returncode=1),
+    )
+    assert report["status"] == "unsafe"
+    services = report["services"]
+    assert isinstance(services, dict)
+    assert services["worker"]["status"] == "missing"

@@ -8,6 +8,7 @@ import json
 import os
 import re
 import sys
+from contextlib import redirect_stdout
 from dataclasses import dataclass, field
 from typing import Any, Callable, cast
 
@@ -30,12 +31,31 @@ _PLUGIN_ID = re.compile(r"[a-z][a-z0-9-]{0,63}")
 _ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _ENVELOPE_KEYS = {"ok", "action", "status", "data", "freshness", "delivery", "error"}
 _MAX_INTERACTIVE_TEXT = 4096
+_MAX_PLUGIN_STDOUT = 64 * 1024
 
 
 class PluginRuntimeError(RuntimeError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
         self.code = code
+
+
+class _BoundedPluginStdout:
+    """Discard direct plugin stdout while bounding accidental write volume."""
+
+    def __init__(self) -> None:
+        self.size = 0
+
+    def write(self, value: str) -> int:
+        if not isinstance(value, str):
+            raise TypeError("plugin stdout must be text")
+        self.size += len(value.encode("utf-8", errors="replace"))
+        if self.size > _MAX_PLUGIN_STDOUT:
+            raise PluginRuntimeError("plugin_output_invalid", "plugin wrote too much direct stdout")
+        return len(value)
+
+    def flush(self) -> None:
+        return None
 
 
 def _default_prompt(message: str) -> str:
@@ -497,7 +517,8 @@ def invoke_service(
         service_context.plugin_id = plugin_id
     try:
         try:
-            return service.handle(service_context)
+            with redirect_stdout(_BoundedPluginStdout()):
+                return service.handle(service_context)
         except (KeyboardInterrupt, EOFError) as exc:
             raise PluginRuntimeError("plugin_service_interrupted", "plugin service was interrupted") from exc
         except BaseException as exc:
@@ -531,7 +552,8 @@ def invoke_configurator(
     if not configurator_context.plugin_id:
         configurator_context.plugin_id = plugin_id
     try:
-        result = configurator.handle(configurator_context)
+        with redirect_stdout(_BoundedPluginStdout()):
+            result = configurator.handle(configurator_context)
     except (KeyboardInterrupt, EOFError) as exc:
         raise PluginRuntimeError("plugin_configuration_cancelled", "plugin configuration was cancelled") from exc
     except BaseException as exc:
@@ -623,8 +645,9 @@ def invoke_plugin(plugin_id: str, request: dict[str, Any]) -> dict[str, Any]:
     if plugin is None:
         raise PluginRuntimeError("plugin_not_active", f"plugin {plugin_id} is not active")
     try:
-        result = plugin.handle(request)
-    except Exception as exc:
+        with redirect_stdout(_BoundedPluginStdout()):
+            result = plugin.handle(request)
+    except BaseException as exc:
         raise PluginRuntimeError("plugin_invocation_failed", f"plugin {plugin_id} invocation failed") from exc
     _json_bytes(result, limit=1024 * 1024, message=f"plugin {plugin_id} response is not valid bounded JSON", code="plugin_response_invalid")
     return _validate_response(plugin_id, result)

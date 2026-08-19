@@ -242,6 +242,30 @@ def test_auxiliary_entry_point_must_accept_context(tmp_path: Path) -> None:
     assert any("must accept one context argument" in failure for failure in result.failures)
 
 
+def test_entry_point_rejects_symlinked_source_parent(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    external = tmp_path / "external"
+    external.mkdir()
+    (external / "__init__.py").write_text("", encoding="utf-8")
+    (external / "service.py").write_text(
+        "def handle(request):\n    return {}\n",
+        encoding="utf-8",
+    )
+    (root / "src" / "linked").symlink_to(external, target_is_directory=True)
+    project = root / "pyproject.toml"
+    project.write_text(
+        project.read_text(encoding="utf-8").replace(
+            'example = "example_plugin.service:handle"',
+            'example = "linked.service:handle"',
+        ),
+        encoding="utf-8",
+    )
+
+    result = MODULE.audit_owner(root)
+
+    assert any("entry point target is not a source callable" in failure for failure in result.failures)
+
+
 def test_manifest_is_optional_for_source_plugin(tmp_path: Path) -> None:
     root = fixture(tmp_path)
     (root / "dispatch-plugin.yaml").unlink()

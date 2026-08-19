@@ -12,8 +12,9 @@ _SECRET_KEY = re.compile(
 _PATTERNS = (
     (re.compile(r"xox[baprs]-[A-Za-z0-9-]+"), "[REDACTED_SLACK_TOKEN]"),
     (re.compile(r"xapp-[A-Za-z0-9-]+"), "[REDACTED_SLACK_APP_TOKEN]"),
+    (re.compile(r"(?i)(authorization\s*[:=]\s*bearer\s+)[^\s,;]+"), r"\1[REDACTED_BEARER]"),
     (re.compile(r"(?i)(anti-csrftoken-a2z\s*[:=]\s*)[^\s,;]+"), r"\1[REDACTED_CSRF]"),
-    (re.compile(r"(?i)((?:token|secret|api[_-]?key|connection[_-]?string)\s*[:=]\s*)[^\s,;]+"), r"\1[REDACTED]"),
+    (re.compile(r"(?i)((?:csrf|token|secret|api[_-]?key|connection[_-]?string)\s*[:=]\s*)[^\s,;]+"), r"\1[REDACTED]"),
     (re.compile(r"(?i)((?:set-)?cookie\s*[:=]\s*)[^\r\n]+"), r"\1[REDACTED_COOKIE]"),
     (re.compile(r"(?i)\b(session-id|session-token|ubid-main|at-main|sess-at-main)\s*=\s*[^\s,;]+"), r"\1=[REDACTED_COOKIE]"),
     (re.compile(r"(?i)(password\s*[:=]\s*)[^\s,;]+"), r"\1[REDACTED_PASSWORD]"),

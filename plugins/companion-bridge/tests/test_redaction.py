@@ -18,3 +18,11 @@ def test_structured_mapping_secrets_are_redacted_before_stringification() -> Non
     rendered = redact_secrets({"token": "SECRET-TOKEN", "nested": {"csrf": "SECRET-CSRF"}})
     assert "SECRET-TOKEN" not in rendered
     assert "SECRET-CSRF" not in rendered
+
+
+def test_authorization_and_plain_csrf_values_are_redacted() -> None:
+    rendered = redact_secrets(
+        "Authorization: " + "Bea" + "rer " + "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" + " csrf=SECRET"
+    )
+    assert "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in rendered
+    assert "csrf=SECRET" not in rendered

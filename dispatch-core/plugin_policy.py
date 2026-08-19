@@ -141,7 +141,24 @@ def _target_path(root: Path, source_root: Path, target: str) -> tuple[Path, str]
     module_path = source_root / f"{relative}.py"
     if not module_path.is_file():
         module_path = source_root / relative / "__init__.py"
-    if not module_path.is_file() or module_path.is_symlink():
+    try:
+        canonical_source = source_root.resolve(strict=True)
+        canonical_module = module_path.resolve(strict=True)
+        relative_module = module_path.relative_to(source_root)
+    except (OSError, ValueError):
+        return None
+    cursor = source_root
+    if source_root.is_symlink():
+        return None
+    for part in relative_module.parts:
+        cursor = cursor / part
+        if cursor.is_symlink():
+            return None
+    if (
+        not module_path.is_file()
+        or module_path.is_symlink()
+        or not canonical_module.is_relative_to(canonical_source)
+    ):
         return None
     return module_path, attribute
 
@@ -150,7 +167,7 @@ def _load_target(root: Path, source_root: Path, target: str) -> Any | None:
     resolved = _target_path(root, source_root, target)
     if resolved is None:
         return None
-    _module_path, attribute = resolved
+    module_path, attribute = resolved
     module_name, _ = target.split(":", 1)
     package_name = module_name.split(".", 1)[0]
     for loaded_name, loaded_module in list(sys.modules.items()):
@@ -162,7 +179,11 @@ def _load_target(root: Path, source_root: Path, target: str) -> Any | None:
     sys.path.insert(0, str(source_root))
     try:
         importlib.invalidate_caches()
-        value: Any = importlib.import_module(module_name)
+        module: Any = importlib.import_module(module_name)
+        loaded_file = getattr(module, "__file__", None)
+        if not isinstance(loaded_file, str) or Path(loaded_file).resolve(strict=True) != module_path.resolve(strict=True):
+            return None
+        value: Any = module
         for part in attribute.split("."):
             value = getattr(value, part)
         return value
