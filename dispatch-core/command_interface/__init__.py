@@ -161,7 +161,7 @@ def _collection_submission(args: argparse.Namespace, store: CollectionTaskStore)
         raise CommandInterfaceError("collection_request_invalid", "collection parameters are too large")
     try:
         parameters = json.loads(args.parameters)
-    except json.JSONDecodeError as exc:
+    except (json.JSONDecodeError, RecursionError) as exc:
         raise CommandInterfaceError("collection_request_invalid", "collection parameters must be valid JSON") from exc
     if type(parameters) is not dict:
         raise CommandInterfaceError("collection_request_invalid", "collection parameters must be a JSON object")

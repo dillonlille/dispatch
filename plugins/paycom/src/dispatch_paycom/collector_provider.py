@@ -3,8 +3,8 @@ from __future__ import annotations
 
 from collection_manager import CollectorRegistration
 
-from .roster.collector import collect_roster
-from .timecards.collector import collect_timecards
+from .roster.collector import collect_roster, verify_roster_publication
+from .timecards.collector import collect_timecards, verify_timecard_publication
 
 PLUGIN_ID = "paycom"
 PLUGIN_RELEASE = "0.1.0"
@@ -18,6 +18,7 @@ def roster_registration() -> CollectorRegistration:
         runner=collect_roster,
         browser_realm="paycom-client",
         authentication_required=True,
+        publication_verifier=verify_roster_publication,
         execution_timeout_seconds=450,
     )
 
@@ -30,6 +31,7 @@ def timecards_registration() -> CollectorRegistration:
         runner=collect_timecards,
         browser_realm="paycom-client",
         authentication_required=True,
+        publication_verifier=verify_timecard_publication,
         execution_timeout_seconds=3_600,
     )
 

@@ -5,13 +5,15 @@ from dataclasses import dataclass
 import json
 import os
 from pathlib import Path
+import re
 import sqlite3
-import stat
+
 from typing import Any, Iterable
 from uuid import uuid4
 
 from .artifacts import TimecardArtifact, verify_artifact_run
 from .period import Period, canonical_timecard_url, is_captured_timecard_url, parse_period_key, period_from_end, validate_code
+from ..filesystem import FilesystemError, ensure_private_directory, validate_private_regular_file
 
 
 class TimecardStorageError(RuntimeError):
@@ -29,27 +31,56 @@ class TimecardPublication:
 
 
 def _secure_db(path: Path) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    os.chmod(path.parent, 0o700)
-    details = path.parent.lstat()
-    if stat.S_ISLNK(details.st_mode) or not stat.S_ISDIR(details.st_mode) or details.st_uid != os.geteuid() or stat.S_IMODE(details.st_mode) & 0o077:
-        raise TimecardStorageError("storage_root_invalid")
+    try:
+        ensure_private_directory(path.parent)
+    except FilesystemError as exc:
+        raise TimecardStorageError("storage_root_invalid") from exc
     if path.exists() or path.is_symlink():
-        details = path.lstat()
-        if stat.S_ISLNK(details.st_mode) or not stat.S_ISREG(details.st_mode) or details.st_uid != os.geteuid() or details.st_nlink != 1:
-            raise TimecardStorageError("schema_invalid")
-    if path.exists():
-        os.chmod(path, 0o600)
+        try:
+            validate_private_regular_file(path)
+        except FilesystemError as exc:
+            raise TimecardStorageError("schema_invalid") from exc
 
 
 def _json(value: Any) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _number(value: Any) -> float:
+    if type(value) not in (int, float):
+        raise ValueError("timecard_projection_invalid")
+    return float(value)
+
+
+def _nullable_number(value: Any) -> float | None:
+    return None if value is None else _number(value)
+
+
+def _flag(value: Any) -> int:
+    if type(value) is not int or value not in (0, 1):
+        raise ValueError("timecard_projection_invalid")
+    return value
+
+
+def _record_flag(value: Any) -> int:
+    if type(value) is not bool:
+        raise ValueError("timecard_projection_invalid")
+    return int(value)
+
+
+def _stored_json(value: Any) -> str:
+    if type(value) is not str:
+        raise ValueError("timecard_projection_invalid")
+    return _json(json.loads(value))
+
+
 class TimecardStore:
     def __init__(self, path: Path | str) -> None:
         self.path = Path(path)
         _secure_db(self.path)
+        if not self.path.exists():
+            descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            os.close(descriptor)
         self.db = sqlite3.connect(self.path, timeout=5.0)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys=ON")
@@ -77,12 +108,17 @@ class TimecardStore:
 
     def publish(self, *, period: Period, roster_revision: str, roster_source_sha256: str, artifact: TimecardArtifact, employees: list[dict[str, Any]], replace: bool = False, collected_at: str) -> TimecardPublication:
         period = parse_period_key(period.key)
+        if type(replace) is not bool:
+            raise TimecardStorageError("replace_invalid")
         verify_artifact_run(artifact.directory, [item["employeeCode"] for item in employees])
-        if not isinstance(roster_revision, str) or not roster_revision or len(roster_revision) > 100 or not isinstance(roster_source_sha256, str) or len(roster_source_sha256) != 64:
+        if not isinstance(roster_revision, str) or not roster_revision or len(roster_revision) > 100 or not isinstance(roster_source_sha256, str) or re.fullmatch(r"[0-9a-f]{64}", roster_source_sha256) is None:
             raise TimecardStorageError("timecard_storage_invalid")
         current = self.active_run(period.end)
         if current is not None and current["manifest_sha256"] == artifact.manifest_sha256:
-            return TimecardPublication("already_current", str(current["run_id"]), int(current["employee_count"]), int(current["day_count"]), int(current["punch_count"]), int(current["missing_day_count"]))
+            publication = TimecardPublication("already_current", str(current["run_id"]), int(current["employee_count"]), int(current["day_count"]), int(current["punch_count"]), int(current["missing_day_count"]))
+            if not self.verify_projection(period.end, roster_revision, roster_source_sha256, artifact, employees):
+                raise TimecardStorageError("post_verification_failed")
+            return publication
         if current is not None and not replace:
             raise TimecardStorageError("replacement_required")
         expected_codes = sorted(item["employeeCode"] for item in employees)
@@ -100,6 +136,16 @@ class TimecardStore:
         day_count = sum(len(item["record"]["days"]) for item in employees)
         punch_count = sum(sum(len(day["punches"]) for day in item["record"]["days"]) for item in employees)
         missing_count = sum(sum(bool(day["missingPunch"]) for day in item["record"]["days"]) for item in employees)
+        manifest = artifact.manifest
+        if (
+            manifest.get("employeeCount") != len(employees)
+            or manifest.get("expectedEmployeeCount") != len(employees)
+            or manifest.get("timecardUrlCount") != len(employees)
+            or manifest.get("dayCount") != day_count
+            or manifest.get("punchCount") != punch_count
+            or manifest.get("missingDayCount") != missing_count
+        ):
+            raise TimecardStorageError("timecard_projection_invalid")
         try:
             self.db.execute("BEGIN IMMEDIATE")
             run_cursor = self.db.execute("INSERT INTO runs(run_id,period_start,period_end,period_key,revision,roster_revision,roster_source_sha256,artifact_directory,manifest_sha256,employee_count,day_count,punch_count,missing_day_count,collected_at) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)", (run_id, period.start, period.end, period.key, revision, roster_revision, roster_source_sha256, str(artifact.directory), artifact.manifest_sha256, len(employees), day_count, punch_count, missing_count, collected_at))
@@ -124,12 +170,186 @@ class TimecardStore:
         return publication
 
     def verify_projection(self, period_end: str, roster_revision: str, roster_source_sha256: str, artifact: TimecardArtifact, employees: list[dict[str, Any]]) -> bool:
-        run = self.active_run(period_end)
-        if run is None or run["roster_revision"] != roster_revision or run["roster_source_sha256"] != roster_source_sha256 or run["manifest_sha256"] != artifact.manifest_sha256 or int(run["employee_count"]) != len(employees):
+        """Verify every normalized persisted field and its source binding."""
+        try:
+            period = parse_period_key(artifact.manifest["periodKey"])
+            if period.end != period_end or not isinstance(roster_revision, str) or not roster_revision or re.fullmatch(r"[0-9a-f]{64}", roster_source_sha256) is None:
+                return False
+            expected_codes = sorted(validate_code(item["employeeCode"]) for item in employees)
+            if not expected_codes or expected_codes != sorted(set(expected_codes)):
+                return False
+            verified_artifact = verify_artifact_run(artifact.directory, expected_codes)
+            if verified_artifact.manifest_sha256 != artifact.manifest_sha256 or verified_artifact.manifest != artifact.manifest or verified_artifact.entries != artifact.entries:
+                return False
+            entries = {entry["employeeCode"]: entry for entry in verified_artifact.entries}
+            if set(entries) != set(expected_codes):
+                return False
+            expected_employee_rows: list[tuple[Any, ...]] = []
+            expected_days: list[tuple[Any, ...]] = []
+            expected_punches: list[tuple[Any, ...]] = []
+            expected_weekly: list[tuple[Any, ...]] = []
+            for item in employees:
+                code = item["employeeCode"]
+                record = item["record"]
+                entry = entries.get(code)
+                if (
+                    not isinstance(item.get("employeeName"), str)
+                    or not isinstance(record, dict)
+                    or record.get("employeeCode") != code
+                    or record.get("periodStart") != period.start
+                    or record.get("periodEnd") != period.end
+                    or record.get("periodKey") != period.key
+                    or not is_captured_timecard_url(record.get("sourceUrl", ""), employee_code=code, period=period)
+                    or entry is None
+                    or entry.get("timecardUrl") != canonical_timecard_url(code, period)
+                ):
+                    return False
+                expected_employee_rows.append(
+                    (
+                        code,
+                        item["employeeName"],
+                        canonical_timecard_url(code, period),
+                        _number(record["periodTotalHours"]),
+                        _json(record["approvals"]),
+                        _json(record["attestations"]),
+                        _json(record["mealWaivers"]),
+                        _json(record.get("additionalRows", [])),
+                        str(artifact.directory / entry["html"]["path"]),
+                        entry["html"]["sha256"],
+                        str(artifact.directory / entry["json"]["path"]),
+                        entry["json"]["sha256"],
+                    )
+                )
+                for day in record["days"]:
+                    expected_days.append(
+                        (
+                            code,
+                            day["date"],
+                            day["label"],
+                            day["payCode"],
+                            day["allocation1"],
+                            day["allocation2"],
+                            _nullable_number(day["hours"]),
+                            _nullable_number(day["totalHours"]),
+                            _nullable_number(day["dollars"]),
+                            day["exceptionText"],
+                            None if day["waiverChecked"] is None else _record_flag(day["waiverChecked"]),
+                            _json(day["comments"]),
+                            _record_flag(day["missingPunch"]),
+                            _json(day["unresolvedSlots"]),
+                        )
+                    )
+                    for punch in day["punches"]:
+                        expected_punches.append(
+                            (
+                                code,
+                                day["date"],
+                                punch["ordinal"],
+                                punch["rowIndex"],
+                                punch["slot"],
+                                punch["kind"],
+                                punch["displayTime"],
+                                punch["actualTime"],
+                                punch["roundedTime"],
+                                punch["clockName"],
+                                punch["clockCode"],
+                                punch["comment"],
+                                _record_flag(punch["provenanceAvailable"]),
+                                punch["changeRequestStatus"],
+                                _record_flag(punch["approved"]),
+                            )
+                        )
+                expected_weekly.extend((code, index, _number(hours)) for index, hours in enumerate(record["weeklyTotals"], 1))
+            expected_employee_rows.sort(key=lambda row: row[0])
+            expected_days.sort(key=lambda row: (row[0], row[1]))
+            expected_punches.sort(key=lambda row: (row[0], row[1], row[2]))
+            expected_weekly.sort(key=lambda row: (row[0], row[1]))
+            run = self.active_run(period.end)
+            if run is None or (
+                run["period_start"],
+                run["period_end"],
+                run["period_key"],
+                run["roster_revision"],
+                run["roster_source_sha256"],
+                run["artifact_directory"],
+                run["manifest_sha256"],
+            ) != (
+                period.start,
+                period.end,
+                period.key,
+                roster_revision,
+                roster_source_sha256,
+                str(artifact.directory),
+                artifact.manifest_sha256,
+            ):
+                return False
+            expected_counts = {
+                "employee_count": len(expected_employee_rows),
+                "day_count": len(expected_days),
+                "punch_count": len(expected_punches),
+                "missing_day_count": sum(row[12] for row in expected_days),
+            }
+            if any(type(run[key]) is not int or run[key] != value for key, value in expected_counts.items()):
+                return False
+            if any(verified_artifact.manifest.get(key) != value for key, value in {
+                "employeeCount": expected_counts["employee_count"],
+                "dayCount": expected_counts["day_count"],
+                "punchCount": expected_counts["punch_count"],
+                "missingDayCount": expected_counts["missing_day_count"],
+                "timecardUrlCount": expected_counts["employee_count"],
+            }.items()):
+                return False
+            employee_rows = self.db.execute(
+                """SELECT employee_code, employee_name, timecard_url, period_total_hours,
+                          approvals_json, attestations_json, meal_waivers_json, additional_rows_json,
+                          html_path, html_sha256, json_path, json_sha256
+                     FROM employee_timecards WHERE run_id=? ORDER BY employee_code""",
+                (run["id"],),
+            ).fetchall()
+            actual_employee_rows = [
+                (
+                    row[0], row[1], row[2], _number(row[3]),
+                    _stored_json(row[4]), _stored_json(row[5]), _stored_json(row[6]), _stored_json(row[7]),
+                    row[8], row[9], row[10], row[11],
+                )
+                for row in employee_rows
+            ]
+            day_rows = self.db.execute(
+                """SELECT employee_code, work_date, day_label, pay_code, allocation1, allocation2,
+                          hours, total_hours, dollars, exception_text, waiver_checked, comments_json,
+                          missing_punch, unresolved_slots_json
+                     FROM days WHERE run_id=? ORDER BY employee_code, work_date""",
+                (run["id"],),
+            ).fetchall()
+            actual_days = [
+                (
+                    row[0], row[1], row[2], row[3], row[4], row[5],
+                    _nullable_number(row[6]),
+                    _nullable_number(row[7]),
+                    _nullable_number(row[8]),
+                    row[9], _flag(row[10]) if row[10] is not None else None, _stored_json(row[11]), _flag(row[12]), _stored_json(row[13]),
+                )
+                for row in day_rows
+            ]
+            punch_rows = self.db.execute(
+                """SELECT employee_code, work_date, ordinal, row_index, slot, kind, display_time,
+                          actual_time, rounded_time, clock_name, clock_code, comment,
+                          provenance_available, change_request_status, approved
+                     FROM punches WHERE run_id=? ORDER BY employee_code, work_date, ordinal""",
+                (run["id"],),
+            ).fetchall()
+            actual_punches = [
+                (row[0], row[1], row[2], row[3], row[4], row[5], row[6], row[7], row[8], row[9], row[10], row[11], row[12], row[13], row[14])
+                for row in punch_rows
+            ]
+            weekly_rows = self.db.execute(
+                "SELECT employee_code, week_number, hours FROM weekly_totals WHERE run_id=? ORDER BY employee_code, week_number",
+                (run["id"],),
+            ).fetchall()
+            actual_weekly = [(row[0], row[1], _number(row[2])) for row in weekly_rows]
+            return actual_employee_rows == expected_employee_rows and actual_days == expected_days and actual_punches == expected_punches and actual_weekly == expected_weekly
+        except (KeyError, TypeError, ValueError, json.JSONDecodeError, sqlite3.Error):
             return False
-        employee_count = self.db.execute("SELECT COUNT(*) AS n FROM employee_timecards WHERE run_id=?", (run["id"],)).fetchone()["n"]
-        day_count = self.db.execute("SELECT COUNT(*) AS n FROM days WHERE run_id=?", (run["id"],)).fetchone()["n"]
-        return int(employee_count) == len(employees) and int(day_count) == len(employees) * 14 and int(run["day_count"]) == int(day_count)
 
     def status(self, period_end: str) -> dict[str, Any]:
         row = self.active_run(period_end)

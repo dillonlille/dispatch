@@ -10,6 +10,14 @@ import secrets
 import stat
 from typing import Any, Iterable
 
+from dispatch_paycom.filesystem import (
+    FilesystemError,
+    ensure_private_directory,
+    fsync_open_directory,
+    pinned_private_directory,
+    validate_private_directory,
+)
+
 from .browser import TimecardCapture
 from .models import validate_timecard_record
 from .period import Period, canonical_timecard_url, is_captured_timecard_url, parse_period_key, validate_code
@@ -28,16 +36,14 @@ def _sha(data: bytes) -> str:
 
 
 def _private_dir(path: Path, *, create: bool = False) -> Path:
-    if create:
-        path.mkdir(parents=True, exist_ok=True)
-        os.chmod(path, 0o700)
-    details = path.lstat()
-    if not stat.S_ISDIR(details.st_mode) or stat.S_ISLNK(details.st_mode) or details.st_uid != os.geteuid() or stat.S_IMODE(details.st_mode) & 0o077:
-        raise ValueError("artifact_root_invalid")
-    return path
+    try:
+        return ensure_private_directory(path) if create else validate_private_directory(path)
+    except FilesystemError as exc:
+        raise ValueError("artifact_root_invalid") from exc
 
 
 def _write(path: Path, data: bytes) -> None:
+    _private_dir(path.parent)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -173,27 +179,39 @@ def verify_artifact_run(directory: Path | str, expected_codes: Iterable[str]) ->
 
 
 def discard_artifact_run(artifact: TimecardArtifact, *, root: Path | str, period: Period) -> None:
-    base = Path(root).resolve()
-    expected_parent = (base / "artifacts" / parse_period_key(period.key).key).resolve()
-    directory = artifact.directory.resolve()
-    if directory.parent != expected_parent or artifact.directory.is_symlink():
+    base = validate_private_directory(root)
+    expected_parent = validate_private_directory(base / "artifacts" / parse_period_key(period.key).key)
+    directory = validate_private_directory(artifact.directory)
+    if directory.parent != expected_parent:
         raise ValueError("artifact_cleanup_failed")
     verified = verify_artifact_run(directory, [entry["employeeCode"] for entry in artifact.entries])
     names = {"manifest.json"}
     for entry in verified.entries:
         names.add(entry["html"]["path"])
         names.add(entry["json"]["path"])
-    if {path.name for path in directory.iterdir()} != names:
-        raise ValueError("artifact_cleanup_failed")
-    for name in sorted(names):
-        path = directory / name
-        details = path.lstat()
-        if not stat.S_ISREG(details.st_mode) or stat.S_ISLNK(details.st_mode) or details.st_nlink != 1:
+    expected_details = {name: (directory / name).lstat() for name in names}
+    directory_details = directory.lstat()
+    with pinned_private_directory(directory) as (descriptor, _anchor):
+        if set(os.listdir(descriptor)) != names:
             raise ValueError("artifact_cleanup_failed")
-        path.unlink()
-    directory.rmdir()
-    if expected_parent.exists() and not any(expected_parent.iterdir()):
-        expected_parent.rmdir()
+        for name, before in expected_details.items():
+            current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(current.st_mode)
+                or current.st_uid != os.geteuid()
+                or current.st_nlink != 1
+                or (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)
+            ):
+                raise ValueError("artifact_cleanup_failed")
+        for name in sorted(names):
+            os.unlink(name, dir_fd=descriptor)
+        fsync_open_directory(descriptor)
+        with pinned_private_directory(expected_parent) as (parent_descriptor, _parent_anchor):
+            current = os.stat(directory.name, dir_fd=parent_descriptor, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (directory_details.st_dev, directory_details.st_ino):
+                raise ValueError("artifact_cleanup_failed")
+            os.rmdir(directory.name, dir_fd=parent_descriptor)
+            fsync_open_directory(parent_descriptor)
 
 
 __all__ = ["TimecardArtifact", "TimecardArtifactWriter", "discard_artifact_run", "verify_artifact_run"]

@@ -279,7 +279,8 @@ def verify(root: Path, max_file_size: int = MAX_FILE_SIZE) -> dict:
 
     for directory, dirnames, filenames in os.walk(root, followlinks=False):
         current = Path(directory)
-        dirnames[:] = [name for name in dirnames if name != ".git"]
+        if current == root:
+            dirnames[:] = [name for name in dirnames if name != ".git"]
 
         for name in list(dirnames):
             path = current / name
@@ -301,7 +302,7 @@ def verify(root: Path, max_file_size: int = MAX_FILE_SIZE) -> dict:
                 dirnames.remove(name)
 
         for name in filenames:
-            if name == ".git":
+            if current == root and name == ".git":
                 continue
             path = current / name
             relative = path.relative_to(root)

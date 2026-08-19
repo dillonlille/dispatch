@@ -5,6 +5,7 @@ from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 import json
 from pathlib import Path
+import re
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
 
@@ -413,7 +414,7 @@ class PaycomQuery:
         for row in rows:
             transporter = _stored_text(row["transporterId"])
             code = _stored_text(row["employeeCode"], 4).upper()
-            if len(code) != 4 or code in codes:
+            if re.fullmatch(r"[A-Za-z0-9]{4}", code) is None or code in codes or transporter in result:
                 raise QueryError("schema_invalid", "The identity crosswalk is not one-to-one.")
             start = _stored_date(row["effectiveStart"])
             end = None if row["effectiveEnd"] is None else _stored_date(row["effectiveEnd"])
@@ -521,6 +522,8 @@ class PaycomQuery:
         identity = self._identity()
         if roster is None or timecards is None or identity is None:
             return None, None, None, None, None
+        if not roster.quick_ok() or not timecards.quick_ok() or not identity.quick_ok():
+            raise QueryError("schema_invalid", "A Paycom database integrity check failed.")
         run = self._run_for(timecards, work_date=work_date)
         if run is None:
             return None, None, None, None, None

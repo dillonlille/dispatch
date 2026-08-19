@@ -858,6 +858,7 @@ def test_setup_installs_selected_plugin_editable_and_writes_config(tmp_path: Pat
     (plugin / "pyproject.toml").write_text(
         "[project]\nname='handbook'\nversion='1'\n[project.entry-points.\"dispatch.plugins\"]\nhandbook='x:y'\n[tool.dispatch]\nid='handbook'\ncapabilities=['read_local_data']\n"
     )
+    (plugin / "x.py").write_text("def y(request):\n    return request\n", encoding="utf-8")
     layout.venv_python.parent.mkdir(parents=True)
     layout.venv_python.write_text("python")
     fake_site_packages(layout.venv_python)
@@ -876,6 +877,46 @@ def test_setup_installs_selected_plugin_editable_and_writes_config(tmp_path: Pat
     assert config["plugins"][0]["capabilities"] == ["read_local_data"]
     assert calls == []
     assert (fake_site_packages(layout.venv_python) / "__dispatch__.handbook.pth").is_file()
+
+
+@pytest.mark.parametrize(
+    ("entry_points", "source", "expected_code"),
+    [
+        (
+            "[project.entry-points.\"dispatch.plugins\"]\nother='x:y'\n",
+            "def y(request):\n    return request\n",
+            "plugin_entry_point_invalid",
+        ),
+        (
+            "[project.entry-points.\"dispatch.plugins\"]\nhandbook='x:missing'\n",
+            "def y(request):\n    return request\n",
+            "plugin_entry_point_invalid",
+        ),
+    ],
+)
+def test_setup_requires_one_same_id_source_callable_entry_point(
+    tmp_path: Path,
+    entry_points: str,
+    source: str,
+    expected_code: str,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    plugin = layout.clone / "plugins" / "handbook"
+    plugin.mkdir(parents=True)
+    (plugin / "pyproject.toml").write_text(
+        "[project]\nname='handbook'\nversion='1'\n"
+        + entry_points
+        + "[tool.dispatch]\nid='handbook'\ncapabilities=['read_local_data']\n",
+        encoding="utf-8",
+    )
+    (plugin / "x.py").write_text(source, encoding="utf-8")
+
+    with pytest.raises(InstallerError) as error:
+        configure_plugins(layout, ["handbook"], run=lambda *_: completed())
+
+    assert error.value.code == expected_code
+    assert not (layout.config / "plugins.json").exists()
 
 
 def test_legacy_plugin_selection_migrates_only_when_complete(tmp_path: Path) -> None:
@@ -3218,7 +3259,13 @@ def _write_runtime_plugin(root: Path, *, plugin_id: str = "worker", dependencies
     plugin = root / "plugins" / plugin_id
     package = plugin / "src" / f"dispatch_{plugin_id}"
     package.mkdir(parents=True)
-    (package / "__init__.py").write_text("", encoding="utf-8")
+    (package / "__init__.py").write_text(
+        "def handle(request):\n"
+        "    return request\n\n"
+        "def serve(context):\n"
+        "    return None\n",
+        encoding="utf-8",
+    )
     deps = dependencies or []
     (plugin / "pyproject.toml").write_text(
         "[project]\n"
@@ -3307,6 +3354,34 @@ def test_non_collecting_plugin_rejects_collector_entry_point(tmp_path: Path) -> 
     with pytest.raises(InstallerError) as unexpected:
         setup_runtime.plugin_metadata(plugin, expected_id="worker")
     assert unexpected.value.code == "plugin_collector_unexpected"
+
+
+def test_setup_rejects_unloadable_collector_target_before_mutation(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    plugin = _write_runtime_plugin(layout.clone)
+    package = plugin / "src" / "dispatch_worker" / "__init__.py"
+    package.write_text(
+        "def handle(request):\n    return {}\n\ndef serve(context):\n    return None\n",
+        encoding="utf-8",
+    )
+    project = plugin / "pyproject.toml"
+    text = project.read_text(encoding="utf-8").replace(
+        "capabilities=['long_running']",
+        "capabilities=['long_running','collect']",
+    )
+    project.write_text(
+        text
+        + "[project.entry-points.\"dispatch.collectors\"]\n"
+        + "worker='dispatch_worker:missing'\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InstallerError) as error:
+        configure_plugins(layout, ["worker"])
+    assert error.value.code == "plugin_entry_point_invalid"
+    assert not (layout.config / "plugins.json").exists()
 
 
 def test_replacement_venv_installs_plugin_dependencies_before_direct_registration(tmp_path: Path) -> None:

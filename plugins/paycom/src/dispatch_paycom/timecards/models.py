@@ -7,7 +7,7 @@ import re
 
 from .period import Period, is_captured_timecard_url, parse_period_key, validate_code
 
-HEADERS = ("date", "paycode", "i1", "allocation1", "o1", "allocation2", "o2", "hours", "total_hours", "amount", "exception-points", "waiver", "comment", "missing-punch", "delete")
+HEADERS = ("date", "paycode", "i1", "allocation1", "o1", "i2", "allocation2", "o2", "hours", "total_hours", "amount", "exception-points", "waiver", "comment", "missing-punch", "delete")
 HEADERS_NO_WAIVER = tuple(item for item in HEADERS if item != "waiver")
 _SLOTS = {"i1", "o1", "i2", "o2"}
 _LABELS = ("SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT")

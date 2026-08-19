@@ -11,6 +11,14 @@ import secrets
 import stat
 from typing import Any
 
+from dispatch_paycom.filesystem import (
+    FilesystemError,
+    ensure_private_directory,
+    fsync_open_directory,
+    pinned_private_directory,
+    validate_private_directory,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class RosterArtifact:
@@ -22,19 +30,14 @@ class RosterArtifact:
 
 
 def _private_dir(path: Path, *, create: bool = False) -> Path:
-    if create:
-        path.mkdir(parents=True, exist_ok=True)
-        os.chmod(path, 0o700)
     try:
-        details = path.lstat()
-    except OSError as exc:
+        return ensure_private_directory(path) if create else validate_private_directory(path)
+    except FilesystemError as exc:
         raise ValueError("artifact_root_invalid") from exc
-    if not stat.S_ISDIR(details.st_mode) or stat.S_ISLNK(details.st_mode) or details.st_uid != os.geteuid() or stat.S_IMODE(details.st_mode) & 0o077:
-        raise ValueError("artifact_root_invalid")
-    return path
 
 
 def _private_file(path: Path, data: bytes) -> None:
+    _private_dir(path.parent)
     flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL
     if hasattr(os, "O_NOFOLLOW"):
         flags |= os.O_NOFOLLOW
@@ -124,11 +127,37 @@ def verify_roster_artifact(artifact: RosterArtifact) -> bool:
 
 
 def discard_roster_artifact(artifact: RosterArtifact) -> None:
-    if artifact.directory.exists():
-        verify_roster_artifact(artifact)
-        for path in (artifact.source_path, artifact.manifest_path):
-            path.unlink()
-        artifact.directory.rmdir()
+    if not artifact.directory.exists():
+        return
+    verify_roster_artifact(artifact)
+    expected = {
+        artifact.source_path.name: artifact.source_path.lstat(),
+        artifact.manifest_path.name: artifact.manifest_path.lstat(),
+    }
+    directory_details = artifact.directory.lstat()
+    parent = artifact.directory.parent
+    with pinned_private_directory(artifact.directory) as (descriptor, _anchor):
+        observed_names = set(os.listdir(descriptor))
+        if observed_names != set(expected):
+            raise ValueError("artifact_cleanup_failed")
+        for name, before in expected.items():
+            current = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if (
+                not stat.S_ISREG(current.st_mode)
+                or current.st_uid != os.geteuid()
+                or current.st_nlink != 1
+                or (current.st_dev, current.st_ino) != (before.st_dev, before.st_ino)
+            ):
+                raise ValueError("artifact_cleanup_failed")
+        for name in sorted(expected):
+            os.unlink(name, dir_fd=descriptor)
+        fsync_open_directory(descriptor)
+        with pinned_private_directory(parent) as (parent_descriptor, _parent_anchor):
+            current = os.stat(artifact.directory.name, dir_fd=parent_descriptor, follow_symlinks=False)
+            if (current.st_dev, current.st_ino) != (directory_details.st_dev, directory_details.st_ino):
+                raise ValueError("artifact_cleanup_failed")
+            os.rmdir(artifact.directory.name, dir_fd=parent_descriptor)
+            fsync_open_directory(parent_descriptor)
 
 
 __all__ = ["RosterArtifact", "discard_roster_artifact", "stage_roster_artifact", "verify_roster_artifact"]

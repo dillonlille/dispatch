@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import ast
 import base64
 import csv
 import hashlib
@@ -91,6 +92,99 @@ def _assert_editable_source_safe(source: Path) -> Path:
     return absolute
 
 
+_ENTRY_POINT_TARGET = re.compile(
+    r"^(?P<module>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*):"
+    r"(?P<attribute>[A-Za-z_][A-Za-z0-9_]*(?:\.[A-Za-z_][A-Za-z0-9_]*)*)$"
+)
+
+
+def _source_callable_target(
+    source: Path,
+    configuration: dict[str, object],
+    target: str,
+    plugin_id: str,
+) -> None:
+    """Require an entry-point target that resolves to a callable in source.
+
+    Setup must not complete merely because a manifest contains a plausible
+    entry-point string.  Resolve the module through the declared source roots
+    and inspect its source without importing plugin code (which can have
+    optional dependencies or side effects during installation).
+    """
+
+    match = _ENTRY_POINT_TARGET.fullmatch(target)
+    if match is None:
+        raise InstallerError(
+            "plugin_entry_point_invalid",
+            f"plugin {plugin_id} dispatch.plugins target is invalid",
+        )
+    module_parts = match.group("module").split(".")
+    attribute_parts = match.group("attribute").split(".")
+    module_path: Path | None = None
+    module_text: str | None = None
+    source_roots = _direct_source_roots(source, configuration)
+    if (source / "src").is_dir() and source / "src" not in source_roots:
+        source_roots = [*source_roots, source / "src"]
+    for root in source_roots:
+        candidate = root.joinpath(*module_parts).with_suffix(".py")
+        package_candidate = root.joinpath(*module_parts, "__init__.py")
+        for possible in (candidate, package_candidate):
+            if possible.is_symlink() or not possible.is_file():
+                continue
+            try:
+                module_text = possible.read_text(encoding="utf-8")
+            except (OSError, UnicodeError) as exc:
+                raise InstallerError(
+                    "plugin_entry_point_invalid",
+                    f"plugin {plugin_id} dispatch.plugins target cannot be read",
+                ) from exc
+            module_path = possible
+            break
+        if module_path is not None:
+            break
+    if module_path is None or module_text is None:
+        raise InstallerError(
+            "plugin_entry_point_invalid",
+            f"plugin {plugin_id} dispatch.plugins target is not in source",
+        )
+    try:
+        tree = ast.parse(module_text, filename=str(module_path))
+    except SyntaxError as exc:
+        raise InstallerError(
+            "plugin_entry_point_invalid",
+            f"plugin {plugin_id} dispatch.plugins target source is invalid",
+        ) from exc
+
+    callable_names: set[str] = set()
+    class_members: dict[str, set[str]] = {}
+    for node in tree.body:
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            callable_names.add(node.name)
+            if isinstance(node, ast.ClassDef):
+                class_members[node.name] = {
+                    member.name
+                    for member in node.body
+                    if isinstance(member, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef))
+                }
+        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Lambda):
+            callable_names.update(
+                target.id for target in node.targets if isinstance(target, ast.Name)
+            )
+    if attribute_parts[0] not in callable_names:
+        raise InstallerError(
+            "plugin_entry_point_invalid",
+            f"plugin {plugin_id} dispatch.plugins target is not callable in source",
+        )
+    if len(attribute_parts) > 1 and (
+        attribute_parts[0] not in class_members
+        or attribute_parts[-1] not in class_members[attribute_parts[0]]
+    ):
+        raise InstallerError(
+            "plugin_entry_point_invalid",
+            f"plugin {plugin_id} dispatch.plugins target is not callable in source",
+        )
+
+
 def _plugin_project(source: Path, *, expected_id: str | None = None) -> dict[str, object]:
     """Read the trusted built-in plugin metadata used by installer projections.
 
@@ -144,6 +238,16 @@ def _plugin_project(source: Path, *, expected_id: str | None = None) -> dict[str
     entry_points = project.get("entry-points", {})
     if not isinstance(entry_points, dict):
         raise InstallerError("plugin_manifest_invalid", f"plugin entry points are invalid: {plugin_id}")
+    plugin_points = entry_points.get("dispatch.plugins")
+    if (
+        not isinstance(plugin_points, dict)
+        or set(plugin_points) != {plugin_id}
+        or not isinstance(plugin_points.get(plugin_id), str)
+    ):
+        raise InstallerError(
+            "plugin_entry_point_invalid",
+            f"plugin {plugin_id} must publish exactly one same-ID dispatch.plugins entry point",
+        )
     service_points = entry_points.get("dispatch.services", {})
     collector_points = entry_points.get("dispatch.collectors", {})
     for role, points in (("service", service_points), ("collector", collector_points)):
@@ -738,7 +842,11 @@ def _plugin_id_map(layout: InstallLayout) -> dict[str, Path]:
         entry_points = project.get("project", {}).get("entry-points", {}).get("dispatch.plugins", {})
         if not isinstance(entry_points, dict):
             raise InstallerError("plugin_manifest_invalid", f"plugin entry points are invalid: {manifest}")
-        ids = [value for value in entry_points if isinstance(value, str)]
+        dispatch = project.get("tool", {}).get("dispatch", {})
+        manifest_id = dispatch.get("id") if isinstance(dispatch, dict) else None
+        ids = [manifest_id] if isinstance(manifest_id, str) else []
+        if not ids:
+            ids = [value for value in entry_points if isinstance(value, str)]
         if not ids:
             ids = [directory.name]
         for plugin_id in ids:
@@ -873,6 +981,24 @@ def configure_plugins(
         plugin_id: plugin_metadata(catalog[plugin_id], expected_id=plugin_id)
         for plugin_id in selected_ids
     }
+    for plugin_id, value in metadata.items():
+        configuration = value.get("configuration")
+        project = configuration.get("project") if isinstance(configuration, dict) else None
+        entry_points = project.get("entry-points") if isinstance(project, dict) else None
+        plugin_points = entry_points.get("dispatch.plugins") if isinstance(entry_points, dict) else None
+        target = plugin_points.get(plugin_id) if isinstance(plugin_points, dict) else None
+        if not isinstance(configuration, dict) or not isinstance(target, str):
+            raise InstallerError(
+                "plugin_entry_point_invalid",
+                f"plugin {plugin_id} must publish exactly one same-ID dispatch.plugins entry point",
+            )
+        _source_callable_target(catalog[plugin_id], configuration, target, plugin_id)
+        for group in ("dispatch.collectors", "dispatch.services", "dispatch.configurators"):
+            points = entry_points.get(group, {}) if isinstance(entry_points, dict) else {}
+            if isinstance(points, dict):
+                for auxiliary_target in points.values():
+                    if isinstance(auxiliary_target, str):
+                        _source_callable_target(catalog[plugin_id], configuration, auxiliary_target, plugin_id)
     dependencies: dict[str, tuple[str, ...]] = {}
     for plugin_id, value in metadata.items():
         raw_dependencies = value.get("dependencies")

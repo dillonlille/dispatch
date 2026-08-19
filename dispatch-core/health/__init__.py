@@ -7,7 +7,11 @@ import stat
 from typing import Any
 
 from paths import DispatchPaths, PathConfigError
-from plugin_runtime import plugin_health
+from plugin_runtime import (
+    PluginRuntimeError,
+    discover_collector_registrations,
+    plugin_health,
+)
 
 PLANES = (
     "registration",
@@ -137,13 +141,28 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
     if action in {"browser-doctor", "health", "verify"}:
         from browser_manager import RealmRegistry
         from browser_manager.runtime_authority import BrowserRuntimeAuthority
-        from collection_manager import CollectionManager, CollectionStoreError, CollectionTaskStore
+        from collection_manager import (
+            CollectionManager,
+            CollectionManagerError,
+            CollectionStoreError,
+            CollectionTaskStore,
+        )
 
         inspection = BrowserRuntimeAuthority.production().inspect(full_tree=True)
         authentication: dict[str, Any] | None = None
         authentication_error: Any | None = None
         authentication_dependency_installed = True
         collection_error: CollectionStoreError | None = None
+        collector_error: PluginRuntimeError | CollectionManagerError | None = None
+        collector_registrations: tuple[Any, ...] = ()
+        collection_manager = CollectionManager()
+        if action in {"health", "verify"}:
+            try:
+                collector_registrations = discover_collector_registrations()
+                for registration in collector_registrations:
+                    collection_manager.register(registration)
+            except (PluginRuntimeError, CollectionManagerError) as exc:
+                collector_error = exc
         if action in {"health", "verify"}:
             try:
                 from authentication import AuthenticationError, AuthenticationManager
@@ -156,7 +175,7 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
                 except AuthenticationError as exc:
                     authentication_error = exc
         authentication_ready = authentication_dependency_installed and authentication_error is None
-        collection = CollectionManager().status()
+        collection = collection_manager.status()
         if action in {"health", "verify"}:
             try:
                 collection["durable_queue"] = CollectionTaskStore.inspect_paths(paths)
@@ -181,15 +200,30 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             if setup["complete"] is True
             else {"ready": False, "plugins": {}, "error": None}
         )
-        browser_required = "browser" in setup["capabilities"]
+        browser_required = "browser" in setup["capabilities"] or any(
+            getattr(registration, "browser_realm", None) is not None
+            for registration in collector_registrations
+        )
         authentication_required = "authentication" in setup["capabilities"]
+        collector_required = "collect" in setup["capabilities"]
         setup_ready = (
             setup["complete"] is True
             and plugins["ready"] is True
             and (not browser_required or browser_ready)
             and (not authentication_required or authentication_ready)
+            and collector_error is None
+            and (not collector_required or bool(collector_registrations))
         )
-        core_operational = collection_ready
+        collector_ready = (
+            collection_ready
+            and collector_error is None
+            and (not collector_required or bool(collector_registrations))
+        )
+        core_operational = (
+            collector_ready
+            and (not browser_required or browser_ready)
+            and (not authentication_required or authentication_ready)
+        )
         configured = setup["complete"] is True
         planes = {name: "not_applicable" for name in PLANES}
         planes.update(
@@ -203,7 +237,7 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
         )
         if action in {"health", "verify"}:
             planes["query"] = "ready" if plugins["ready"] is True else "unavailable"
-            planes["collector"] = "ready" if collection_ready else "unavailable"
+            planes["collector"] = "ready" if collector_ready else "unavailable"
             planes["authentication"] = (
                 ("ready" if authentication_ready else "unavailable")
                 if authentication_required
@@ -237,7 +271,14 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             data["commit"] = installed.get("commit")
 
         error = None
-        if collection_error is not None:
+        if collector_error is not None:
+            error = {"code": collector_error.code, "message": str(collector_error)}
+        elif collector_required and not collector_registrations:
+            error = {
+                "code": "plugin_collector_provider_missing",
+                "message": "one or more selected collecting plugins have no collector registrations",
+            }
+        elif collection_error is not None:
             error = {"code": collection_error.code, "message": str(collection_error)}
         elif not collection_ready:
             error = {

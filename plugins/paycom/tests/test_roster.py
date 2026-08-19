@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import hashlib
 import json
 from pathlib import Path
 import sys
@@ -15,9 +16,11 @@ sys.path.insert(0, str(CORE))
 sys.path.insert(0, str(SOURCE))
 
 from dispatch_paycom.roster.browser import ROSTER_API_URL, ROSTER_URL, capture_roster_export
-from dispatch_paycom.roster.collector import LANDING_URL, collect_roster
+from dispatch_paycom.roster.collector import LANDING_URL, RosterCollectorError, collect_roster, verify_roster_publication
 from dispatch_paycom.roster.models import HEADERS, parse_roster_source
 from dispatch_paycom.roster.period import period_containing
+from dispatch_paycom.roster.storage import RosterStore
+from collection_manager import CollectionRequest, PublicationVerification
 
 
 SOURCE_BYTES = (",".join(HEADERS) + "\r\n" + ",".join(["A001", "Alpha Driver", "A", "00004", "Driver", "STA", "Station", "Driver", "DOT4", "DOT4", "Hourly", "Supervisor", "0", "40", "0", "100", "100"]) + "\r\n").encode()
@@ -76,6 +79,58 @@ def test_roster_runner_uses_context_page_and_publishes_atomically(tmp_path):
     assert page.gotos == [ROSTER_URL]
     assert (tmp_path / "roster.sqlite3").stat().st_mode & 0o077 == 0
     assert not [path for path in (tmp_path / "roster-data").rglob("*") if path.is_file() and path.name != ".collector.lock"]
+
+
+def test_roster_rejects_unknown_parameter_and_non_boolean_replace_before_capture(tmp_path):
+    page = Page()
+    calls = []
+
+    def capture(*_args, **_kwargs):
+        calls.append(True)
+        return SOURCE_BYTES
+
+    with pytest.raises(RosterCollectorError, match="unknown_parameter"):
+        collect_roster(
+            context(page, target="2026-08-05", unexpected="x"),
+            now=datetime(2026, 8, 5, 18, tzinfo=timezone.utc),
+            root=tmp_path / "roster-data",
+            db_path=tmp_path / "roster.sqlite3",
+            capture=capture,
+        )
+    with pytest.raises(RosterCollectorError, match="replace_invalid"):
+        collect_roster(
+            context(page, target="2026-08-05", replace=1),
+            now=datetime(2026, 8, 5, 18, tzinfo=timezone.utc),
+            root=tmp_path / "roster-data",
+            db_path=tmp_path / "roster.sqlite3",
+            capture=capture,
+        )
+    assert calls == []
+
+
+def test_roster_projection_rejects_string_replacement(tmp_path):
+    database = tmp_path / "roster.sqlite3"
+    collect_roster(
+        context(Page(), target="2026-08-05"),
+        now=datetime(2026, 8, 5, 18, tzinfo=timezone.utc),
+        root=tmp_path / "roster-data",
+        db_path=database,
+    )
+    parsed = parse_roster_source(SOURCE_BYTES)
+    store = RosterStore(database)
+    try:
+        store.db.execute("UPDATE employees SET employee_name='Corrupted Driver'")
+        store.db.commit()
+        assert not store.verify_projection("2026-08-05", parsed, hashlib.sha256(SOURCE_BYTES).hexdigest())
+    finally:
+        store.close()
+
+
+def test_roster_publication_verifier_proves_exact_absence(tmp_path, monkeypatch):
+    database = tmp_path / "roster.sqlite3"
+    monkeypatch.setattr("dispatch_paycom.roster.collector._paths", lambda: (tmp_path / "cache", database))
+    request = CollectionRequest("paycom-roster", parameters={"target": "2026-08-06"})
+    assert verify_roster_publication(request, None) is PublicationVerification.ABSENT
 
 
 def test_roster_capture_does_not_accept_redirected_page():

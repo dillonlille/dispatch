@@ -120,12 +120,13 @@ def test_collector_provider_is_optional_and_returns_trusted_registrations(monkey
     registration = CollectorRegistration(
         "example-collector",
         "example",
-        "1.0.0",
+        "1.2.3",
         _collector_receipt,
         execution_timeout_seconds=12.5,
     )
     _install_metadata(
         monkeypatch,
+        _EntryPoint("example", lambda request: _envelope(request["action"])),
         _GroupedEntryPoint(
             "example",
             COLLECTOR_ENTRY_POINT_GROUP,
@@ -141,6 +142,7 @@ def test_collector_provider_is_optional_and_returns_trusted_registrations(monkey
 def test_collector_provider_rejects_wrong_plugin_registration(monkeypatch) -> None:
     _install_metadata(
         monkeypatch,
+        _EntryPoint("example", lambda request: _envelope(request["action"])),
         _GroupedEntryPoint(
             "example",
             COLLECTOR_ENTRY_POINT_GROUP,
@@ -153,6 +155,56 @@ def test_collector_provider_rejects_wrong_plugin_registration(monkeypatch) -> No
         discover_collector_registrations()
 
     assert error.value.code == "plugin_collector_registration_invalid"
+
+
+def test_collector_provider_rejects_empty_or_unpicklable_registrations(monkeypatch) -> None:
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+    plugin = _EntryPoint("example", lambda request: _envelope(request["action"]))
+    _install_metadata(
+        monkeypatch,
+        plugin,
+        _GroupedEntryPoint("example", COLLECTOR_ENTRY_POINT_GROUP, lambda: ()),
+    )
+    with pytest.raises(PluginRuntimeError) as empty_error:
+        discover_collector_providers()
+    assert empty_error.value.code == "plugin_collector_registration_invalid"
+
+    registration = CollectorRegistration(
+        "example-collector",
+        "example",
+        "1.2.3",
+        lambda context: _collector_receipt(context),
+    )
+    _install_metadata(
+        monkeypatch,
+        plugin,
+        _GroupedEntryPoint("example", COLLECTOR_ENTRY_POINT_GROUP, lambda: (registration,)),
+    )
+    with pytest.raises(PluginRuntimeError) as pickle_error:
+        discover_collector_providers()
+    assert pickle_error.value.code == "plugin_collector_registration_invalid"
+
+
+def test_collector_provider_is_bound_to_plugin_distribution_and_release(monkeypatch) -> None:
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+    registration = CollectorRegistration("example-collector", "example", "wrong", _collector_receipt)
+    plugin_distribution = _Distribution("dispatch-example", "1.2.3")
+    provider_distribution = _Distribution("dispatch-other", "9.9.9")
+    _install_metadata(
+        monkeypatch,
+        _EntryPoint("example", lambda request: _envelope(request["action"]), plugin_distribution),
+        _GroupedEntryPoint(
+            "example",
+            COLLECTOR_ENTRY_POINT_GROUP,
+            lambda: (registration,),
+            provider_distribution,
+        ),
+    )
+
+    with pytest.raises(PluginRuntimeError) as error:
+        discover_collector_providers()
+
+    assert error.value.code == "plugin_collector_provider_invalid"
 
 
 def test_paths_are_not_required_when_no_plugins_are_selected(monkeypatch) -> None:

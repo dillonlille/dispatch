@@ -6,6 +6,7 @@ import importlib.metadata
 import inspect
 import json
 import os
+import pickle
 import re
 import sys
 from contextlib import redirect_stdout
@@ -506,10 +507,10 @@ def _validate_collector_registrations(plugin_id: str, value: Any) -> tuple[Any, 
     """Validate the object boundary returned by a trusted collector provider."""
     from collection_manager import CollectorRegistration
 
-    if type(value) is not tuple or len(value) > _MAX_COLLECTOR_REGISTRATIONS:
+    if type(value) is not tuple or not value or len(value) > _MAX_COLLECTOR_REGISTRATIONS:
         raise PluginRuntimeError(
             "plugin_collector_registration_invalid",
-            f"active plugin {plugin_id} collector provider must return a bounded tuple",
+            f"active plugin {plugin_id} collector provider must return a non-empty bounded tuple",
         )
     registrations = []
     collector_ids: set[str] = set()
@@ -519,6 +520,14 @@ def _validate_collector_registrations(plugin_id: str, value: Any) -> tuple[Any, 
                 "plugin_collector_registration_invalid",
                 f"active plugin {plugin_id} returned an invalid collector registration",
             )
+        try:
+            pickle.dumps(registration.runner)
+            pickle.dumps(registration)
+        except BaseException as exc:
+            raise PluginRuntimeError(
+                "plugin_collector_registration_invalid",
+                f"active plugin {plugin_id} returned an unpicklable collector registration",
+            ) from exc
         if registration.collector_id in collector_ids:
             raise PluginRuntimeError(
                 "plugin_collector_registration_invalid",
@@ -542,10 +551,19 @@ def discover_collector_providers() -> list[DiscoveredCollectorProvider]:
         return []
     entry_points = _environment_entry_points(COLLECTOR_ENTRY_POINT_GROUP)
     discovered: list[DiscoveredCollectorProvider] = []
+    selected_plugins: dict[str, DiscoveredPlugin] | None = None
     for plugin_id in active_ids:
         candidates = _entry_point_candidates(entry_points, plugin_id, COLLECTOR_ENTRY_POINT_GROUP)
         if not candidates:
             continue
+        if selected_plugins is None:
+            selected_plugins = {plugin.id: plugin for plugin in discover_plugins()}
+        selected_plugin = selected_plugins.get(plugin_id)
+        if selected_plugin is None:
+            raise PluginRuntimeError(
+                "plugin_entry_point_invalid",
+                f"active plugin {plugin_id} has no matching dispatch.plugins entry point",
+            )
         if len(candidates) != 1:
             raise PluginRuntimeError(
                 "plugin_entry_point_invalid",
@@ -575,7 +593,24 @@ def discover_collector_providers() -> list[DiscoveredCollectorProvider]:
                 f"active plugin {plugin_id} collector provider failed",
             ) from exc
         distribution, version = _distribution_details(entry_point)
-        discovered.append(DiscoveredCollectorProvider(plugin_id, distribution, version, registrations))
+        if (distribution, version) != (selected_plugin.distribution, selected_plugin.version):
+            raise PluginRuntimeError(
+                "plugin_collector_provider_invalid",
+                f"active plugin {plugin_id} collector provider distribution does not match dispatch.plugins",
+            )
+        if any(registration.plugin_release != selected_plugin.version for registration in registrations):
+            raise PluginRuntimeError(
+                "plugin_collector_registration_invalid",
+                f"active plugin {plugin_id} collector registration release does not match dispatch.plugins",
+            )
+        discovered.append(
+            DiscoveredCollectorProvider(
+                plugin_id,
+                selected_plugin.distribution,
+                selected_plugin.version,
+                registrations,
+            )
+        )
     all_ids: set[str] = set()
     for provider in discovered:
         for registration in provider.registrations:

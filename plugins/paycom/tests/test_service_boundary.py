@@ -106,3 +106,25 @@ def test_live_wal_is_rejected_without_mutating_the_reader(tmp_path: Path) -> Non
         assert result["error"]["code"] == "unavailable"
     finally:
         writer.close()
+
+
+def test_identity_crosswalk_rejects_duplicate_transporter_ids(tmp_path: Path) -> None:
+    paths = _make_fixture(tmp_path)
+    connection = sqlite3.connect(paths["identity"])
+    connection.execute("DROP TABLE identity_crosswalk")
+    connection.execute("CREATE TABLE identity_crosswalk(transporter_id TEXT,employee_code TEXT,effective_start TEXT,effective_end TEXT,approved_at TEXT,approved_by TEXT,evidence_json TEXT)")
+    values = ("duplicate", "A001", "2026-07-01", None, "2026-07-01T00:00:00Z", "test", '["dcr_transporter_full_name"]')
+    connection.execute("INSERT INTO identity_crosswalk VALUES(?,?,?,?,?,?,?)", values)
+    connection.execute("INSERT INTO identity_crosswalk VALUES(?,?,?,?,?,?,?)", values[:-6] + ("A002",) + values[-5:])
+    connection.commit(); connection.close()
+    result = handle({"action": "meal_comparison", "work_date": "2026-07-26"}, paths=paths)
+    assert result["ok"] is False and result["error"]["code"] == "schema_invalid"
+
+
+def test_identity_crosswalk_rejects_non_alphanumeric_employee_codes(tmp_path: Path) -> None:
+    paths = _make_fixture(tmp_path)
+    connection = sqlite3.connect(paths["identity"])
+    connection.execute("INSERT INTO identity_crosswalk VALUES(?,?,?,?,?,?,?)", ("transporter", "A-01", "2026-07-01", None, "2026-07-01T00:00:00Z", "test", '["dcr_transporter_full_name"]'))
+    connection.commit(); connection.close()
+    result = handle({"action": "meal_comparison", "work_date": "2026-07-26"}, paths=paths)
+    assert result["ok"] is False and result["error"]["code"] == "schema_invalid"
