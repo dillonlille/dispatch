@@ -12,7 +12,7 @@ ROOT = Path(__file__).resolve().parents[2]
 def test_root_bootstrap_is_clone_based_and_prompts_on_tty() -> None:
     script = (ROOT / "install.sh").read_text(encoding="utf-8")
     assert "Latest Stable" in script
-    assert "Dev Branch" in script
+    assert "Development (main)" in script
     assert "/dev/tty" in script
     assert "--channel" in script
     assert "--version" in script
@@ -25,7 +25,9 @@ def test_root_bootstrap_is_clone_based_and_prompts_on_tty() -> None:
     assert "PYTHONPATH" not in script
     assert "--editable" not in script  # editable installer work is owned by Python package
     assert "pass --channel stable or --channel dev" in script
-    assert "git clone --single-branch --branch dev" in script
+    assert "tracks the main branch" in script
+    assert "git clone --single-branch --branch main" in script
+    assert "git clone --single-branch --branch dev" not in script
     assert "git clone --quiet --no-checkout --depth 1" in script
     assert "fetch --quiet --depth 1 origin tag \"$ref\"" in script
     assert 'REQUESTED="$VERSION"' in script

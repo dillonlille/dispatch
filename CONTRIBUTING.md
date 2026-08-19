@@ -1,6 +1,10 @@
 # Contributing
 
-Keep changes small, owner-scoped, and verifiable. `main` is the stable source channel; `dev` is the integration channel. Do not treat a branch, tag, or pull request as permission to publish or promote production.
+Keep changes small, owner-scoped, and verifiable. `main` is the only long-lived
+source branch and must remain installable. Create short-lived branches from
+current `main` and target pull requests back to `main`. Do not treat a branch,
+tag, pull request, or successful CI run as permission to publish or promote a
+stable version.
 
 Before proposing a change:
 
@@ -16,4 +20,9 @@ The repository does not accept generated wheels, release manifests, checksum bun
 
 ## Pull requests and releases
 
-Pull requests should describe the exact source behavior changed and the checks actually run. Release publication is a separate conversational approval boundary. The manual release workflow accepts an existing tag, verifies the exact tagged source and tests it again, then creates a GitHub Release with generated notes and no uploaded assets.
+Pull requests should describe the exact source behavior changed and the checks
+actually run. Accepted task PRs merge directly into `main`; there is no aggregate
+integration or release branch. Release publication remains a separate explicit
+approval boundary. The manual release workflow accepts an existing approved tag,
+verifies the exact tagged source against current `main`, tests it again, and
+creates a GitHub Release with generated notes and no uploaded assets.

@@ -9,9 +9,9 @@ this package from the staged clone through `PYTHONPATH`.
 
 - **Latest Stable** resolves the newest published, non-draft, non-prerelease
   GitHub Release and checks out its tag detached.
-- **Dev Branch** clones and tracks the `dev` branch.
-- `--version TAG` selects an explicit stable tag. The dev channel always tracks
-  `dev` and rejects `--version`.
+- **Development** clones and tracks current `main`.
+- `--version TAG` selects an explicit stable tag. The public `dev` channel always
+  tracks `main` and rejects `--version`; no Git branch named `dev` is required.
 
 The active checkout is `~/.dispatch/dispatch`. The bootstrap creates a
 per-user virtual environment at `~/.dispatch/venv` and installs this package

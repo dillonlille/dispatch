@@ -16,6 +16,7 @@ from .layout import InstallerError
 REPOSITORY_URL = "https://github.com/dillonlille/dispatch.git"
 REPOSITORY_API = "https://api.github.com/repos/dillonlille/dispatch/releases?per_page=100"
 REPOSITORY_GITHUB_API = "https://api.github.com/repos/dillonlille/dispatch"
+DEVELOPMENT_BRANCH = "main"
 _TAG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 RunCommand = Callable[[Sequence[str], Path | None], subprocess.CompletedProcess[str]]
@@ -116,11 +117,11 @@ def canonical_record_has_remote_authority(record: dict[str, object], *, opener=u
     if channel not in {"stable", "dev"} or not isinstance(ref, str) or not isinstance(commit, str):
         return False
     if channel == "dev":
-        if ref != "dev":
+        if ref != DEVELOPMENT_BRANCH:
             return False
         encoded_commit = quote(commit, safe="")
         payload = _github_object(
-            f"{REPOSITORY_GITHUB_API}/compare/{encoded_commit}...dev",
+            f"{REPOSITORY_GITHUB_API}/compare/{encoded_commit}...{DEVELOPMENT_BRANCH}",
             opener=opener,
         )
         base = payload.get("base_commit")
@@ -151,8 +152,8 @@ def clone_repository(
 ) -> Path:
     if channel not in {"stable", "dev"}:
         raise InstallerError("channel_invalid", "channel must be stable or dev")
-    if channel == "dev" and ref != "dev":
-        raise InstallerError("dev_ref_invalid", "the dev channel must track the dev branch")
+    if channel == "dev" and ref != DEVELOPMENT_BRANCH:
+        raise InstallerError("dev_ref_invalid", "the dev channel must track the main branch")
     ref = validate_ref(ref)
     if destination.exists() or destination.is_symlink():
         raise InstallerError("clone_destination_exists", f"clone destination already exists: {destination}")
@@ -208,8 +209,8 @@ def checkout_existing(
         )
         _checked(("git", "-C", str(clone), "checkout", "--detach", f"refs/tags/{ref}"), run=run)
     elif channel == "dev":
-        if ref != "dev":
-            raise InstallerError("dev_ref_invalid", "the dev channel must track the dev branch")
+        if ref != DEVELOPMENT_BRANCH:
+            raise InstallerError("dev_ref_invalid", "the dev channel must track the main branch")
         shallow = _checked(
             ("git", "-C", str(clone), "rev-parse", "--is-shallow-repository"),
             run=run,
@@ -217,29 +218,72 @@ def checkout_existing(
         fetch_command = ["git", "-C", str(clone), "fetch"]
         if shallow.stdout.strip() == "true":
             fetch_command.append("--unshallow")
-        fetch_command.extend((repository_url, "refs/heads/dev:refs/remotes/origin/dev"))
+        fetch_command.extend(
+            (
+                repository_url,
+                f"refs/heads/{DEVELOPMENT_BRANCH}:refs/remotes/origin/{DEVELOPMENT_BRANCH}",
+            )
+        )
         _checked(
             tuple(fetch_command),
             run=run,
         )
-        local_branch = _checked(("git", "-C", str(clone), "branch", "--list", "dev"), run=run)
+        local_branch = _checked(
+            ("git", "-C", str(clone), "branch", "--list", DEVELOPMENT_BRANCH),
+            run=run,
+        )
         if local_branch.stdout.strip():
-            _checked(("git", "-C", str(clone), "checkout", "dev"), run=run)
+            _checked(("git", "-C", str(clone), "checkout", DEVELOPMENT_BRANCH), run=run)
         else:
             _checked(
-                ("git", "-C", str(clone), "checkout", "-b", "dev", "refs/remotes/origin/dev"),
+                (
+                    "git",
+                    "-C",
+                    str(clone),
+                    "checkout",
+                    "-b",
+                    DEVELOPMENT_BRANCH,
+                    f"refs/remotes/origin/{DEVELOPMENT_BRANCH}",
+                ),
                 run=run,
             )
-            _checked(("git", "-C", str(clone), "config", "branch.dev.remote", "origin"), run=run)
             _checked(
-                ("git", "-C", str(clone), "config", "branch.dev.merge", "refs/heads/dev"),
+                (
+                    "git",
+                    "-C",
+                    str(clone),
+                    "config",
+                    f"branch.{DEVELOPMENT_BRANCH}.remote",
+                    "origin",
+                ),
                 run=run,
             )
-        _checked(("git", "-C", str(clone), "merge", "--ff-only", "origin/dev"), run=run)
+            _checked(
+                (
+                    "git",
+                    "-C",
+                    str(clone),
+                    "config",
+                    f"branch.{DEVELOPMENT_BRANCH}.merge",
+                    f"refs/heads/{DEVELOPMENT_BRANCH}",
+                ),
+                run=run,
+            )
+        _checked(
+            ("git", "-C", str(clone), "merge", "--ff-only", f"origin/{DEVELOPMENT_BRANCH}"),
+            run=run,
+        )
         head = current_commit(clone, run=run)
-        expected = _resolved_commit(clone, "refs/remotes/origin/dev", run=run)
+        expected = _resolved_commit(
+            clone,
+            f"refs/remotes/origin/{DEVELOPMENT_BRANCH}",
+            run=run,
+        )
         if head != expected:
-            raise InstallerError("dev_local_commits", "dev checkout has local commits not present on origin/dev")
+            raise InstallerError(
+                "dev_local_commits",
+                "dev checkout has local commits not present on origin/main",
+            )
     else:
         raise InstallerError("channel_invalid", "channel must be stable or dev")
 
@@ -315,8 +359,12 @@ def local_checkout_matches_record(clone: Path, record: dict[str, object] | None)
         ref = str(record.get("ref", ""))
         branch = invoke("symbolic-ref", "--quiet", "--short", "HEAD")
         if channel == "dev":
-            authority = invoke("rev-parse", "--verify", "refs/remotes/origin/dev^{commit}")
-            if branch.returncode != 0 or branch.stdout.strip() != "dev":
+            authority = invoke(
+                "rev-parse",
+                "--verify",
+                f"refs/remotes/origin/{DEVELOPMENT_BRANCH}^{{commit}}",
+            )
+            if branch.returncode != 0 or branch.stdout.strip() != DEVELOPMENT_BRANCH:
                 return False
         else:
             authority = invoke("rev-parse", "--verify", f"refs/tags/{ref}^{{commit}}")
@@ -359,28 +407,35 @@ def verify_checkout_authority(
         if branch.returncode != 1:
             raise InstallerError("stable_authority_invalid", "stable checkout attachment could not be verified")
     elif channel == "dev":
-        if ref != "dev":
-            raise InstallerError("dev_ref_invalid", "the dev channel must track the dev branch")
+        if ref != DEVELOPMENT_BRANCH:
+            raise InstallerError("dev_ref_invalid", "the dev channel must track the main branch")
         shallow = _checked(
             ("git", "-C", str(clone), "rev-parse", "--is-shallow-repository"),
             run=run,
         )
         if shallow.stdout.strip() != "false":
             raise InstallerError("dev_history_incomplete", "the dev checkout must contain complete history")
-        _checked(("git", "-C", str(clone), "fetch", REPOSITORY_URL, "refs/heads/dev"), run=run)
+        _checked(
+            ("git", "-C", str(clone), "fetch", REPOSITORY_URL, f"refs/heads/{DEVELOPMENT_BRANCH}"),
+            run=run,
+        )
         expected = _resolved_commit(clone, "FETCH_HEAD", run=run)
         branch = _checked(
             ("git", "-C", str(clone), "symbolic-ref", "--quiet", "--short", "HEAD"),
             run=run,
         )
-        if branch.stdout.strip() != "dev" or head != expected:
-            raise InstallerError("dev_authority_invalid", "dev checkout must exactly track the GitHub dev branch")
+        if branch.stdout.strip() != DEVELOPMENT_BRANCH or head != expected:
+            raise InstallerError(
+                "dev_authority_invalid",
+                "dev checkout must exactly track the GitHub main branch",
+            )
     else:
         raise InstallerError("channel_invalid", "channel must be stable or dev")
     return head
 
 
 __all__ = [
+    "DEVELOPMENT_BRANCH",
     "REPOSITORY_API",
     "REPOSITORY_URL",
     "assert_checkout_clean",

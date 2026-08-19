@@ -18,10 +18,10 @@ Usage: install.sh [--channel stable|dev] [--version TAG]
 
 Without --channel, choose:
   1. Latest Stable
-  2. Dev Branch
+  2. Development (main)
 
 --version is an explicit stable GitHub Release tag. The dev channel always
-tracks the dev branch.
+tracks the main branch.
 EOF
 }
 
@@ -63,7 +63,7 @@ python3 -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < 
 if [ -z "$CHANNEL" ]; then
     if ( : </dev/tty ) 2>/dev/null; then
         exec 3<>/dev/tty
-        printf '\nDispatch installation channel:\n1. Latest Stable\n2. Dev Branch\nSelect [1-2]: ' >&3
+        printf '\nDispatch installation channel:\n1. Latest Stable\n2. Development (main)\nSelect [1-2]: ' >&3
         IFS= read -r choice <&3 || choice=1
         exec 3>&-
         case "$choice" in
@@ -186,7 +186,7 @@ print(requested or valid[0]["tag_name"])
 ')" || fail 'could not resolve the latest stable release'
     ref="$VERSION"
 else
-    ref=dev
+    ref=main
 fi
 
 printf 'Cloning Dispatch %s (%s) ...\n' "$CHANNEL" "$ref"
@@ -198,8 +198,8 @@ if [ "$CHANNEL" = stable ]; then
     git -C "$clone" checkout --quiet --detach "refs/tags/$ref" \
         || fail 'could not detach at the selected published release tag'
 else
-    git clone --single-branch --branch dev "$REPOSITORY_URL" "$clone" \
-        || fail 'could not clone the complete dev branch'
+    git clone --single-branch --branch main "$REPOSITORY_URL" "$clone" \
+        || fail 'could not clone the complete main branch'
 fi
 
 printf '%s\n' 'Installing Dispatch dependencies and activating the user service ...'

@@ -40,6 +40,7 @@ layout_runtime = importlib.import_module("dispatch_installer.layout")
 from dispatch_installer.doctor import inspect_installation
 from dispatch_installer.lifecycle import ensure_venv, install_from_clone
 from dispatch_installer.repository import (
+    DEVELOPMENT_BRANCH,
     REPOSITORY_URL,
     assert_checkout_clean,
     canonical_record_has_remote_authority,
@@ -192,10 +193,14 @@ def authority_response(command) -> subprocess.CompletedProcess[str] | None:
     values = tuple(str(value) for value in command)
     if values[-2:] == ("rev-parse", "--is-shallow-repository"):
         return completed(stdout="false\n")
-    if values and values[-1] in {"HEAD", "FETCH_HEAD", "refs/remotes/origin/dev"} and "rev-parse" in values:
+    if values and values[-1] in {
+        "HEAD",
+        "FETCH_HEAD",
+        f"refs/remotes/origin/{DEVELOPMENT_BRANCH}",
+    } and "rev-parse" in values:
         return completed(stdout=f"{AUTHORITY_COMMIT}\n")
     if "symbolic-ref" in values:
-        return completed(stdout="dev\n")
+        return completed(stdout=f"{DEVELOPMENT_BRANCH}\n")
     return None
 
 
@@ -406,7 +411,7 @@ def test_remote_authority_binds_dev_and_stable_records() -> None:
         value.read.return_value = json.dumps(payload).encode()
         return value
 
-    dev_record: dict[str, object] = {"channel": "dev", "ref": "dev", "commit": commit}
+    dev_record: dict[str, object] = {"channel": "dev", "ref": DEVELOPMENT_BRANCH, "commit": commit}
     dev_opener = Mock(
         return_value=response(
             {
@@ -525,15 +530,20 @@ def test_dev_clone_is_complete_and_update_is_fast_forward_only(tmp_path: Path) -
         return authority_response(command) or browser_response(command) or editable_response(command) or completed()
 
     destination = tmp_path / "clone"
-    clone_repository(destination, channel="dev", ref="dev", run=fake_run)
+    clone_repository(destination, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
     assert "--depth" not in commands[0]
+    assert commands[0][commands[0].index("--branch") + 1] == DEVELOPMENT_BRANCH
     (destination / ".git").mkdir(parents=True)
-    checkout_existing(destination, channel="dev", ref="dev", run=fake_run)
+    checkout_existing(destination, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
     assert any(
-        command[-1] == "refs/heads/dev:refs/remotes/origin/dev" for command in commands
+        command[-1] == f"refs/heads/{DEVELOPMENT_BRANCH}:refs/remotes/origin/{DEVELOPMENT_BRANCH}"
+        for command in commands
     )
     assert any(REPOSITORY_URL in command for command in commands if "fetch" in command)
-    assert any(command[-3:] == ("merge", "--ff-only", "origin/dev") for command in commands)
+    assert any(
+        command[-3:] == ("merge", "--ff-only", f"origin/{DEVELOPMENT_BRANCH}")
+        for command in commands
+    )
 
     commands.clear()
     checkout_existing(destination, channel="stable", ref="1.2.3", run=fake_run)
@@ -543,7 +553,7 @@ def test_dev_clone_is_complete_and_update_is_fast_forward_only(tmp_path: Path) -
 
 def test_checkout_clean_rejects_ignored_files(tmp_path: Path) -> None:
     clone = tmp_path / "clone"
-    subprocess.run(("git", "init", "-q", "-b", "dev", str(clone)), check=True)
+    subprocess.run(("git", "init", "-q", "-b", DEVELOPMENT_BRANCH, str(clone)), check=True)
     subprocess.run(("git", "-C", str(clone), "config", "user.email", "tests@example.invalid"), check=True)
     subprocess.run(("git", "-C", str(clone), "config", "user.name", "Dispatch Tests"), check=True)
     (clone / ".gitignore").write_text("*.egg-info/\n", encoding="utf-8")
@@ -570,9 +580,8 @@ def test_real_git_switches_shallow_stable_clone_to_tracking_dev(tmp_path: Path) 
     (upstream / "source.txt").write_text("main\n")
     subprocess.run(("git", "-C", str(upstream), "commit", "-am", "main"), check=True, capture_output=True)
     subprocess.run(("git", "-C", str(upstream), "tag", "1.0.0"), check=True)
-    subprocess.run(("git", "-C", str(upstream), "checkout", "-b", "dev"), check=True, capture_output=True)
-    (upstream / "source.txt").write_text("dev\n")
-    subprocess.run(("git", "-C", str(upstream), "commit", "-am", "dev"), check=True, capture_output=True)
+    (upstream / "source.txt").write_text("main update\n")
+    subprocess.run(("git", "-C", str(upstream), "commit", "-am", "main update"), check=True, capture_output=True)
     expected = subprocess.run(
         ("git", "-C", str(upstream), "rev-parse", "HEAD"),
         check=True,
@@ -598,7 +607,7 @@ def test_real_git_switches_shallow_stable_clone_to_tracking_dev(tmp_path: Path) 
     )
     subprocess.run(("git", "-C", str(clone), "fetch", "--depth", "1", "origin", "tag", "1.0.0"), check=True)
     subprocess.run(("git", "-C", str(clone), "checkout", "--detach", "refs/tags/1.0.0"), check=True)
-    checkout_existing(clone, channel="dev", ref="dev", repository_url=upstream.as_uri())
+    checkout_existing(clone, channel="dev", ref=DEVELOPMENT_BRANCH, repository_url=upstream.as_uri())
 
     branch = subprocess.run(
         ("git", "-C", str(clone), "branch", "--show-current"),
@@ -606,10 +615,10 @@ def test_real_git_switches_shallow_stable_clone_to_tracking_dev(tmp_path: Path) 
         capture_output=True,
         text=True,
     ).stdout.strip()
-    assert branch == "dev"
+    assert branch == DEVELOPMENT_BRANCH
     assert current_commit(clone) == expected
     history_count = subprocess.run(
-        ("git", "-C", str(clone), "rev-list", "--count", "dev"),
+        ("git", "-C", str(clone), "rev-list", "--count", DEVELOPMENT_BRANCH),
         check=True,
         capture_output=True,
         text=True,
@@ -624,7 +633,7 @@ def test_real_git_switches_shallow_stable_clone_to_tracking_dev(tmp_path: Path) 
         capture_output=True,
     )
     with pytest.raises(InstallerError, match="local commits"):
-        checkout_existing(clone, channel="dev", ref="dev", repository_url=upstream.as_uri())
+        checkout_existing(clone, channel="dev", ref=DEVELOPMENT_BRANCH, repository_url=upstream.as_uri())
 
 
 def test_staged_dev_checkout_must_match_github_fetch_head(tmp_path: Path) -> None:
@@ -640,11 +649,11 @@ def test_staged_dev_checkout_must_match_github_fetch_head(tmp_path: Path) -> Non
         if values[-2:] == ("rev-parse", "FETCH_HEAD"):
             return completed(stdout=f"{'f' * 40}\n")
         if "symbolic-ref" in values:
-            return completed(stdout="dev\n")
+            return completed(stdout=f"{DEVELOPMENT_BRANCH}\n")
         return completed()
 
     with pytest.raises(InstallerError, match="exactly track"):
-        verify_checkout_authority(clone, channel="dev", ref="dev", run=fake_run)
+        verify_checkout_authority(clone, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
 
 
 def test_install_from_staged_clone_writes_atomic_record(tmp_path: Path) -> None:
@@ -682,14 +691,14 @@ def test_install_from_staged_clone_writes_atomic_record(tmp_path: Path) -> None:
         layout,
         source,
         channel="dev",
-        ref="dev",
+        ref=DEVELOPMENT_BRANCH,
         run=fake_run,
     )
     assert result["status"] == "installed"
     record = read_installation(layout)
     assert record is not None
     assert record["channel"] == "dev"
-    assert record["ref"] == "dev"
+    assert record["ref"] == DEVELOPMENT_BRANCH
     assert str(record["commit"]).startswith("01234567")
     assert layout.clone.is_dir()
     assert layout.command_path.is_file()
@@ -864,7 +873,7 @@ def test_failed_activation_restores_prior_checkout_and_environment(
     monkeypatch.setattr(lifecycle_runtime, "_restore_directory", interrupt_rollback_once)
 
     with pytest.raises(InstallerError) as error:
-        install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
+        install_from_clone(layout, source, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
     assert error.value.code == "activation_rollback_failed"
     assert (layout.clone / "old.txt").read_text() == "old"
     assert not (layout.clone / "new.txt").exists()
@@ -937,7 +946,7 @@ def test_post_return_browser_swap_interrupt_restores_active_generation_and_recor
 
     monkeypatch.setattr(lifecycle_runtime, "_swap_directory", interrupt_after_browser_return)
     with pytest.raises(KeyboardInterrupt):
-        install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
+        install_from_clone(layout, source, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
     assert (layout.clone / "old.txt").read_text(encoding="utf-8") == "old"
     assert not (layout.clone / "new.txt").exists()
     assert layout.venv_python.read_text(encoding="utf-8") == "old-python"
@@ -965,7 +974,7 @@ def test_update_dirty_preflight_never_runs_destructive_rollback(tmp_path: Path) 
         lifecycle_runtime._update_existing(
             layout,
             channel="dev",
-            ref="dev",
+            ref=DEVELOPMENT_BRANCH,
             run=fake_run,
             now=lambda: datetime(2026, 8, 16, tzinfo=UTC),
         )
@@ -1004,7 +1013,7 @@ def test_update_post_gate_file_is_preserved_and_fails_rollback(
         lifecycle_runtime._update_existing(
             layout,
             channel="dev",
-            ref="dev",
+            ref=DEVELOPMENT_BRANCH,
             run=fake_run,
             now=lambda: datetime(2026, 8, 16, tzinfo=UTC),
         )
@@ -1035,7 +1044,7 @@ def test_install_caller_restores_checkout_after_post_return_swap_interrupt(
 
     monkeypatch.setattr(lifecycle_runtime, "_swap_directory", interrupt_after_return)
     with pytest.raises(KeyboardInterrupt):
-        install_from_clone(layout, source, channel="dev", ref="dev", run=lambda *_args, **_kwargs: completed())
+        install_from_clone(layout, source, channel="dev", ref=DEVELOPMENT_BRANCH, run=lambda *_args, **_kwargs: completed())
     assert (layout.clone / "marker").read_text(encoding="utf-8") == "old"
     assert not list(layout.dispatch_home.glob(".dispatch.previous-*"))
 
@@ -1391,7 +1400,7 @@ def test_update_checkout_rollback_defers_interrupt(
         lifecycle_runtime._update_existing(
             layout,
             channel="dev",
-            ref="dev",
+            ref=DEVELOPMENT_BRANCH,
             run=fake_run,
             now=lambda: datetime(2026, 8, 16, tzinfo=UTC),
         )
@@ -1427,7 +1436,7 @@ def test_activation_conflict_never_disables_unrelated_service(tmp_path: Path) ->
         return authority_response(command) or browser_response(command) or editable_response(command) or completed()
 
     with pytest.raises(InstallerError) as error:
-        install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
+        install_from_clone(layout, source, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
     assert error.value.code == "service_conflict"
     assert not any(command[:4] == ("systemctl", "--user", "disable", "--now") for command in commands)
     assert "unrelated" in layout.service_path.read_text()
@@ -1453,7 +1462,7 @@ def test_activation_never_enables_unowned_legacy_service(tmp_path: Path) -> None
         return authority_response(command) or browser_response(command) or editable_response(command) or completed()
 
     with pytest.raises(InstallerError) as error:
-        install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
+        install_from_clone(layout, source, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
     assert error.value.code == "legacy_service_unsafe"
     assert not any(command[:4] == ("systemctl", "--user", "enable", "--now") for command in commands)
     assert legacy.exists()
@@ -1494,7 +1503,7 @@ def test_post_activation_cleanup_failure_is_reported_without_checkout_rollback(
             fake_site_packages(python)
         return authority_response(command) or browser_response(command) or editable_response(command) or completed()
 
-    result = install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
+    result = install_from_clone(layout, source, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
     assert result["status"] == "installed_cleanup_incomplete"
     assert result["cleanup_error_code"] == "post_activation_cleanup_failed"
     assert layout.clone.is_dir()
@@ -1544,7 +1553,7 @@ def test_update_keyboard_interrupt_restores_checkout(tmp_path: Path, monkeypatch
         lifecycle_runtime._update_existing(
             layout,
             channel="dev",
-            ref="dev",
+            ref=DEVELOPMENT_BRANCH,
             run=fake_run,
             now=lambda: lifecycle_runtime.datetime.now(lifecycle_runtime.UTC),
         )
@@ -1582,7 +1591,7 @@ def test_update_root_swap_does_not_run_rollback_against_replacement(
         lifecycle_runtime._update_existing(
             layout,
             channel="dev",
-            ref="dev",
+            ref=DEVELOPMENT_BRANCH,
             run=fake_run,
             now=lambda: datetime(2026, 8, 14, tzinfo=UTC),
         )
@@ -1602,7 +1611,7 @@ def test_repair_revalidates_github_authority_and_recorded_commit(tmp_path: Path)
             "schema_version": 1,
             "repository": REPOSITORY_URL,
             "channel": "dev",
-            "ref": "dev",
+            "ref": DEVELOPMENT_BRANCH,
             "commit": "f" * 40,
             "checkout": str(layout.clone),
             "venv": str(layout.venv),
@@ -1631,7 +1640,7 @@ def test_uninstall_preserves_user_data_and_purge_removes_root(tmp_path: Path) ->
     for name in ("config", "secrets", "data", "state", "logs"):
         (getattr(layout, name) / "keep.txt").write_text(name)
     layout.clone.mkdir()
-    subprocess.run(("git", "init", "-q", "-b", "dev", str(layout.clone)), check=True)
+    subprocess.run(("git", "init", "-q", "-b", DEVELOPMENT_BRANCH, str(layout.clone)), check=True)
     subprocess.run(("git", "-C", str(layout.clone), "remote", "add", "origin", REPOSITORY_URL), check=True)
     subprocess.run(("git", "-C", str(layout.clone), "config", "user.email", "tests@example.invalid"), check=True)
     subprocess.run(("git", "-C", str(layout.clone), "config", "user.name", "Dispatch Tests"), check=True)
@@ -1645,7 +1654,7 @@ def test_uninstall_preserves_user_data_and_purge_removes_root(tmp_path: Path) ->
         text=True,
     ).stdout.strip()
     subprocess.run(
-        ("git", "-C", str(layout.clone), "update-ref", "refs/remotes/origin/dev", commit),
+        ("git", "-C", str(layout.clone), "update-ref", f"refs/remotes/origin/{DEVELOPMENT_BRANCH}", commit),
         check=True,
     )
     (layout.venv / "bin").mkdir(parents=True)
@@ -1656,7 +1665,7 @@ def test_uninstall_preserves_user_data_and_purge_removes_root(tmp_path: Path) ->
             "schema_version": 1,
             "repository": REPOSITORY_URL,
             "channel": "dev",
-            "ref": "dev",
+            "ref": DEVELOPMENT_BRANCH,
             "commit": commit,
             "checkout": str(layout.clone),
             "venv": str(layout.venv),
@@ -2048,7 +2057,7 @@ def test_uninstall_rejects_invalid_provenance_before_removal(tmp_path: Path) -> 
             "schema_version": 1,
             "repository": "https://example.invalid/unrelated.git",
             "channel": "dev",
-            "ref": "dev",
+            "ref": DEVELOPMENT_BRANCH,
             "commit": AUTHORITY_COMMIT,
             "checkout": str(layout.clone),
             "venv": str(layout.venv),
@@ -2070,7 +2079,7 @@ def test_uninstall_rejects_invalid_provenance_before_removal(tmp_path: Path) -> 
             "schema_version": 1,
             "repository": REPOSITORY_URL,
             "channel": "dev",
-            "ref": "dev",
+            "ref": DEVELOPMENT_BRANCH,
             "commit": "f" * 40,
             "checkout": str(layout.clone),
             "venv": str(layout.venv),
@@ -2689,7 +2698,7 @@ def test_install_rejects_symlinked_staging_root(tmp_path: Path) -> None:
     outside.mkdir()
     (layout.dispatch_home / ".install-tmp").symlink_to(outside, target_is_directory=True)
     with pytest.raises(InstallerError) as error:
-        install_from_clone(layout, outside, channel="dev", ref="dev", run=lambda *_: completed())
+        install_from_clone(layout, outside, channel="dev", ref=DEVELOPMENT_BRANCH, run=lambda *_: completed())
     assert error.value.code == "staging_unsafe"
 
 
@@ -2992,7 +3001,7 @@ def test_post_activation_legacy_cleanup_failure_keeps_new_generation(
     monkeypatch.setattr(lifecycle_runtime, "legacy_service_unit_is_owned", lambda _layout: True)
     monkeypatch.setattr(lifecycle_runtime, "stop_legacy_user_service", lambda *_args, **_kwargs: True)
     monkeypatch.setattr(lifecycle_runtime, "remove_legacy_user_service", lambda *_args, **_kwargs: None)
-    result = install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
+    result = install_from_clone(layout, source, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
     assert result["status"] == "installed_cleanup_incomplete"
     assert result["cleanup_error_code"] == "post_activation_cleanup_failed"
     record = read_installation(layout)
@@ -3030,7 +3039,7 @@ def test_post_activation_work_cleanup_interrupt_keeps_new_generation(
         real_remove(path)
 
     monkeypatch.setattr(lifecycle_runtime, "_safe_remove", interrupted_cleanup)
-    result = install_from_clone(layout, source, channel="dev", ref="dev", run=fake_run)
+    result = install_from_clone(layout, source, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
     assert result["status"] == "installed_cleanup_incomplete"
     assert result["cleanup_error_code"] == "post_activation_cleanup_failed"
     record = read_installation(layout)

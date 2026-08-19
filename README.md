@@ -21,9 +21,12 @@ configured, and enabled long-running service boundary; it is not a Hermes tool.
 ## Install channels
 
 - **Latest Stable:** the newest published, non-draft, non-prerelease GitHub Release tag; installed detached at that immutable tag.
-- **Dev Branch:** the complete `dev` branch; installed attached to `dev` and updated fast-forward-only.
+- **Development:** the complete current `main` branch; installed attached to `main` and updated fast-forward-only.
 
-`main` is the reviewed source branch from which releases are created. Stable installations do not follow `main` as a moving branch.
+`main` is the only long-lived source branch and the latest reviewed, integrated,
+potentially unreleased source. Stable installations never follow mutable `main`;
+they resolve only immutable published Release tags. The public channel name remains
+`dev` for compatibility even though it tracks `main`.
 
 Recommended installation:
 

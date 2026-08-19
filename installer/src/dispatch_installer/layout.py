@@ -363,7 +363,7 @@ def read_installation(layout: InstallLayout) -> dict[str, object] | None:
     if not layout.installation_record.exists() and not layout.installation_record.is_symlink():
         return None
     payload = read_json(layout.installation_record)
-    from .repository import REPOSITORY_URL, validate_ref
+    from .repository import DEVELOPMENT_BRANCH, REPOSITORY_URL, validate_ref
 
     expected_fields = {
         "schema_version",
@@ -398,7 +398,7 @@ def read_installation(layout: InstallLayout) -> dict[str, object] | None:
         or payload.get("venv") != str(layout.venv)
         or channel not in {"stable", "dev"}
         or not valid_ref
-        or (channel == "dev" and ref != "dev")
+        or (channel == "dev" and ref != DEVELOPMENT_BRANCH)
         or re.fullmatch(r"[0-9a-f]{40}", str(payload.get("commit"))) is None
         or not valid_timestamp
     ):
