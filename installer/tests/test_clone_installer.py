@@ -47,6 +47,7 @@ from dispatch_installer.repository import (
     checkout_existing,
     clone_repository,
     current_commit,
+    local_checkout_matches_record,
     resolve_latest_release,
     verify_checkout_authority,
 )
@@ -579,6 +580,43 @@ def test_checkout_clean_rejects_ignored_files(tmp_path: Path) -> None:
     with pytest.raises(InstallerError) as error:
         assert_checkout_clean(clone)
     assert error.value.code == "clone_dirty"
+
+
+def test_local_checkout_record_rejects_noncanonical_origin(tmp_path: Path) -> None:
+    clone = tmp_path / "clone"
+    subprocess.run(("git", "init", "-q", "-b", DEVELOPMENT_BRANCH, str(clone)), check=True)
+    (clone / ".git").chmod(0o700)
+    subprocess.run(("git", "-C", str(clone), "config", "user.email", "tests@example.invalid"), check=True)
+    subprocess.run(("git", "-C", str(clone), "config", "user.name", "Dispatch Tests"), check=True)
+    subprocess.run(("git", "-C", str(clone), "remote", "add", "origin", REPOSITORY_URL), check=True)
+    (clone / "source.txt").write_text("canonical\n", encoding="utf-8")
+    subprocess.run(("git", "-C", str(clone), "add", "source.txt"), check=True)
+    subprocess.run(("git", "-C", str(clone), "commit", "-q", "-m", "canonical"), check=True)
+    commit = current_commit(clone)
+    subprocess.run(
+        ("git", "-C", str(clone), "update-ref", f"refs/remotes/origin/{DEVELOPMENT_BRANCH}", commit),
+        check=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(clone), "config", f"branch.{DEVELOPMENT_BRANCH}.remote", "origin"),
+        check=True,
+    )
+    subprocess.run(
+        (
+            "git", "-C", str(clone), "config",
+            f"branch.{DEVELOPMENT_BRANCH}.merge", f"refs/heads/{DEVELOPMENT_BRANCH}",
+        ),
+        check=True,
+    )
+    record: dict[str, object] = {"channel": "dev", "ref": DEVELOPMENT_BRANCH, "commit": commit}
+
+    assert local_checkout_matches_record(clone, record) is True
+
+    subprocess.run(
+        ("git", "-C", str(clone), "remote", "set-url", "origin", (tmp_path / "unrelated.git").as_uri()),
+        check=True,
+    )
+    assert local_checkout_matches_record(clone, record) is False
 
 
 def test_real_git_switches_shallow_stable_clone_to_tracking_dev(tmp_path: Path) -> None:
