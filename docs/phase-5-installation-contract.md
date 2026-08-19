@@ -34,4 +34,4 @@ The installation process must not enumerate release assets, infer packages from 
 
 ## Acceptance
 
-Source CI runs the source verifier, root tests, Core tests, installer tests, Handbook tests, ShellCheck for the canonical root `install.sh`, and `python dispatch-core --help`. It does not claim live browser, account, production service, or machine-lifecycle acceptance. Those are separate tests on an explicitly designated host.
+Source CI runs the source verifier, root tests, Core tests, installer tests, Handbook and Companion Bridge tests, ShellCheck for the canonical root `install.sh`, and `python dispatch-core --help`. It does not claim live browser, account, production service, or machine-lifecycle acceptance. Those are separate tests on an explicitly designated host.

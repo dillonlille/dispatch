@@ -357,6 +357,9 @@ def local_checkout_matches_record(clone: Path, record: dict[str, object] | None)
             return True
         channel = record.get("channel")
         ref = str(record.get("ref", ""))
+        remote_url = invoke("config", "--get", "remote.origin.url")
+        if remote_url.returncode != 0 or remote_url.stdout.strip() != REPOSITORY_URL:
+            return False
         branch = invoke("symbolic-ref", "--quiet", "--short", "HEAD")
         if channel == "dev":
             authority = invoke(
