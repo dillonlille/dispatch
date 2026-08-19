@@ -9,7 +9,7 @@ from typing import Any
 
 from .amazon_stream import CompanionStreamEvent
 from .companion_client import CompanionClient
-from .config import LoadedSettings, load_settings
+from .config import LoadedSettings, load_settings, plugin_paths
 from .driver_names import DriverNameResolver, StreamingDriverIdRewriter
 from .limits import ConcurrencyGate, ConcurrencyLimitError
 from .redaction import RedactingFilter, redact_secrets
@@ -84,10 +84,15 @@ class BridgeRuntime:
                 return EventHandleResult("prompt_too_long")
             try:
                 with self.gate.slot(context.user_id):
-                    return self._handle_prompt(context)
+                    return self._finalize_event(key, self._handle_prompt(context))
             except ConcurrencyLimitError:
                 self._send_notice(context, "DSP Companion is busy. Please try again shortly.")
-                return EventHandleResult("busy")
+                return self._finalize_event(key, EventHandleResult("busy"))
+
+    def _finalize_event(self, key: str, result: EventHandleResult) -> EventHandleResult:
+        if result.status in {"busy", "stream_failed"}:
+            self.store.forget_event(event_key=key)
+        return result
 
     def _handle_prompt(self, context: SlackMessageContext) -> EventHandleResult:
         existing = self.store.get(team_id=context.team_id, channel_id=context.channel_id, thread_ts=context.thread_ts) if context.is_thread_reply else None
@@ -229,7 +234,16 @@ def run(
         for name in ("should_stop", "acquire_browser_manager", "acquire_authentication_manager")
     ):
         raise ValueError("service context is invalid")
-    settings = load_settings(require_tokens=True)
+    if service_context is not None:
+        paths = plugin_paths(service_context.paths)
+        settings = load_settings(
+            config_path=paths.config_file,
+            secret_path=paths.secret_file,
+            database_path=paths.database_file,
+            require_tokens=True,
+        )
+    else:
+        settings = load_settings(require_tokens=True)
     if settings.config_errors:
         raise RuntimeError("configuration is invalid")
     if settings.security_errors:

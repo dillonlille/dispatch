@@ -316,6 +316,47 @@ def test_plugin_base_exceptions_are_bounded(monkeypatch) -> None:
     assert error.value.code == "plugin_invocation_failed"
 
 
+def test_entry_point_load_base_exception_is_bounded(monkeypatch) -> None:
+    entry_point = _GroupedEntryPoint(
+        "companion",
+        SERVICE_ENTRY_POINT_GROUP,
+        lambda context: None,
+    )
+    entry_point.load = lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+    _install_metadata(monkeypatch, entry_point)
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "companion")
+
+    with pytest.raises(PluginRuntimeError) as error:
+        discover_service("companion")
+    assert error.value.code == "plugin_load_failed"
+
+
+def test_service_and_cleanup_base_exceptions_are_bounded(monkeypatch, tmp_path) -> None:
+    paths = DispatchPaths.from_environment(
+        {"HOME": str(tmp_path / "home")},
+        code_root=Path(__file__).resolve().parents[2],
+    )
+
+    class Browser:
+        def __init__(self, received): pass
+        def shutdown(self): raise KeyboardInterrupt
+
+    def service(context):
+        context.acquire_browser_manager()
+        raise SystemExit
+
+    monkeypatch.setattr(plugin_runtime, "BrowserManager", Browser)
+    _install_metadata(
+        monkeypatch,
+        _GroupedEntryPoint("companion", SERVICE_ENTRY_POINT_GROUP, service),
+    )
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "companion")
+
+    with pytest.raises(PluginRuntimeError) as error:
+        invoke_service("companion", paths=paths)
+    assert error.value.code == "plugin_service_cleanup_failed"
+
+
 def test_service_context_factories_keep_managers_in_process(monkeypatch, tmp_path) -> None:
     paths = DispatchPaths.from_environment({"HOME": str(tmp_path / "home")}, code_root=Path(__file__).resolve().parents[2])
     managers = []

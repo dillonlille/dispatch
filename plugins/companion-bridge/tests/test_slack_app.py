@@ -85,3 +85,17 @@ def test_runtime_denies_unknown_channel_without_persisting_dedupe(tmp_path):
     accepted = bridge.handle_event(event, event_id="event-denied")
     assert accepted.status == "streamed"
     assert companion.calls == [("hello", None, None)]
+
+
+def test_transient_stream_failure_releases_dedupe_reservation(tmp_path):
+    bridge, api, companion = runtime(tmp_path)
+    event = {"team": "T1", "channel": "C1", "user": "U1", "ts": "1", "text": "<@UBOT> hello"}
+    original = companion.stream_response
+    companion.stream_response = lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("temporary"))
+
+    failed = bridge.handle_event(event, event_id="event-retry")
+    assert failed.status == "stream_failed"
+
+    companion.stream_response = original
+    retried = bridge.handle_event(event, event_id="event-retry")
+    assert retried.status == "streamed"

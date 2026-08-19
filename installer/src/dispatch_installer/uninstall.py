@@ -41,8 +41,10 @@ from .service import (
     remove_plugin_service,
     remove_user_service,
     restore_plugin_service_states,
+    restore_systemd_service_state,
     service_unit_is_owned,
     status_plugin_service,
+    systemd_service_state,
 )
 from .user_command import inspect_user_command, remove_user_command
 
@@ -414,6 +416,11 @@ def uninstall(
         if locked_blockers:
             raise InstallerError("uninstall_blocked", "; ".join(locked_blockers))
         service_present = layout.service_path.exists() or layout.service_path.is_symlink()
+        main_service_state = (
+            systemd_service_state("dispatch.service", run=run)
+            if service_present
+            else {"active": False, "enabled": False}
+        )
         if service_present:
             stopped = run(("systemctl", "--user", "stop", "dispatch.service"), None)
             if stopped.returncode != 0:
@@ -428,17 +435,17 @@ def uninstall(
             generation_lock = None
             if service_present:
                 try:
-                    restarted = run(("systemctl", "--user", "enable", "--now", "dispatch.service"), None)
+                    restore_systemd_service_state(
+                        "dispatch.service",
+                        main_service_state,
+                        run=run,
+                    )
                 except BaseException as restart_exc:
                     raise InstallerError(
                         "service_rollback_failed",
                         "uninstall was blocked and the Dispatch service could not be restored",
                     ) from restart_exc
-                if restarted.returncode != 0:
-                    raise InstallerError(
-                        "service_rollback_failed",
-                        "uninstall was blocked and the Dispatch service could not be restored",
-                    ) from exc
+
             raise
         plugin_ids = _plugin_service_ids(layout)
         plugin_states: list[dict[str, object]] = []
@@ -542,9 +549,11 @@ def uninstall(
                 if reloaded.returncode != 0:
                     raise InstallerError("service_rollback_failed", "systemd reload failed during uninstall rollback")
                 if service_present:
-                    restarted = run(("systemctl", "--user", "enable", "--now", "dispatch.service"), None)
-                    if restarted.returncode != 0:
-                        raise InstallerError("service_rollback_failed", "Dispatch service restart failed during rollback")
+                    restore_systemd_service_state(
+                        "dispatch.service",
+                        main_service_state,
+                        run=run,
+                    )
                 elif legacy_present:
                     restarted = run(("systemctl", "--user", "enable", "--now", "dispatch-core.service"), None)
                     if restarted.returncode != 0:

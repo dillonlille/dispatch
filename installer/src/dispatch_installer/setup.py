@@ -34,8 +34,10 @@ from .service import (
     prepare_plugin_service,
     remove_plugin_service,
     restore_plugin_service_states,
+    restore_systemd_service_state,
     service_unit_is_owned,
     stop_plugin_services_for_activation,
+    systemd_service_state,
 )
 
 RunCommand = Callable[[Sequence[str], Path | None], subprocess.CompletedProcess[str]]
@@ -775,6 +777,9 @@ def _plugin_config(layout: InstallLayout, selected: list[str]) -> dict[str, obje
 
 def _long_running_plugin_ids(layout: InstallLayout, selected: Sequence[str]) -> list[str]:
     catalog = _plugin_id_map(layout)
+    unknown = sorted(set(selected) - set(catalog))
+    if unknown:
+        raise InstallerError("plugin_unknown", f"selected plugin source is missing: {unknown[0]}")
     result: list[str] = []
     for plugin_id in selected:
         metadata = plugin_metadata(catalog[plugin_id], expected_id=plugin_id)
@@ -847,6 +852,11 @@ def configure_plugins(
     service_present = layout.service_path.exists() or layout.service_path.is_symlink()
     if service_present and not service_unit_is_owned(layout):
         raise InstallerError("service_unit_unsafe", "Dispatch service unit is not Dispatch-owned")
+    main_service_state = (
+        systemd_service_state("dispatch.service", run=run)
+        if service_present
+        else {"active": False, "enabled": False}
+    )
 
     metadata = {
         plugin_id: plugin_metadata(catalog[plugin_id], expected_id=plugin_id)
@@ -939,9 +949,16 @@ def configure_plugins(
             run=run,
         )
         if service_present:
-            completed = run(("systemctl", "--user", "restart", "dispatch.service"), None)
-            if completed.returncode != 0:
-                raise InstallerError("service_restart_failed", "Dispatch service could not be restarted after setup")
+            if main_service_state.get("active") is True:
+                completed = run(("systemctl", "--user", "restart", "dispatch.service"), None)
+                if completed.returncode != 0:
+                    raise InstallerError("service_restart_failed", "Dispatch service could not be restarted after setup")
+            else:
+                restore_systemd_service_state(
+                    "dispatch.service",
+                    main_service_state,
+                    run=run,
+                )
     except BaseException:
         if use_replacement and backup is not None:
             try:
@@ -974,8 +991,13 @@ def configure_plugins(
                 "plugin setup failed and a prior plugin service could not be restored",
             )
         if service_present and (backup is not None or main_service_stopped):
-            restored = run(("systemctl", "--user", "enable", "--now", "dispatch.service"), None)
-            if restored.returncode != 0:
+            try:
+                restore_systemd_service_state(
+                    "dispatch.service",
+                    main_service_state,
+                    run=run,
+                )
+            except InstallerError:
                 raise InstallerError(
                     "plugin_environment_rollback_failed",
                     "plugin setup failed and the prior Dispatch service could not be restored",

@@ -266,6 +266,22 @@ def test_entry_point_rejects_symlinked_source_parent(tmp_path: Path) -> None:
     assert any("entry point target is not a source callable" in failure for failure in result.failures)
 
 
+def test_policy_bounds_plugin_base_exception(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    service = root / "src/example_plugin/service.py"
+    service.write_text(
+        service.read_text(encoding="utf-8").replace(
+            "def handle(request):\n    action = request.get(\"action\") if isinstance(request, dict) else \"invalid\"",
+            "def handle(request):\n    raise KeyboardInterrupt",
+        ),
+        encoding="utf-8",
+    )
+
+    result = MODULE.audit_owner(root)
+
+    assert any("request probe failed: KeyboardInterrupt" in failure for failure in result.failures)
+
+
 def test_manifest_is_optional_for_source_plugin(tmp_path: Path) -> None:
     root = fixture(tmp_path)
     (root / "dispatch-plugin.yaml").unlink()

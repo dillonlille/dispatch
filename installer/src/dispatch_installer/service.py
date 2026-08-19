@@ -29,6 +29,27 @@ def _run(command: Sequence[str], cwd: Path | None = None) -> subprocess.Complete
     return subprocess.run(command, cwd=cwd, check=False, capture_output=True, text=True)
 
 
+def systemd_service_state(service: str, *, run: RunCommand = _run) -> dict[str, bool]:
+    return {
+        "active": run(("systemctl", "--user", "is-active", "--quiet", service), None).returncode == 0,
+        "enabled": run(("systemctl", "--user", "is-enabled", "--quiet", service), None).returncode == 0,
+    }
+
+
+def restore_systemd_service_state(
+    service: str,
+    state: Mapping[str, object],
+    *,
+    run: RunCommand = _run,
+) -> None:
+    enable_command = "enable" if state.get("enabled") is True else "disable"
+    if run(("systemctl", "--user", enable_command, service), None).returncode != 0:
+        raise InstallerError("service_restore_failed", "service enablement state could not be restored")
+    active_command = "start" if state.get("active") is True else "stop"
+    if run(("systemctl", "--user", active_command, service), None).returncode != 0:
+        raise InstallerError("service_restore_failed", "service activity state could not be restored")
+
+
 def _quote_systemd(value: str) -> str:
     return '"' + value.replace("%", "%%").replace("\\", "\\\\").replace('"', '\\"') + '"'
 
@@ -220,8 +241,10 @@ def enable_plugin_service(
         unit_before = unit_path.read_bytes()
         receipt_before = receipt_path.read_bytes()
         service_name = plugin_service_name(plugin_id)
-        active_before = run(("systemctl", "--user", "is-active", "--quiet", service_name), None).returncode == 0
-        enabled_before = run(("systemctl", "--user", "is-enabled", "--quiet", service_name), None).returncode == 0
+        if unit_before is not None:
+            previous_state = systemd_service_state(service_name, run=run)
+            active_before = previous_state["active"]
+            enabled_before = previous_state["enabled"]
     elif receipt_path.exists() or receipt_path.is_symlink():
         raise InstallerError("plugin_service_unsafe", "plugin service receipt has no owned unit")
 
@@ -271,10 +294,14 @@ def enable_plugin_service(
                 attempt(lambda: _atomic_bytes(receipt_path, receipt_before))
         if systemd_touched:
             attempt(lambda: run(("systemctl", "--user", "daemon-reload"), None))
-        if enabled_before:
-            attempt(lambda: run(("systemctl", "--user", "enable", "--now", plugin_service_name(plugin_id)), None))
-        elif active_before:
-            attempt(lambda: run(("systemctl", "--user", "start", plugin_service_name(plugin_id)), None))
+        if unit_before is not None and systemd_touched:
+            attempt(
+                lambda: restore_systemd_service_state(
+                    plugin_service_name(plugin_id),
+                    {"active": active_before, "enabled": enabled_before},
+                    run=run,
+                )
+            )
         if rollback_failure is not None:
             raise InstallerError(
                 "plugin_service_activation_rollback_failed",
@@ -361,6 +388,7 @@ def remove_plugin_service(
         raise InstallerError("plugin_service_unsafe", "plugin service unit is not Dispatch-owned")
     service = plugin_service_name(plugin_id)
     previous_receipt = _read_plugin_receipt(layout, plugin_id)
+    previous_state = systemd_service_state(service, run=run)
     if run(("systemctl", "--user", "disable", "--now", service), None).returncode != 0:
         raise InstallerError("plugin_service_stop_failed", "plugin service could not be stopped")
     content = path.read_bytes()
@@ -377,10 +405,7 @@ def remove_plugin_service(
             reload_result = run(("systemctl", "--user", "daemon-reload"), None)
             if reload_result.returncode != 0:
                 raise InstallerError("plugin_service_rollback_failed", "systemd reload failed during plugin service rollback")
-            if previous_receipt is not None and previous_receipt.get("status") == "enabled":
-                restored = run(("systemctl", "--user", "enable", "--now", service), None)
-                if restored.returncode != 0:
-                    raise InstallerError("plugin_service_rollback_failed", "plugin service restart failed during rollback")
+            restore_systemd_service_state(service, previous_state, run=run)
         except BaseException as exc:
             rollback_failure = rollback_failure or exc
         if rollback_failure is not None:
@@ -526,18 +551,18 @@ def restore_plugin_service_states(
             raise InstallerError("plugin_service_unsafe", "plugin service unit could not be restored safely")
         service = plugin_service_name(plugin_id)
         current = status_plugin_service(layout, plugin_id, run=run)
-        if state.get("enabled") is True:
-            if current.get("active") is True and current.get("enabled") is True:
-                continue
-            command = ("systemctl", "--user", "enable", "--now", service)
-        elif state.get("active") is True:
-            if current.get("active") is True:
-                continue
-            command = ("systemctl", "--user", "start", service)
-        else:
+        expected_active = state.get("active") is True
+        expected_enabled = state.get("enabled") is True
+        if (
+            current.get("active") is expected_active
+            and current.get("enabled") is expected_enabled
+        ):
             continue
-        if run(command, None).returncode != 0:
-            raise InstallerError("plugin_service_restore_failed", "plugin service state could not be restored")
+        restore_systemd_service_state(
+            service,
+            {"active": expected_active, "enabled": expected_enabled},
+            run=run,
+        )
 
 
 def service_unit(layout: InstallLayout) -> bytes:
@@ -616,9 +641,20 @@ def _atomic_bytes(path: Path, content: bytes, *, mode: int = 0o600) -> None:
 
 
 def _record_matches(layout: InstallLayout, content: bytes) -> bool:
+    record_path = layout.state / "service.json"
     try:
-        payload = read_json(layout.state / "service.json")
-    except InstallerError:
+        assert_user_owned_directory(layout.state, "Dispatch state directory")
+        details = record_path.lstat()
+        if (
+            record_path.is_symlink()
+            or not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.geteuid()
+            or details.st_nlink != 1
+            or stat.S_IMODE(details.st_mode) != 0o600
+        ):
+            return False
+        payload = read_json(record_path)
+    except (InstallerError, OSError):
         return False
     return (
         set(payload) == {"schema_version", "unit", "unit_sha256", "service", "contains_secrets"}
@@ -762,6 +798,7 @@ def remove_user_service(layout: InstallLayout, *, run: RunCommand = _run) -> Non
     assert_user_owned_directory(layout.service_directory, "service directory")
     if not service_unit_is_owned(layout):
         raise InstallerError("service_unit_unsafe", "Dispatch service unit is not Dispatch-owned")
+    previous_state = systemd_service_state("dispatch.service", run=run)
     completed = run(("systemctl", "--user", "disable", "--now", "dispatch.service"), None)
     if completed.returncode != 0:
         raise InstallerError("service_stop_failed", "Dispatch user service could not be stopped")
@@ -774,17 +811,14 @@ def remove_user_service(layout: InstallLayout, *, run: RunCommand = _run) -> Non
             _atomic_bytes(layout.service_path, content)
         except BaseException as exc:
             rollback_failure = exc
-        for command in (
-            ("systemctl", "--user", "daemon-reload"),
-            ("systemctl", "--user", "enable", "--now", "dispatch.service"),
-        ):
-            try:
-                result = run(command, None)
-                if result.returncode != 0:
-                    raise InstallerError("service_rollback_command_failed", "service rollback command failed")
-            except BaseException as exc:
-                if rollback_failure is None:
-                    rollback_failure = exc
+        try:
+            result = run(("systemctl", "--user", "daemon-reload"), None)
+            if result.returncode != 0:
+                raise InstallerError("service_rollback_command_failed", "service rollback command failed")
+            restore_systemd_service_state("dispatch.service", previous_state, run=run)
+        except BaseException as exc:
+            if rollback_failure is None:
+                rollback_failure = exc
         if rollback_failure is not None:
             raise InstallerError(
                 "service_rollback_failed",
@@ -866,6 +900,7 @@ __all__ = [
     "remove_plugin_service",
     "remove_plugin_services",
     "restore_plugin_service_states",
+    "restore_systemd_service_state",
     "status_plugin_service",
     "status_plugin_services",
     "stop_plugin_services_for_activation",
@@ -874,4 +909,5 @@ __all__ = [
     "service_unit_is_owned",
     "service_unit",
     "stop_legacy_user_service",
+    "systemd_service_state",
 ]

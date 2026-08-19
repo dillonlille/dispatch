@@ -1,3 +1,5 @@
+import types
+
 from companion_bridge.config import load_settings
 from companion_bridge.slack_app import run
 
@@ -32,6 +34,7 @@ class ServiceContext:
     def __init__(self):
         self.browser = object()
         self.authentication = object()
+        self.paths = object()
 
     def should_stop(self):
         return True
@@ -59,6 +62,15 @@ def test_foreground_service_uses_core_context_and_closes_socket_handler(monkeypa
     database = tmp_path / "threads.sqlite3"
     settings = load_settings(config, secret, database, require_tokens=True)
     monkeypatch.setattr("companion_bridge.slack_app.load_settings", lambda **kwargs: settings)
+    observed_paths = []
+    monkeypatch.setattr(
+        "companion_bridge.slack_app.plugin_paths",
+        lambda paths: observed_paths.append(paths) or types.SimpleNamespace(
+            config_file=config,
+            secret_file=secret,
+            database_file=database,
+        ),
+    )
     handlers = []
 
     def handler_factory(app, token):
@@ -71,4 +83,5 @@ def test_foreground_service_uses_core_context_and_closes_socket_handler(monkeypa
 
     assert handlers[0].connected is True
     assert handlers[0].closed is True
+    assert observed_paths == [context.paths]
     assert set(handlers[0].app.handlers) == {"app_mention", "message"}

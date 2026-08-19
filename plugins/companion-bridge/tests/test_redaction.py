@@ -26,3 +26,18 @@ def test_authorization_and_plain_csrf_values_are_redacted() -> None:
     )
     assert "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789" not in rendered
     assert "csrf=SECRET" not in rendered
+
+
+def test_structured_credential_suffixes_are_redacted() -> None:
+    rendered = redact_secrets(
+        {
+            "access_token": "ACCESS-VALUE",
+            "csrf_token": "CSRF-VALUE",
+            "session_token": "SESSION-VALUE",
+            "authorization": "AUTH-VALUE",
+            "visible": "keep-me",
+        }
+    )
+    for secret in ("ACCESS-VALUE", "CSRF-VALUE", "SESSION-VALUE", "AUTH-VALUE"):
+        assert secret not in rendered
+    assert "keep-me" in rendered

@@ -51,9 +51,11 @@ from .service import (
     legacy_service_unit_is_owned,
     remove_legacy_user_service,
     restore_plugin_service_states,
+    restore_systemd_service_state,
     service_unit_is_owned,
     stop_legacy_user_service,
     stop_plugin_services_for_activation,
+    systemd_service_state,
 )
 from .setup import install_editable_source, migrate_legacy_plugin_config, plugin_dependencies, reconcile_plugin_services
 from .user_command import install_user_command
@@ -735,6 +737,11 @@ def _activate(
         raise
     assert work is not None
     old_service_present = snapshots["service"][1] is not None
+    main_service_state = (
+        systemd_service_state("dispatch.service", run=run)
+        if old_service_present
+        else {"active": False, "enabled": False}
+    )
     selected_plugins = _selected_plugins(layout)
     stopped_plugin_services: list[dict[str, object]] = []
     venv_swap = _SwapState()
@@ -798,7 +805,13 @@ def _activate(
         if legacy_owned:
             attempt(lambda: run(("systemctl", "--user", "enable", "--now", "dispatch-core.service"), None))
         elif old_service_present:
-            attempt(lambda: run(("systemctl", "--user", "enable", "--now", "dispatch.service"), None))
+            attempt(
+                lambda: restore_systemd_service_state(
+                    "dispatch.service",
+                    main_service_state,
+                    run=run,
+                )
+            )
         attempt(lambda: restore_plugin_service_states(layout, stopped_plugin_services, run=run))
         try:
             _safe_remove(work)

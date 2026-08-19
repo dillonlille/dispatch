@@ -106,6 +106,10 @@ class ConversationStore:
                 return False
         return True
 
+    def forget_event(self, *, event_key: str) -> None:
+        with self._connect() as db:
+            db.execute("DELETE FROM processed_events WHERE event_key=?", (event_key,))
+
     def cleanup_stale(self, *, ttl_seconds: int, now: int | None = None) -> int:
         cutoff = int(time.time() if now is None else now) - ttl_seconds
         with self._connect() as db:
@@ -162,6 +166,13 @@ class ConversationStore:
 
 def _mapping(row: sqlite3.Row) -> ConversationMapping:
     return ConversationMapping(str(row["team_id"]), str(row["channel_id"]), str(row["thread_ts"]), str(row["conversation_id"]), str(row["last_message_id"]) if row["last_message_id"] is not None else None, int(row["updated_at"]), int(row["generation"]))
+
+
+def validate_conversation_database(path: str | Path) -> None:
+    database = Path(path).expanduser()
+    if not database.exists() and not database.is_symlink():
+        return
+    _assert_private_database(database)
 
 
 def _ensure_private_directory(path: Path) -> None:

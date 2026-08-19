@@ -5,9 +5,27 @@ import re
 from collections.abc import Mapping
 from typing import Any
 
-_SECRET_KEY = re.compile(
-    r"(?i)^(?:cookie|csrf|token|session|secret|password|api[_-]?key|connection[_-]?string)$"
+_SECRET_KEY_SUFFIXES = (
+    "_token",
+    "_secret",
+    "_password",
+    "_cookie",
+    "_csrf",
+    "_session",
+    "_api_key",
+    "_connection_string",
 )
+_SECRET_KEYS = {
+    "authorization",
+    "cookie",
+    "csrf",
+    "token",
+    "session",
+    "secret",
+    "password",
+    "api_key",
+    "connection_string",
+}
 
 _PATTERNS = (
     (re.compile(r"xox[baprs]-[A-Za-z0-9-]+"), "[REDACTED_SLACK_TOKEN]"),
@@ -36,13 +54,18 @@ def _redact_structure(value: Any, *, depth: int = 0) -> Any:
     if isinstance(value, Mapping):
         return {
             key: "[REDACTED_SECRET]"
-            if _SECRET_KEY.fullmatch(str(key))
+            if _is_secret_key(key)
             else _redact_structure(item, depth=depth + 1)
             for key, item in value.items()
         }
     if isinstance(value, (list, tuple, set, frozenset)):
         return [_redact_structure(item, depth=depth + 1) for item in value]
     return value
+
+
+def _is_secret_key(value: Any) -> bool:
+    normalized = str(value).strip().lower().replace("-", "_")
+    return normalized in _SECRET_KEYS or normalized.endswith(_SECRET_KEY_SUFFIXES)
 
 
 class RedactingFilter(logging.Filter):

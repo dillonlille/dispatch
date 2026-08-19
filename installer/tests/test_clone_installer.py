@@ -67,6 +67,7 @@ from dispatch_installer.service import (
     remove_legacy_user_service,
     remove_plugin_service,
     remove_user_service,
+    restore_systemd_service_state,
     plugin_service_path,
     plugin_service_receipt_path,
     plugin_service_unit,
@@ -1889,7 +1890,8 @@ def test_uninstall_rolls_back_current_service_after_later_mutation_failure(
     assert inspect_user_command(layout)["status"] == "ready"
     assert layout.service_path.exists()
     assert service_unit_is_owned(layout)
-    assert ("systemctl", "--user", "enable", "--now", "dispatch.service") in commands
+    assert ("systemctl", "--user", "enable", "dispatch.service") in commands
+    assert ("systemctl", "--user", "start", "dispatch.service") in commands
 
 
 def test_uninstall_rolls_back_plugin_service_after_later_failure(
@@ -1929,7 +1931,8 @@ def test_uninstall_rolls_back_plugin_service_after_later_failure(
     assert plugin_service_path(layout, "worker").exists()
     assert plugin_service_receipt_path(layout, "worker").exists()
     assert status_plugin_service(layout, "worker", run=fake_run)["status"] == "ready"
-    assert ("systemctl", "--user", "enable", "--now", "dispatch-plugin-worker.service") in commands
+    assert ("systemctl", "--user", "enable", "dispatch-plugin-worker.service") in commands
+    assert ("systemctl", "--user", "start", "dispatch-plugin-worker.service") in commands
 
 
 def test_uninstall_restores_staged_directories_after_late_record_failure(
@@ -1995,7 +1998,7 @@ def test_uninstall_reports_service_rollback_failure_when_generation_lock_blocks(
         values = tuple(str(value) for value in command)
         if values == ("systemctl", "--user", "stop", "dispatch.service"):
             return completed()
-        if values == ("systemctl", "--user", "enable", "--now", "dispatch.service"):
+        if values == ("systemctl", "--user", "enable", "dispatch.service"):
             return completed(returncode=1)
         return completed()
 
@@ -3469,3 +3472,65 @@ def test_required_plugin_service_cannot_be_missing(tmp_path: Path) -> None:
     services = report["services"]
     assert isinstance(services, dict)
     assert services["worker"]["status"] == "missing"
+
+
+def test_service_state_restore_preserves_enabled_but_inactive(tmp_path: Path) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(command, cwd=None):
+        commands.append(tuple(str(value) for value in command))
+        return completed()
+
+    restore_systemd_service_state(
+        "dispatch-plugin-worker.service",
+        {"active": False, "enabled": True},
+        run=fake_run,
+    )
+    assert commands == [
+        ("systemctl", "--user", "enable", "dispatch-plugin-worker.service"),
+        ("systemctl", "--user", "stop", "dispatch-plugin-worker.service"),
+    ]
+
+
+def test_main_service_receipt_parent_symlink_is_not_authority(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    install_user_service(layout, activate=False)
+    external = tmp_path / "external-state"
+    layout.state.rename(external)
+    layout.state.symlink_to(external, target_is_directory=True)
+
+    assert service_unit_is_owned(layout) is False
+
+
+def test_doctor_and_cli_bound_stale_plugin_selection(tmp_path: Path, monkeypatch, capsys) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    atomic_json(
+        layout.config / "plugins.json",
+        {
+            "schema_version": 1,
+            "status": "complete",
+            "selected_plugins": ["missing-plugin"],
+            "plugins": [],
+            "contains_secrets": False,
+        },
+    )
+    report = inspect_installation(layout)
+    assert report["status"] == "unsafe"
+    assert report["checks"]["plugins"]["status"] == "unsafe"
+
+    monkeypatch.setattr(cli_runtime, "read_installation", lambda current: {"channel": "dev"})
+    result = installer_main(
+        [
+            "--dispatch-home",
+            str(layout.dispatch_home),
+            "--json",
+            "plugin-service",
+            "status",
+            "missing-plugin",
+        ]
+    )
+    assert result == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "plugin_unknown"

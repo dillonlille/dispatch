@@ -18,7 +18,7 @@ def test_plugin_handler_rejects_unknown_or_extra_input() -> None:
     assert handle({"action": "unknown"})["error"]["code"] == "invalid_input"
 
 
-def test_configured_health_does_not_claim_operational_readiness(monkeypatch) -> None:
+def test_configured_health_does_not_claim_operational_readiness(monkeypatch, tmp_path) -> None:
     settings = types.SimpleNamespace(
         secrets=types.SimpleNamespace(
             slack_bot_token_present=True,
@@ -27,8 +27,19 @@ def test_configured_health_does_not_claim_operational_readiness(monkeypatch) -> 
         security_errors=[],
         config_errors=[],
         config=types.SimpleNamespace(
-            amazon=types.SimpleNamespace(auth_account_alias="default")
+            amazon=types.SimpleNamespace(
+                auth_account_alias="default",
+                companion_url="https://logistics.amazon.com/dspconsolev2",
+                context_endpoint="https://logistics.amazon.com/companion/platform/api/context",
+                stream_endpoint="https://logistics.amazon.com/companion/platform/api/conversations/stream",
+            ),
+            driver_names=types.SimpleNamespace(
+                enabled=False,
+                id_regex=r"\bA[A-Z0-9]{10,24}\b",
+                fallback_to_id=True,
+            ),
         ),
+        database_path=tmp_path / "threads.sqlite3",
     )
     monkeypatch.setattr("companion_bridge.service.load_settings", lambda require_tokens=False: settings)
 

@@ -187,7 +187,7 @@ def _load_target(root: Path, source_root: Path, target: str) -> Any | None:
         for part in attribute.split("."):
             value = getattr(value, part)
         return value
-    except (AttributeError, ImportError, ModuleNotFoundError, OSError, TypeError, ValueError):
+    except BaseException:
         return None
     finally:
         try:
@@ -214,7 +214,7 @@ def _check_entry_point(audit: Audit, project: dict[str, Any], source_root: Path,
     try:
         response = handler({"action": "health"})
         invalid_response = handler({"action": "__invalid__"})
-    except Exception as exc:  # pragma: no cover - exercised by plugin-specific failures
+    except BaseException as exc:  # pragma: no cover - exercised by plugin-specific failures
         audit.fail(f"dispatch.plugins request probe failed: {type(exc).__name__}")
         return
     _check_envelope(audit, response, "dispatch.plugins health response", health=True)

@@ -197,7 +197,7 @@ class PluginServiceContext:
         if self._browser_manager is not None:
             try:
                 self._browser_manager.shutdown()
-            except Exception as exc:
+            except BaseException as exc:
                 raise PluginRuntimeError("browser_manager_shutdown_failed", "Browser Manager shutdown failed") from exc
 
 
@@ -346,7 +346,7 @@ def discover_plugins() -> list[DiscoveredPlugin]:
         entry_point = candidates[0]
         try:
             handler = entry_point.load()
-        except Exception as exc:
+        except BaseException as exc:
             raise PluginRuntimeError("plugin_load_failed", f"active plugin {plugin_id} could not be loaded") from exc
         if not callable(handler):
             raise PluginRuntimeError("plugin_entry_point_invalid", f"active plugin {plugin_id} entry point is not callable")
@@ -393,7 +393,7 @@ def _load_entry_point(
     entry_point = candidates[0]
     try:
         handler = entry_point.load()
-    except Exception as exc:
+    except BaseException as exc:
         raise PluginRuntimeError("plugin_load_failed", f"active plugin {plugin_id} {role} could not be loaded") from exc
     if not callable(handler) or not _accepts_context(handler):
         raise PluginRuntimeError(
@@ -428,7 +428,7 @@ def _discover_context_entry_points(
         entry_point = candidates[0]
         try:
             handler = entry_point.load()
-        except Exception as exc:
+        except BaseException as exc:
             raise PluginRuntimeError("plugin_load_failed", f"active plugin {plugin_id} {role} could not be loaded") from exc
         if not callable(handler) or not _accepts_context(handler):
             raise PluginRuntimeError(
@@ -515,16 +515,29 @@ def invoke_service(
         raise PluginRuntimeError("plugin_context_invalid", "plugin service context is invalid")
     if not service_context.plugin_id:
         service_context.plugin_id = plugin_id
+    failure: PluginRuntimeError | None = None
+    result: Any = None
     try:
-        try:
-            with redirect_stdout(_BoundedPluginStdout()):
-                return service.handle(service_context)
-        except (KeyboardInterrupt, EOFError) as exc:
-            raise PluginRuntimeError("plugin_service_interrupted", "plugin service was interrupted") from exc
-        except BaseException as exc:
-            raise PluginRuntimeError("plugin_service_failed", "plugin service failed") from exc
-    finally:
+        with redirect_stdout(_BoundedPluginStdout()):
+            result = service.handle(service_context)
+    except (KeyboardInterrupt, EOFError) as exc:
+        failure = PluginRuntimeError("plugin_service_interrupted", "plugin service was interrupted")
+        failure.__cause__ = exc
+    except BaseException as exc:
+        failure = PluginRuntimeError("plugin_service_failed", "plugin service failed")
+        failure.__cause__ = exc
+    try:
         service_context.close()
+    except PluginRuntimeError as cleanup_error:
+        if failure is not None:
+            raise PluginRuntimeError(
+                "plugin_service_cleanup_failed",
+                "plugin service failed and Browser Manager cleanup also failed",
+            ) from cleanup_error
+        raise
+    if failure is not None:
+        raise failure
+    return result
 
 
 def invoke_configurator(
