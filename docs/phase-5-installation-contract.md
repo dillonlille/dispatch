@@ -13,7 +13,7 @@ Hermes is a user-supplied prerequisite. Dispatch does not install, configure, in
 
 ## Installation phases
 
-1. choose `main`/a reviewed tag for stable or `dev` for development;
+1. choose an immutable published tag for stable or current `main` for development;
 2. clone or fetch that exact Git ref into `${DISPATCH_HOME}/dispatch`;
 3. create `${DISPATCH_HOME}/venv` and install the reviewed development/runtime requirements plus editable source components;
 4. create the private `config`, `secrets`, `data`, `state`, `cache`, `logs`, and `run` roots with restrictive ownership and modes;

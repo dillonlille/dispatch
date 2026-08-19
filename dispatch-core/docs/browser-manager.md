@@ -65,4 +65,6 @@ cd dispatch-core
 python3 -m pytest -q -p no:cacheprovider tests/browser_manager tests/command_interface
 ```
 
-Real install, repair, update, sandbox-launch, and rollback acceptance runs only on `dispatch-testing` from exact accepted `dev` bootstrap bytes.
+Real install, repair, update, sandbox-launch, and rollback acceptance runs only
+on `dispatch-testing` from exact accepted `main` bootstrap bytes. The public
+`dev` channel installs those current `main` bytes.

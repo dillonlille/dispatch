@@ -11,7 +11,7 @@ curl -fsSL https://dispatch.dillonlille.com/install.sh | bash
 When a controlling terminal is available, the bootstrap reads its prompts from `/dev/tty` and offers:
 
 1. **Latest Stable** — resolves the newest published, non-draft, non-prerelease GitHub Release, clones that release tag, and leaves the checkout detached at the tag.
-2. **Dev Branch** — clones the complete `dev` branch and leaves the checkout attached to `dev`.
+2. **Development** — clones current `main` and leaves the checkout attached to `main`.
 
 For automation or any process without a controlling terminal, select the channel explicitly:
 
@@ -80,7 +80,11 @@ dispatch channel dev
 dispatch uninstall --plan
 ```
 
-A development update refuses a dirty checkout, fetches `origin/dev`, and merges with `--ff-only`. A stable update resolves a published release tag and checks it out detached. Channel switching uses a newly verified clone while preserving `config`, `secrets`, `data`, `state`, and `logs`.
+A development update refuses a dirty checkout, fetches `origin/main`, and merges
+with `--ff-only`. A stable update resolves a published release tag and checks it
+out detached. Channel switching uses a newly verified clone while preserving
+`config`, `secrets`, `data`, `state`, and `logs`. The channel name remains `dev`
+for CLI compatibility; no long-lived Git branch named `dev` is required.
 
 ## Boundaries
 

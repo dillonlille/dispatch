@@ -50,7 +50,11 @@ The `dispatch/` checkout and `venv/` environment are installer-owned lifecycle p
 
 ## Stable and development channels
 
-A stable installation uses a published, non-draft, non-prerelease GitHub Release tag and remains detached at that tag. A development installation uses the complete `dev` branch and remains attached to it. Explicit channel switching preserves the durable roots. Development updates refuse local changes and merge `origin/dev` with `--ff-only`.
+A stable installation uses a published, non-draft, non-prerelease GitHub Release
+tag and remains detached at that tag. A development installation uses current
+`main` and remains attached to it. Explicit channel switching preserves the
+durable roots. Development updates refuse local changes and merge `origin/main`
+with `--ff-only`; `dev` remains the public channel label only.
 
 Use `dispatch update` to advance the selected channel and `dispatch channel stable|dev` to switch channels. Do not manually reset the installed checkout around the lifecycle command.
 

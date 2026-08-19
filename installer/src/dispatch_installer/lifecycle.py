@@ -36,6 +36,7 @@ from .layout import (
     read_installation,
 )
 from .repository import (
+    DEVELOPMENT_BRANCH,
     REPOSITORY_URL,
     assert_checkout_clean,
     checkout_existing,
@@ -312,7 +313,7 @@ def resolve_ref(channel: str, version: str | None, *, opener: Any = None) -> str
     if channel == "dev":
         if version:
             raise InstallerError("dev_version_invalid", "--version is only valid for the stable channel")
-        return "dev"
+        return DEVELOPMENT_BRANCH
     if channel != "stable":
         raise InstallerError("channel_invalid", "channel must be stable or dev")
     if version is None:
