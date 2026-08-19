@@ -5,6 +5,7 @@ import ctypes
 import importlib.util
 import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -49,10 +50,14 @@ from .service import (
     install_user_service,
     legacy_service_unit_is_owned,
     remove_legacy_user_service,
+    restore_plugin_service_states,
+    restore_systemd_service_state,
     service_unit_is_owned,
     stop_legacy_user_service,
+    stop_plugin_services_for_activation,
+    systemd_service_state,
 )
-from .setup import install_editable_source, migrate_legacy_plugin_config
+from .setup import install_editable_source, migrate_legacy_plugin_config, plugin_dependencies, reconcile_plugin_services
 from .user_command import install_user_command
 
 RunCommand = Callable[[Sequence[str], Path | None], subprocess.CompletedProcess[str]]
@@ -158,6 +163,8 @@ def ensure_venv(
     destination: Path | None = None,
     browser_cache: Path | None = None,
     browser_results: list[Any] | None = None,
+    selected_plugins: Sequence[str] | None = None,
+    provision_browser: bool = True,
     run: RunCommand = run_command,
 ) -> Path:
     """Build a complete replacement environment without mutating the active one."""
@@ -217,13 +224,55 @@ def ensure_venv(
     ).returncode != 0:
         raise InstallerError("installer_install_failed", "could not install the source installer adapter")
 
-    for plugin_id in _selected_plugins(layout):
+    selected = _selected_plugins(layout) if selected_plugins is None else list(selected_plugins)
+    plugin_sources: list[tuple[str, Path]] = []
+    dependency_by_name: dict[str, str] = {}
+    for plugin_id in selected:
         source = layout.clone / "plugins" / plugin_id
+        try:
+            source.relative_to(layout.clone)
+        except ValueError as exc:
+            raise InstallerError("selected_plugin_invalid", f"selected plugin path is invalid: {plugin_id}") from exc
         if not source.is_dir() or source.is_symlink():
             raise InstallerError("selected_plugin_missing", f"selected plugin source is missing: {plugin_id}")
-        if install_editable_source(python, source, run=private_run).returncode != 0:
+        dependencies = plugin_dependencies(source, expected_id=plugin_id)
+        for dependency in dependencies:
+            package = dependency.split("==", 1)[0].split("[", 1)[0]
+            canonical = re.sub(r"[-_.]+", "-", package).lower()
+            previous = dependency_by_name.get(canonical)
+            if previous is not None and previous != dependency:
+                raise InstallerError(
+                    "plugin_dependency_conflict",
+                    f"selected plugins require conflicting pins for {canonical}",
+                )
+            dependency_by_name[canonical] = dependency
+        plugin_sources.append((plugin_id, source))
+    if dependency_by_name:
+        _checked(
+            private_run,
+            (
+                str(python),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                *(dependency_by_name[name] for name in sorted(dependency_by_name)),
+            ),
+            None,
+            "plugin_dependencies_failed",
+            "could not install the selected plugin dependency closure",
+        )
+    for plugin_id, source in plugin_sources:
+        if install_editable_source(
+            python,
+            source,
+            no_deps=True,
+            run=private_run,
+        ).returncode != 0:
             raise InstallerError("plugin_install_failed", f"could not install selected plugin: {plugin_id}")
 
+    if not provision_browser:
+        return target
     staging_cache = browser_cache or target.parent / "browser-manager-playwright"
     result = _provision_browser(
         layout,
@@ -688,10 +737,22 @@ def _activate(
         raise
     assert work is not None
     old_service_present = snapshots["service"][1] is not None
+    main_service_state = (
+        systemd_service_state("dispatch.service", run=run)
+        if old_service_present
+        else {"active": False, "enabled": False}
+    )
+    selected_plugins = _selected_plugins(layout)
+    stopped_plugin_services: list[dict[str, object]] = []
     venv_swap = _SwapState()
     browser_swap = _SwapState()
     generation_lock: int | None = None
     try:
+        stopped_plugin_services = stop_plugin_services_for_activation(
+            layout,
+            selected_plugins,
+            run=run,
+        )
         if legacy_owned:
             stop_legacy_user_service(layout, run=run)
         if old_service_present:
@@ -710,6 +771,13 @@ def _activate(
         browser_payload = browser_result.installation_record(layout.browser_cache)
         atomic_json(pinned_installation_path(layout.browser_installation_record), browser_payload)
         service = install_user_service(layout, run=run, activate=True)
+        plugin_services = reconcile_plugin_services(layout, selected_plugins, run=run)
+        restore_plugin_service_states(
+            layout,
+            stopped_plugin_services,
+            allowed_ids=selected_plugins,
+            run=run,
+        )
     except BaseException as activation_error:
         rollback_failure: BaseException | None = None
 
@@ -737,7 +805,14 @@ def _activate(
         if legacy_owned:
             attempt(lambda: run(("systemctl", "--user", "enable", "--now", "dispatch-core.service"), None))
         elif old_service_present:
-            attempt(lambda: run(("systemctl", "--user", "enable", "--now", "dispatch.service"), None))
+            attempt(
+                lambda: restore_systemd_service_state(
+                    "dispatch.service",
+                    main_service_state,
+                    run=run,
+                )
+            )
+        attempt(lambda: restore_plugin_service_states(layout, stopped_plugin_services, run=run))
         try:
             _safe_remove(work)
         except BaseException:
@@ -787,6 +862,7 @@ def _activate(
         "browser": browser_result.safe_data(),
         "command": command,
         "service": service,
+        "plugin_services": plugin_services,
         "hermes": "untouched",
     }
     if cleanup_failed:

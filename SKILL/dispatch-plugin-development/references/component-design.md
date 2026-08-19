@@ -33,6 +33,12 @@ delivery service
 
 A query must not collect because data is absent or stale. It reports `not_configured`, `not_loaded`, or `stale` and leaves collection to an explicitly approved boundary.
 
+Long-running service plugins use the generic `dispatch.services` entry-point
+contract and an installer-owned service projection. Do not disguise an endless
+service loop as a bounded `dispatch.plugins` request. Secrets are onboarded only
+through an explicit trusted configurator or Core authentication boundary, and
+service selection never means automatic enablement.
+
 ## Metadata and data
 
 Declare the plugin identity and effective capability labels in `pyproject.toml`:

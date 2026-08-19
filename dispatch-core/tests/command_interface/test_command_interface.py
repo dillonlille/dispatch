@@ -54,6 +54,59 @@ def test_plugin_commands_use_the_generic_runtime_contract(monkeypatch, capsys) -
     assert invoked["data"]["response"]["data"]["request"]["question"] == "hello"
 
 
+def test_plugin_service_command_runs_in_foreground_and_restores_stop_boundary(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+    observed = {}
+
+    def service(plugin_id, *, paths, stop_requested):
+        observed.update(plugin_id=plugin_id, paths=paths)
+        observed["stop_requested"] = stop_requested()
+
+    monkeypatch.setattr(command_interface, "serve_plugin", service)
+
+    assert main(["plugin", "serve", "companion"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["action"] == "plugin-serve"
+    assert payload["status"] == "stopped"
+    assert payload["data"]["plugin"] == "companion"
+    assert observed["plugin_id"] == "companion"
+    assert observed["stop_requested"] is False
+
+
+def test_plugin_configurator_command_is_interactive_entry_point(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+    observed = {}
+
+    def configurator(plugin_id, *, paths):
+        observed.update(plugin_id=plugin_id, paths=paths)
+        return {
+            "ok": True,
+            "action": "configure",
+            "status": "configured",
+            "data": {},
+            "freshness": None,
+            "delivery": None,
+            "error": None,
+        }
+
+    monkeypatch.setattr(command_interface, "configure_plugin", configurator)
+
+    assert main(["plugin", "configure", "companion"]) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["action"] == "plugin-configure"
+    assert payload["status"] == "configured"
+    assert payload["data"]["plugin"] == "companion"
+    assert observed["plugin_id"] == "companion"
+
+
 def test_browser_doctor_is_bounded_and_does_not_launch_a_browser(monkeypatch, tmp_path, capsys) -> None:
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))

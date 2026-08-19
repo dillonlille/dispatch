@@ -220,6 +220,11 @@ def validate_identity_lines(relative: Path, text: str, errors: list[str]) -> Non
         if not match:
             continue
         value = match.group(1).strip().strip("\"'")
+        if relative.suffix == ".py" and re.fullmatch(
+            r"(?:str|int|float|bool|bytes|Path)(?:\s*\|\s*None)?",
+            value,
+        ):
+            continue
         if not PLACEHOLDER_VALUE.match(value) and not SAFE_PUBLIC_IDENTITY_VALUE.match(value):
             errors.append(
                 f"{relative.as_posix()}:{line_number}: identity-like setting has a non-placeholder value"

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import importlib
 import fcntl
@@ -37,7 +38,7 @@ browser_lock_runtime = importlib.import_module("dispatch_installer.browser_lock"
 cli_runtime = importlib.import_module("dispatch_installer.cli")
 layout_runtime = importlib.import_module("dispatch_installer.layout")
 from dispatch_installer.doctor import inspect_installation
-from dispatch_installer.lifecycle import install_from_clone
+from dispatch_installer.lifecycle import ensure_venv, install_from_clone
 from dispatch_installer.repository import (
     REPOSITORY_URL,
     assert_checkout_clean,
@@ -53,16 +54,28 @@ from dispatch_installer.setup import (
     install_editable_source,
     load_plugin_config,
     migrate_legacy_plugin_config,
+    reconcile_plugin_services,
 )
 from dispatch_installer.service import (
+    disable_plugin_service,
+    enable_plugin_service,
+    inspect_plugin_services,
     inspect_user_service,
     install_user_service,
     legacy_service_unit,
     legacy_service_unit_is_owned,
     remove_legacy_user_service,
+    remove_plugin_service,
     remove_user_service,
+    restore_systemd_service_state,
+    plugin_service_path,
+    plugin_service_receipt_path,
+    plugin_service_unit,
+    prepare_plugin_service,
     service_unit,
     service_unit_is_owned,
+    status_plugin_service,
+    stop_plugin_services_for_activation,
 )
 from dispatch_installer.uninstall import plan_uninstall, uninstall
 from dispatch_installer.user_command import inspect_user_command, install_user_command, launcher_script
@@ -430,6 +443,36 @@ def test_json_invalid_command_returns_one_error_document(capsys: pytest.CaptureF
     assert captured.err == ""
     assert payload["ok"] is False
     assert payload["error"]["code"] == "arguments_invalid"
+
+
+def test_plugin_service_cli_routes_explicit_operations(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    calls: list[tuple[str, str]] = []
+
+    def result(operation):
+        return lambda layout, plugin_id: calls.append((operation, plugin_id)) or {
+            "status": "ready" if operation == "status" else operation + "d",
+            "plugin_id": plugin_id,
+        }
+
+    monkeypatch.setattr(cli_runtime, "status_plugin_service", result("status"))
+    monkeypatch.setattr(cli_runtime, "enable_plugin_service", result("enable"))
+    monkeypatch.setattr(cli_runtime, "disable_plugin_service", result("disable"))
+    monkeypatch.setattr(cli_runtime, "installation_lock", lambda layout: contextlib.nullcontext())
+    monkeypatch.setattr(cli_runtime, "read_installation", lambda layout: {"channel": "dev"})
+    monkeypatch.setattr(cli_runtime, "selected_long_running_plugins", lambda layout: ["worker"])
+    root = tmp_path / "dispatch"
+
+    assert installer_main(["--dispatch-home", str(root), "plugin-service", "status", "worker"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "ready"
+    assert installer_main(["--dispatch-home", str(root), "plugin-service", "enable", "worker"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "enabled"
+    assert installer_main(["--dispatch-home", str(root), "plugin-service", "disable", "worker"]) == 0
+    assert json.loads(capsys.readouterr().out)["status"] == "disabled"
+    assert calls == [("status", "worker"), ("enable", "worker"), ("disable", "worker")]
 
 
 def test_cli_reports_committed_cleanup_failure(
@@ -1847,7 +1890,49 @@ def test_uninstall_rolls_back_current_service_after_later_mutation_failure(
     assert inspect_user_command(layout)["status"] == "ready"
     assert layout.service_path.exists()
     assert service_unit_is_owned(layout)
-    assert ("systemctl", "--user", "enable", "--now", "dispatch.service") in commands
+    assert ("systemctl", "--user", "enable", "dispatch.service") in commands
+    assert ("systemctl", "--user", "start", "dispatch.service") in commands
+
+
+def test_uninstall_rolls_back_plugin_service_after_later_failure(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    prepare_plugin_service(layout, "worker")
+    enable_plugin_service(layout, "worker", run=lambda *args, **kwargs: completed())
+    commands: list[tuple[str, ...]] = []
+    service_state = {"active": True, "enabled": True}
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        if values[:3] == ("systemctl", "--user", "is-active"):
+            return completed(returncode=0 if service_state["active"] else 1)
+        if values[:3] == ("systemctl", "--user", "is-enabled"):
+            return completed(returncode=0 if service_state["enabled"] else 1)
+        if values[:3] == ("systemctl", "--user", "disable"):
+            service_state.update(active=False, enabled=False)
+        if values[:3] == ("systemctl", "--user", "enable"):
+            service_state.update(active=True, enabled=True)
+        return completed()
+
+    monkeypatch.setattr(uninstall_runtime, "_uninstall_blockers", lambda *_args, **_kwargs: [])
+    monkeypatch.setattr(
+        uninstall_runtime,
+        "_stage_directory",
+        lambda _stage: (_ for _ in ()).throw(RuntimeError("injected after service removal")),
+    )
+
+    with pytest.raises(RuntimeError, match="injected after service removal"):
+        uninstall(layout, run=fake_run)
+    assert plugin_service_path(layout, "worker").exists()
+    assert plugin_service_receipt_path(layout, "worker").exists()
+    assert status_plugin_service(layout, "worker", run=fake_run)["status"] == "ready"
+    assert ("systemctl", "--user", "enable", "dispatch-plugin-worker.service") in commands
+    assert ("systemctl", "--user", "start", "dispatch-plugin-worker.service") in commands
 
 
 def test_uninstall_restores_staged_directories_after_late_record_failure(
@@ -1913,7 +1998,7 @@ def test_uninstall_reports_service_rollback_failure_when_generation_lock_blocks(
         values = tuple(str(value) for value in command)
         if values == ("systemctl", "--user", "stop", "dispatch.service"):
             return completed()
-        if values == ("systemctl", "--user", "enable", "--now", "dispatch.service"):
+        if values == ("systemctl", "--user", "enable", "dispatch.service"):
             return completed(returncode=1)
         return completed()
 
@@ -2976,3 +3061,476 @@ def test_staged_work_cleanup_interrupt_does_not_replace_success(
     result = lifecycle_runtime.install_or_update(layout, channel="dev")
     assert result["status"] == "installed"
     assert work.exists()
+
+
+def _write_runtime_plugin(root: Path, *, plugin_id: str = "worker", dependencies: list[str] | None = None) -> Path:
+    plugin = root / "plugins" / plugin_id
+    package = plugin / "src" / f"dispatch_{plugin_id}"
+    package.mkdir(parents=True)
+    (package / "__init__.py").write_text("", encoding="utf-8")
+    deps = dependencies or []
+    (plugin / "pyproject.toml").write_text(
+        "[project]\n"
+        f"name='dispatch-{plugin_id}'\n"
+        "version='1.0.0'\n"
+        f"dependencies={deps!r}\n"
+        "[project.entry-points.\"dispatch.plugins\"]\n"
+        f"{plugin_id}='dispatch_{plugin_id}:handle'\n"
+        "[project.entry-points.\"dispatch.services\"]\n"
+        f"{plugin_id}='dispatch_{plugin_id}:serve'\n"
+        "[tool.dispatch]\n"
+        f"id='{plugin_id}'\n"
+        "capabilities=['long_running']\n",
+        encoding="utf-8",
+    )
+    return plugin
+
+
+def test_plugin_dependency_metadata_requires_exact_pins(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    plugin = _write_runtime_plugin(
+        layout.clone,
+        dependencies=["worker-runtime @ https://example.invalid/runtime.whl"],
+    )
+    with pytest.raises(InstallerError) as error:
+        setup_runtime.plugin_dependencies(plugin, expected_id="worker")
+    assert error.value.code == "plugin_dependency_invalid"
+
+
+def test_real_companion_source_metadata_is_installer_readable() -> None:
+    source = Path(__file__).resolve().parents[2] / "plugins" / "companion-bridge"
+    metadata = setup_runtime.plugin_metadata(source, expected_id="companion-bridge")
+    assert metadata["long_running"] is True
+    assert metadata["dependencies"]
+
+
+def test_replacement_venv_installs_plugin_dependencies_before_direct_registration(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    (layout.clone / "dispatch-core").mkdir()
+    (layout.clone / "dispatch-core" / "requirements.txt").write_text("core==1\n", encoding="utf-8")
+    write_test_project(layout.clone / "installer")
+    plugin = _write_runtime_plugin(layout.clone, dependencies=["worker-runtime==2.4.0"])
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        if values[1:3] == ("-m", "venv"):
+            python = Path(values[-1]) / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("python", encoding="utf-8")
+            python.chmod(0o700)
+            fake_site_packages(python)
+        return completed()
+
+    replacement = tmp_path / "replacement"
+    ensure_venv(
+        layout,
+        destination=replacement,
+        selected_plugins=["worker"],
+        provision_browser=False,
+        run=fake_run,
+    )
+
+    dependency_command = next(command for command in commands if "worker-runtime==2.4.0" in command)
+    assert dependency_command[:5] == (
+        str(replacement / "bin" / "python"),
+        "-m",
+        "pip",
+        "install",
+        "--disable-pip-version-check",
+    )
+    plugin_pth = fake_site_packages(replacement / "bin" / "python") / "__dispatch__.dispatch_worker.pth"
+    assert plugin_pth.is_file()
+    assert commands.index(dependency_command) > commands.index(next(command for command in commands if "-r" in command))
+
+
+def test_plugin_dependency_failure_keeps_active_venv_and_selection(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    (layout.clone / "dispatch-core").mkdir()
+    (layout.clone / "dispatch-core" / "requirements.txt").write_text("", encoding="utf-8")
+    write_test_project(layout.clone / "installer")
+    _write_runtime_plugin(layout.clone, dependencies=["worker-runtime==2.4.0"])
+    layout.venv.mkdir()
+    layout.venv_python.parent.mkdir(parents=True)
+    layout.venv_python.write_text("old-venv", encoding="utf-8")
+    marker = layout.venv / "active-marker"
+    marker.write_text("preserve", encoding="utf-8")
+    commands: list[tuple[str, ...]] = []
+
+    def failing_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        if values[1:3] == ("-m", "venv"):
+            python = Path(values[-1]) / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("replacement", encoding="utf-8")
+            python.chmod(0o700)
+            fake_site_packages(python)
+        if "worker-runtime==2.4.0" in values:
+            return completed(returncode=1)
+        return completed()
+
+    with pytest.raises(InstallerError) as error:
+        configure_plugins(layout, ["worker"], run=failing_run)
+    assert error.value.code == "plugin_dependencies_failed"
+    assert marker.read_text(encoding="utf-8") == "preserve"
+    assert not (layout.config / "plugins.json").exists()
+    assert not list(layout.dispatch_home.glob(".dispatch-plugin-*"))
+
+
+def test_long_running_selection_prepares_secret_free_unit_and_deselection_removes_it(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    plugin = _write_runtime_plugin(layout.clone, dependencies=[])
+    layout.venv_python.parent.mkdir(parents=True)
+    layout.venv_python.write_text("python", encoding="utf-8")
+    layout.venv_python.chmod(0o700)
+    fake_site_packages(layout.venv_python)
+    commands: list[tuple[str, ...]] = []
+    service_state = {"active": False, "enabled": False}
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        if values[:3] == ("systemctl", "--user", "is-active"):
+            return completed(returncode=0 if service_state["active"] else 1)
+        if values[:3] == ("systemctl", "--user", "is-enabled"):
+            return completed(returncode=0 if service_state["enabled"] else 1)
+        if values[:3] == ("systemctl", "--user", "enable"):
+            service_state.update(active=True, enabled=True)
+        elif values[:3] == ("systemctl", "--user", "restart"):
+            service_state["active"] = True
+        elif values[:3] == ("systemctl", "--user", "disable"):
+            service_state.update(active=False, enabled=False)
+        elif values[:3] == ("systemctl", "--user", "stop"):
+            service_state["active"] = False
+        return completed()
+
+    result = configure_plugins(layout, ["worker"], run=fake_run)
+    assert result["services"]["prepared"][0]["status"] == "prepared"
+    unit = plugin_service_path(layout, "worker")
+    receipt = plugin_service_receipt_path(layout, "worker")
+    content = unit.read_text(encoding="utf-8")
+    assert "plugin serve \"worker\"" in content
+    assert "password" not in content.lower()
+    assert json.loads(receipt.read_text(encoding="utf-8"))["contains_secrets"] is False
+    assert not any("--now" in command for command in commands)
+
+    enabled = enable_plugin_service(layout, "worker", run=fake_run)
+    assert enabled["status"] == "enabled"
+    assert status_plugin_service(layout, "worker", run=fake_run)["status"] == "ready"
+    disabled = disable_plugin_service(layout, "worker", run=fake_run)
+    assert disabled["status"] == "disabled"
+    configure_plugins(layout, [], run=fake_run)
+    assert not unit.exists()
+    assert not receipt.exists()
+
+
+def test_plugin_service_enable_fails_before_systemd_when_health_is_degraded(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    prepare_plugin_service(layout, "worker")
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        if values[:4] == (str(layout.command_path), "plugin", "health", "worker"):
+            return completed(returncode=1)
+        if values[:3] in {
+            ("systemctl", "--user", "is-active"),
+            ("systemctl", "--user", "is-enabled"),
+        }:
+            return completed(returncode=1)
+        return completed()
+
+    with pytest.raises(InstallerError) as error:
+        enable_plugin_service(layout, "worker", run=fake_run)
+    assert error.value.code == "plugin_service_not_ready"
+    assert not any(
+        len(command) > 2
+        and command[0] == "systemctl"
+        and command[2] in {"daemon-reload", "enable", "restart", "disable"}
+        for command in commands
+    )
+
+
+def test_plugin_service_activation_failure_restores_prepared_projection(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    prepare_plugin_service(layout, "worker")
+    before_unit = plugin_service_path(layout, "worker").read_bytes()
+    before_receipt = plugin_service_receipt_path(layout, "worker").read_bytes()
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        if values[:3] in {
+            ("systemctl", "--user", "is-active"),
+            ("systemctl", "--user", "is-enabled"),
+        }:
+            return completed(returncode=1)
+        if values[:3] == ("systemctl", "--user", "restart"):
+            return completed(returncode=1)
+        return completed()
+
+    with pytest.raises(InstallerError) as error:
+        enable_plugin_service(layout, "worker", run=fake_run)
+    assert error.value.code == "plugin_service_activation_failed"
+    assert plugin_service_path(layout, "worker").read_bytes() == before_unit
+    assert plugin_service_receipt_path(layout, "worker").read_bytes() == before_receipt
+    assert ("systemctl", "--user", "disable", "--now", "dispatch-plugin-worker.service") in commands
+
+
+def test_activation_stops_active_disabled_plugin_service(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    prepare_plugin_service(layout, "worker")
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        if values[:3] == ("systemctl", "--user", "is-active"):
+            return completed()
+        if values[:3] == ("systemctl", "--user", "is-enabled"):
+            return completed(returncode=1)
+        return completed()
+
+    states = stop_plugin_services_for_activation(layout, ["worker"], run=fake_run)
+    assert states == [
+        {"plugin_id": "worker", "active": True, "enabled": False, "receipt_status": "prepared"}
+    ]
+    assert ("systemctl", "--user", "stop", "dispatch-plugin-worker.service") in commands
+
+
+def test_reconcile_blocks_unreceipted_plugin_unit(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    _write_runtime_plugin(layout.clone, dependencies=[])
+    ensure_private_directory(layout.service_directory, "service directory")
+    unit = plugin_service_path(layout, "worker")
+    unit.write_bytes(plugin_service_unit(layout, "worker"))
+    unit.chmod(0o600)
+
+    with pytest.raises(InstallerError) as error:
+        reconcile_plugin_services(layout, ["worker"], run=lambda *args, **kwargs: completed(returncode=1))
+    assert error.value.code == "plugin_service_unsafe"
+
+
+def test_doctor_marks_malformed_plugin_config_unsafe(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    config = layout.config / "plugins.json"
+    config.write_text("{not-json", encoding="utf-8")
+    config.chmod(0o600)
+
+    report = inspect_installation(layout)
+    assert report["ok"] is False
+    assert report["status"] == "unsafe"
+    assert report["checks"]["plugins"]["status"] == "unsafe"
+
+
+def test_plugin_capabilities_reject_unhashable_values_with_bounded_error(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    plugin = _write_runtime_plugin(layout.clone, dependencies=[])
+    project = plugin / "pyproject.toml"
+    project.write_text(
+        project.read_text(encoding="utf-8").replace(
+            "capabilities=['long_running']",
+            "capabilities=[{}]",
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InstallerError) as error:
+        setup_runtime.plugin_metadata(plugin, expected_id="worker")
+    assert error.value.code == "plugin_manifest_invalid"
+
+
+def test_replacement_venv_rejects_conflicting_plugin_pins(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    (layout.clone / "dispatch-core").mkdir()
+    (layout.clone / "dispatch-core" / "requirements.txt").write_text("", encoding="utf-8")
+    write_test_project(layout.clone / "installer")
+    _write_runtime_plugin(layout.clone, plugin_id="worker", dependencies=["shared-runtime==1.0.0"])
+    _write_runtime_plugin(layout.clone, plugin_id="other", dependencies=["shared-runtime==2.0.0"])
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        if values[1:3] == ("-m", "venv"):
+            python = Path(values[-1]) / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("python", encoding="utf-8")
+            python.chmod(0o700)
+            fake_site_packages(python)
+        return completed()
+
+    with pytest.raises(InstallerError) as error:
+        ensure_venv(
+            layout,
+            destination=tmp_path / "replacement",
+            selected_plugins=["worker", "other"],
+            provision_browser=False,
+            run=fake_run,
+        )
+    assert error.value.code == "plugin_dependency_conflict"
+
+
+def test_remove_plugin_service_rejects_symlinked_receipt_root(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    receipt_parent = layout.state / "plugins"
+    receipt_parent.mkdir(mode=0o700)
+    external = tmp_path / "external-receipts"
+    external.mkdir(mode=0o700)
+    services = receipt_parent / "services"
+    services.symlink_to(external, target_is_directory=True)
+    receipt = external / "worker.json"
+    content = plugin_service_unit(layout, "worker")
+    atomic_json(
+        receipt,
+        {
+            "schema_version": 1,
+            "plugin_id": "worker",
+            "unit": str(plugin_service_path(layout, "worker")),
+            "unit_sha256": hashlib.sha256(content).hexdigest(),
+            "service": "dispatch-plugin-worker.service",
+            "status": "prepared",
+            "contains_secrets": False,
+        },
+    )
+
+    with pytest.raises(InstallerError) as error:
+        remove_plugin_service(layout, "worker", run=lambda *args, **kwargs: completed())
+    assert error.value.code == "plugin_service_unsafe"
+    assert receipt.exists()
+
+
+def test_remove_plugin_service_reports_failed_restart_rollback(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    prepare_plugin_service(layout, "worker")
+    enable_plugin_service(layout, "worker", run=lambda *args, **kwargs: completed())
+    reloads = 0
+
+    def fake_run(command, cwd=None):
+        nonlocal reloads
+        values = tuple(str(value) for value in command)
+        if values[:3] == ("systemctl", "--user", "daemon-reload"):
+            reloads += 1
+            return completed(returncode=1 if reloads == 1 else 0)
+        if values[:3] == ("systemctl", "--user", "enable"):
+            return completed(returncode=1)
+        return completed()
+
+    with pytest.raises(InstallerError) as error:
+        remove_plugin_service(layout, "worker", run=fake_run)
+    assert error.value.code == "plugin_service_rollback_failed"
+    assert plugin_service_path(layout, "worker").exists()
+    assert plugin_service_receipt_path(layout, "worker").exists()
+
+
+def test_enabled_receipt_with_stopped_service_is_incomplete(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    prepare_plugin_service(layout, "worker")
+    enable_plugin_service(layout, "worker", run=lambda *args, **kwargs: completed())
+
+    status = status_plugin_service(
+        layout,
+        "worker",
+        run=lambda *args, **kwargs: completed(returncode=1),
+    )
+    assert status["receipt_status"] == "enabled"
+    assert status["status"] == "incomplete"
+
+
+def test_required_plugin_service_cannot_be_missing(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    report = inspect_plugin_services(
+        layout,
+        ["worker"],
+        run=lambda *args, **kwargs: completed(returncode=1),
+    )
+    assert report["status"] == "unsafe"
+    services = report["services"]
+    assert isinstance(services, dict)
+    assert services["worker"]["status"] == "missing"
+
+
+def test_service_state_restore_preserves_enabled_but_inactive(tmp_path: Path) -> None:
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(command, cwd=None):
+        commands.append(tuple(str(value) for value in command))
+        return completed()
+
+    restore_systemd_service_state(
+        "dispatch-plugin-worker.service",
+        {"active": False, "enabled": True},
+        run=fake_run,
+    )
+    assert commands == [
+        ("systemctl", "--user", "enable", "dispatch-plugin-worker.service"),
+        ("systemctl", "--user", "stop", "dispatch-plugin-worker.service"),
+    ]
+
+
+def test_main_service_receipt_parent_symlink_is_not_authority(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    install_user_service(layout, activate=False)
+    external = tmp_path / "external-state"
+    layout.state.rename(external)
+    layout.state.symlink_to(external, target_is_directory=True)
+
+    assert service_unit_is_owned(layout) is False
+
+
+def test_doctor_and_cli_bound_stale_plugin_selection(tmp_path: Path, monkeypatch, capsys) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    atomic_json(
+        layout.config / "plugins.json",
+        {
+            "schema_version": 1,
+            "status": "complete",
+            "selected_plugins": ["missing-plugin"],
+            "plugins": [],
+            "contains_secrets": False,
+        },
+    )
+    report = inspect_installation(layout)
+    assert report["status"] == "unsafe"
+    assert report["checks"]["plugins"]["status"] == "unsafe"
+
+    monkeypatch.setattr(cli_runtime, "read_installation", lambda current: {"channel": "dev"})
+    result = installer_main(
+        [
+            "--dispatch-home",
+            str(layout.dispatch_home),
+            "--json",
+            "plugin-service",
+            "status",
+            "missing-plugin",
+        ]
+    )
+    assert result == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "plugin_unknown"
