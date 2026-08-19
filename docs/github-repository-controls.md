@@ -44,7 +44,7 @@ Source CI needs no repository, environment, browser, account, or production secr
 
 `.github/workflows/ci.yml`:
 
-- runs on task PRs and pushes to `main`;
+- runs on pull requests targeting `main`, pushes to `main`, and explicit manual dispatch;
 - checks source safety before tools can create generated metadata;
 - installs the pinned Core development requirements and editable installer/plugins;
 - runs root, Core, installer, and built-in plugin tests;
