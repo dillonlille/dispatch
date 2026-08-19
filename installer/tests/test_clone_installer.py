@@ -38,9 +38,10 @@ browser_lock_runtime = importlib.import_module("dispatch_installer.browser_lock"
 cli_runtime = importlib.import_module("dispatch_installer.cli")
 layout_runtime = importlib.import_module("dispatch_installer.layout")
 from dispatch_installer.doctor import inspect_installation
-from dispatch_installer.lifecycle import ensure_venv, install_from_clone
+from dispatch_installer.lifecycle import ensure_venv, install_from_clone, install_or_update
 from dispatch_installer.repository import (
     DEVELOPMENT_BRANCH,
+    LEGACY_DEVELOPMENT_BRANCH,
     REPOSITORY_URL,
     assert_checkout_clean,
     canonical_record_has_remote_authority,
@@ -223,6 +224,31 @@ def test_layout_has_clone_based_final_roots(tmp_path: Path) -> None:
     }
     assert layout.clone == layout.dispatch_home / "dispatch"
     assert layout.installation_record.name == "installation.json"
+
+
+def test_read_installation_accepts_legacy_dev_ref_for_migration(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    atomic_json(
+        layout.installation_record,
+        {
+            "schema_version": 1,
+            "repository": REPOSITORY_URL,
+            "channel": "dev",
+            "ref": LEGACY_DEVELOPMENT_BRANCH,
+            "commit": "0123456789abcdef0123456789abcdef01234567",
+            "checkout": str(layout.clone),
+            "venv": str(layout.venv),
+            "paths": layout.as_dict(),
+            "updated_at": "2026-08-19T00:00:00Z",
+            "contains_secrets": False,
+        },
+    )
+
+    record = read_installation(layout)
+    assert record is not None
+    assert record["channel"] == "dev"
+    assert record["ref"] == LEGACY_DEVELOPMENT_BRANCH
 
 
 def test_custom_private_roots_project_consistently_into_launcher_and_service(tmp_path: Path) -> None:
@@ -582,9 +608,10 @@ def test_checkout_clean_rejects_ignored_files(tmp_path: Path) -> None:
     assert error.value.code == "clone_dirty"
 
 
-def test_local_checkout_record_rejects_noncanonical_origin(tmp_path: Path) -> None:
+@pytest.mark.parametrize("branch", [DEVELOPMENT_BRANCH, LEGACY_DEVELOPMENT_BRANCH])
+def test_local_checkout_record_rejects_noncanonical_origin(tmp_path: Path, branch: str) -> None:
     clone = tmp_path / "clone"
-    subprocess.run(("git", "init", "-q", "-b", DEVELOPMENT_BRANCH, str(clone)), check=True)
+    subprocess.run(("git", "init", "-q", "-b", branch, str(clone)), check=True)
     (clone / ".git").chmod(0o700)
     subprocess.run(("git", "-C", str(clone), "config", "user.email", "tests@example.invalid"), check=True)
     subprocess.run(("git", "-C", str(clone), "config", "user.name", "Dispatch Tests"), check=True)
@@ -594,21 +621,21 @@ def test_local_checkout_record_rejects_noncanonical_origin(tmp_path: Path) -> No
     subprocess.run(("git", "-C", str(clone), "commit", "-q", "-m", "canonical"), check=True)
     commit = current_commit(clone)
     subprocess.run(
-        ("git", "-C", str(clone), "update-ref", f"refs/remotes/origin/{DEVELOPMENT_BRANCH}", commit),
+        ("git", "-C", str(clone), "update-ref", f"refs/remotes/origin/{branch}", commit),
         check=True,
     )
     subprocess.run(
-        ("git", "-C", str(clone), "config", f"branch.{DEVELOPMENT_BRANCH}.remote", "origin"),
+        ("git", "-C", str(clone), "config", f"branch.{branch}.remote", "origin"),
         check=True,
     )
     subprocess.run(
         (
             "git", "-C", str(clone), "config",
-            f"branch.{DEVELOPMENT_BRANCH}.merge", f"refs/heads/{DEVELOPMENT_BRANCH}",
+            f"branch.{branch}.merge", f"refs/heads/{branch}",
         ),
         check=True,
     )
-    record: dict[str, object] = {"channel": "dev", "ref": DEVELOPMENT_BRANCH, "commit": commit}
+    record: dict[str, object] = {"channel": "dev", "ref": branch, "commit": commit}
 
     assert local_checkout_matches_record(clone, record) is True
 
@@ -749,6 +776,21 @@ def test_staged_dev_checkout_rejects_wrong_upstream_tracking(tmp_path: Path) -> 
 def test_install_from_staged_clone_writes_atomic_record(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
     layout.prepare()
+    atomic_json(
+        layout.installation_record,
+        {
+            "schema_version": 1,
+            "repository": REPOSITORY_URL,
+            "channel": "dev",
+            "ref": LEGACY_DEVELOPMENT_BRANCH,
+            "commit": "fedcba9876543210fedcba9876543210fedcba98",
+            "checkout": str(layout.clone),
+            "venv": str(layout.venv),
+            "paths": layout.as_dict(),
+            "updated_at": "2026-08-19T00:00:00Z",
+            "contains_secrets": False,
+        },
+    )
     legacy_marker = layout.legacy_browser_cache / "unrelated-marker"
     legacy_marker.parent.mkdir(mode=0o700)
     legacy_marker.write_text("preserve", encoding="utf-8")
@@ -777,11 +819,10 @@ def test_install_from_staged_clone_writes_atomic_record(tmp_path: Path) -> None:
             return response
         return browser_response(command) or editable_response(command) or completed()
 
-    result = install_from_clone(
+    result = install_or_update(
         layout,
-        source,
+        source=source,
         channel="dev",
-        ref=DEVELOPMENT_BRANCH,
         run=fake_run,
     )
     assert result["status"] == "installed"
