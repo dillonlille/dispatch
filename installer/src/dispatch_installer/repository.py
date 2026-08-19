@@ -17,6 +17,8 @@ REPOSITORY_URL = "https://github.com/dillonlille/dispatch.git"
 REPOSITORY_API = "https://api.github.com/repos/dillonlille/dispatch/releases?per_page=100"
 REPOSITORY_GITHUB_API = "https://api.github.com/repos/dillonlille/dispatch"
 DEVELOPMENT_BRANCH = "main"
+LEGACY_DEVELOPMENT_BRANCH = "dev"
+DEVELOPMENT_REFS = frozenset({DEVELOPMENT_BRANCH, LEGACY_DEVELOPMENT_BRANCH})
 _TAG = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
 
 RunCommand = Callable[[Sequence[str], Path | None], subprocess.CompletedProcess[str]]
@@ -117,11 +119,12 @@ def canonical_record_has_remote_authority(record: dict[str, object], *, opener=u
     if channel not in {"stable", "dev"} or not isinstance(ref, str) or not isinstance(commit, str):
         return False
     if channel == "dev":
-        if ref != DEVELOPMENT_BRANCH:
+        if ref not in DEVELOPMENT_REFS:
             return False
         encoded_commit = quote(commit, safe="")
+        encoded_ref = quote(ref, safe="")
         payload = _github_object(
-            f"{REPOSITORY_GITHUB_API}/compare/{encoded_commit}...{DEVELOPMENT_BRANCH}",
+            f"{REPOSITORY_GITHUB_API}/compare/{encoded_commit}...{encoded_ref}",
             opener=opener,
         )
         base = payload.get("base_commit")
@@ -362,28 +365,30 @@ def local_checkout_matches_record(clone: Path, record: dict[str, object] | None)
             return False
         branch = invoke("symbolic-ref", "--quiet", "--short", "HEAD")
         if channel == "dev":
+            if ref not in DEVELOPMENT_REFS:
+                return False
             authority = invoke(
                 "rev-parse",
                 "--verify",
-                f"refs/remotes/origin/{DEVELOPMENT_BRANCH}^{{commit}}",
+                f"refs/remotes/origin/{ref}^{{commit}}",
             )
-            if branch.returncode != 0 or branch.stdout.strip() != DEVELOPMENT_BRANCH:
+            if branch.returncode != 0 or branch.stdout.strip() != ref:
                 return False
             branch_remote = invoke(
                 "config",
                 "--get",
-                f"branch.{DEVELOPMENT_BRANCH}.remote",
+                f"branch.{ref}.remote",
             )
             branch_merge = invoke(
                 "config",
                 "--get",
-                f"branch.{DEVELOPMENT_BRANCH}.merge",
+                f"branch.{ref}.merge",
             )
             if (
                 branch_remote.returncode != 0
                 or branch_remote.stdout.strip() != "origin"
                 or branch_merge.returncode != 0
-                or branch_merge.stdout.strip() != f"refs/heads/{DEVELOPMENT_BRANCH}"
+                or branch_merge.stdout.strip() != f"refs/heads/{ref}"
             ):
                 return False
         else:
@@ -483,6 +488,8 @@ def verify_checkout_authority(
 
 __all__ = [
     "DEVELOPMENT_BRANCH",
+    "DEVELOPMENT_REFS",
+    "LEGACY_DEVELOPMENT_BRANCH",
     "REPOSITORY_API",
     "REPOSITORY_URL",
     "assert_checkout_clean",
