@@ -252,6 +252,25 @@ def _check_auxiliary_entry_points(
             except (TypeError, ValueError):
                 audit.fail("dispatch.services entry point must accept one context argument")
 
+    collectors = groups.get("dispatch.collectors", {})
+    if not isinstance(collectors, dict):
+        audit.fail("dispatch.collectors entry points are invalid")
+    else:
+        collects = "collect" in capabilities
+        expected_collectors = {plugin_id} if collects else set()
+        if set(collectors) != expected_collectors:
+            audit.fail("collect capability must match exactly one same-ID dispatch.collectors entry point")
+        elif collects:
+            target = collectors.get(plugin_id)
+            handler = _load_target(audit.root, source_root, target) if isinstance(target, str) else None
+            if not callable(handler):
+                audit.fail("dispatch.collectors entry point target is not a source callable")
+            else:
+                try:
+                    inspect.signature(handler).bind()
+                except (TypeError, ValueError):
+                    audit.fail("dispatch.collectors entry point must accept no arguments")
+
     configurators = groups.get("dispatch.configurators", {})
     if not isinstance(configurators, dict) or set(configurators) not in (set(), {plugin_id}):
         audit.fail("dispatch.configurators must be empty or contain exactly the declared plugin id")

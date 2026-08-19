@@ -5,9 +5,16 @@ import argparse
 import getpass
 import json
 import signal
+from datetime import datetime
 from typing import Any, NoReturn, Sequence
 
-from collection_manager import CollectionStoreError, CollectionTaskStore
+from collection_manager import (
+    CollectionManager,
+    CollectionManagerError,
+    CollectionRequest,
+    CollectionStoreError,
+    CollectionTaskStore,
+)
 from collection_manager.queue import utc_now
 from collection_manager.supervisor import (
     CollectionService,
@@ -19,6 +26,7 @@ from paths import DispatchPaths, PathConfigError
 from plugin_runtime import (
     PluginRuntimeError,
     configure_plugin,
+    discover_collector_registrations,
     invoke_plugin,
     list_plugins,
     serve_plugin,
@@ -84,6 +92,13 @@ def parser(*, prog: str = "dispatch-core") -> argparse.ArgumentParser:
     collection = subcommands.add_parser("collection", help="operate the durable Collection Manager worker")
     collection_actions = collection.add_subparsers(dest="collection_action", required=True)
     collection_actions.add_parser("status", help="inspect durable queue state without creating it")
+    collection_submit = collection_actions.add_parser("submit", help="queue one bounded collector request")
+    collection_submit.add_argument("collector_id")
+    collection_submit.add_argument("--account", "--account-alias", dest="account_alias", default="default")
+    collection_submit.add_argument("--parameters", default="{}", help="bounded JSON object passed to the collector")
+    collection_submit.add_argument("--max-attempts", type=int, default=3)
+    collection_submit.add_argument("--not-before")
+    collection_submit.add_argument("--idempotency-key")
     collection_actions.add_parser("worker-once", help="run one bounded worker process")
     collection_actions.add_parser("reconcile", help="clean orphaned workers and reconcile interrupted tasks")
     collection_cancel = collection_actions.add_parser("cancel", help="persist a collection cancellation request")
@@ -127,6 +142,45 @@ def _auth_result(args: argparse.Namespace) -> dict[str, Any]:
     return envelope(ok=True, action=action, status="ready", data=data)
 
 
+def _parse_collection_time(value: str | None) -> datetime | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or not value or len(value) > 64:
+        raise CommandInterfaceError("collection_request_invalid", "not-before timestamp is invalid")
+    try:
+        parsed = datetime.fromisoformat(value[:-1] + "+00:00" if value.endswith("Z") else value)
+    except ValueError as exc:
+        raise CommandInterfaceError("collection_request_invalid", "not-before timestamp is invalid") from exc
+    if parsed.tzinfo is None or parsed.utcoffset() is None:
+        raise CommandInterfaceError("collection_request_invalid", "not-before timestamp must include a timezone")
+    return parsed
+
+
+def _collection_submission(args: argparse.Namespace, store: CollectionTaskStore) -> dict[str, object]:
+    if not isinstance(args.parameters, str) or len(args.parameters.encode("utf-8")) > 64 * 1024:
+        raise CommandInterfaceError("collection_request_invalid", "collection parameters are too large")
+    try:
+        parameters = json.loads(args.parameters)
+    except (json.JSONDecodeError, RecursionError) as exc:
+        raise CommandInterfaceError("collection_request_invalid", "collection parameters must be valid JSON") from exc
+    if type(parameters) is not dict:
+        raise CommandInterfaceError("collection_request_invalid", "collection parameters must be a JSON object")
+    manager = CollectionManager(store=store)
+    for registration in discover_collector_registrations():
+        manager.register(registration)
+    request = CollectionRequest(
+        args.collector_id,
+        account_alias=args.account_alias,
+        parameters=parameters,
+    )
+    return manager.enqueue(
+        request,
+        max_attempts=args.max_attempts,
+        not_before=_parse_collection_time(args.not_before),
+        idempotency_key=args.idempotency_key,
+    ).safe_data()
+
+
 def _collection_result(args: argparse.Namespace) -> dict[str, Any]:
     paths = DispatchPaths.from_environment()
     action = f"collection-{args.collection_action}"
@@ -134,14 +188,18 @@ def _collection_result(args: argparse.Namespace) -> dict[str, Any]:
         data = CollectionTaskStore.inspect_paths(paths)
     else:
         store = CollectionTaskStore.from_paths(paths)
-        if args.collection_action == "cancel":
+        if args.collection_action == "submit":
+            data = _collection_submission(args, store)
+        elif args.collection_action == "cancel":
             data = store.request_cancel(args.task_id, utc_now()).safe_data()
         elif args.collection_action == "resume":
             data = store.request_resume(args.task_id, utc_now()).safe_data()
         else:
+            registrations = discover_collector_registrations()
             supervisor = CollectionWorkerSupervisor(
                 store.database,
-                ProductionManagerFactory(paths),
+                ProductionManagerFactory(paths, registrations),
+                registrations=registrations,
             )
             if args.collection_action == "worker-once":
                 data = supervisor.run_once().safe_data()
@@ -166,7 +224,7 @@ def _plugin_result(args: argparse.Namespace) -> dict[str, Any]:
     elif args.plugin_action == "invoke":
         try:
             request = json.loads(args.request)
-        except json.JSONDecodeError as exc:
+        except (json.JSONDecodeError, RecursionError) as exc:
             raise CommandInterfaceError("plugin_request_invalid", "plugin request must be valid JSON") from exc
         if type(request) is not dict:
             raise CommandInterfaceError("plugin_request_invalid", "plugin request must be a JSON object")
@@ -264,8 +322,13 @@ def _browser_result(args: argparse.Namespace) -> dict[str, Any]:
 
 def _service_result(args: argparse.Namespace) -> dict[str, Any]:
     paths = DispatchPaths.from_environment()
+    registrations = discover_collector_registrations()
     store = CollectionTaskStore.from_paths(paths)
-    supervisor = CollectionWorkerSupervisor(store.database, ProductionManagerFactory(paths))
+    supervisor = CollectionWorkerSupervisor(
+        store.database,
+        ProductionManagerFactory(paths, registrations),
+        registrations=registrations,
+    )
     service = CollectionService(store, supervisor)
     stopping = False
 
@@ -303,12 +366,12 @@ def main(argv: Sequence[str] | None = None, *, prog: str = "dispatch-core") -> i
             result = _service_result(args)
         else:
             result = resolved(args.action, getattr(args, "owner", None))
-    except (CommandInterfaceError, CollectionStoreError, PathConfigError, PluginRuntimeError) as exc:
+    except (CommandInterfaceError, CollectionManagerError, CollectionStoreError, PathConfigError, PluginRuntimeError) as exc:
         parsed = locals().get("args")
         action_name = str(getattr(parsed, "action", "unknown"))
         code = (
             exc.code
-            if isinstance(exc, (CommandInterfaceError, CollectionStoreError, PluginRuntimeError))
+            if isinstance(exc, (CommandInterfaceError, CollectionManagerError, CollectionStoreError, PluginRuntimeError))
             else "invalid_path_configuration"
         )
         if action_name == "auth":

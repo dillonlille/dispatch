@@ -2,7 +2,11 @@
 
 Status: **durable orchestration and bounded worker-process supervision implemented**.
 
-Collection Manager is a Dispatch Core feature, not a plugin. Domain plugins register trusted collector runners through `CollectorRegistration`; registration does not make a collector model-facing. A Core installation with zero collectors and zero tasks is healthy and reports `no_collectors`.
+Collection Manager is a Dispatch Core feature, not a plugin. Selected source-owned
+plugins may publish one same-ID `dispatch.collectors` provider returning a bounded
+tuple of trusted `CollectorRegistration` objects; registration does not make a
+collector model-facing. A Core installation with zero collectors and zero tasks
+is healthy and reports `no_collectors`.
 
 ## Implemented boundary
 
@@ -10,10 +14,12 @@ Collection Manager provides:
 
 - globally unique, bounded collector identities tied to a plugin ID and release;
 - immutable collection requests with at most 16 scalar parameters;
+- explicit bounded `dispatch collection submit` queueing without inline execution;
 - one private SQLite database at `data/db/collection-manager/collection-manager.sqlite3`;
 - transactional task submission and idempotency keys;
 - atomic claims with a worker identity and expiring ownership lease;
 - spawned worker-process isolation with a fixed execution deadline and periodic ownership heartbeats;
+- an optional bounded per-registration execution deadline used by initial and resumed work;
 - durable worker PID, Linux process-start identity, and non-sliding deadline attachment before execution;
 - explicit `queued`, `retry_wait`, `running`, `waiting_for_user`, `succeeded`, `failed`, `cancelled`, and `uncertain` states;
 - an `execution_started` watermark that prevents automatic replay after collector code begins;

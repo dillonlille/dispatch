@@ -192,6 +192,50 @@ def test_long_running_capability_requires_same_id_service_entry_point(tmp_path: 
     assert any("long_running capability must match" in failure for failure in result.failures)
 
 
+def test_collect_capability_requires_same_id_collector_provider(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    project = root / "pyproject.toml"
+    text = project.read_text(encoding="utf-8").replace(
+        'capabilities = ["read_local_data"]',
+        'capabilities = ["read_local_data", "collect"]',
+    )
+    project.write_text(text, encoding="utf-8")
+
+    result = MODULE.audit_owner(root)
+
+    assert any("collect capability must match" in failure for failure in result.failures)
+
+
+def test_collector_provider_is_loadable_and_accepts_no_arguments(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    service = root / "src/example_plugin/service.py"
+    service.write_text(
+        service.read_text(encoding="utf-8") + "\ndef registrations():\n    return ()\n",
+        encoding="utf-8",
+    )
+    project = root / "pyproject.toml"
+    text = project.read_text(encoding="utf-8").replace(
+        'capabilities = ["read_local_data"]',
+        'capabilities = ["read_local_data", "collect"]',
+    )
+    text += (
+        '\n[project.entry-points."dispatch.collectors"]\n'
+        'example = "example_plugin.service:registrations"\n'
+    )
+    project.write_text(text, encoding="utf-8")
+
+    result = MODULE.audit_owner(root)
+
+    assert result.failures == []
+
+    service.write_text(
+        service.read_text(encoding="utf-8").replace("def registrations():", "def registrations(context):"),
+        encoding="utf-8",
+    )
+    result = MODULE.audit_owner(root)
+    assert any("dispatch.collectors entry point must accept no arguments" in failure for failure in result.failures)
+
+
 def test_service_and_configurator_entry_points_must_be_loadable(tmp_path: Path) -> None:
     root = fixture(tmp_path)
     service = root / "src/example_plugin/service.py"

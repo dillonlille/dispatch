@@ -16,7 +16,7 @@ from typing import Callable, Protocol
 from browser_manager import BrowserManager
 from paths import DispatchPaths
 
-from . import CollectionManager, CollectorRegistration
+from . import CollectionManager, CollectorRegistration, MAX_EXECUTION_TIMEOUT_SECONDS
 from .queue import CollectionStoreError, CollectionTaskStore, TaskRecord, TaskState, utc_now
 
 
@@ -237,14 +237,26 @@ class CollectionWorkerSupervisor:
         *,
         context: str = "spawn",
         clock: Callable[[], datetime] = utc_now,
+        registrations: tuple[CollectorRegistration, ...] = (),
     ) -> None:
         if context != "spawn":
             raise ValueError("collection workers require the spawn process context")
         self._database = database
         self._factory = factory
         self._policy = policy
+        self._registrations = {
+            item.collector_id: item.execution_timeout_seconds
+            for item in registrations
+            if item.execution_timeout_seconds is not None
+        }
         self._context = multiprocessing.get_context(context)
         self._clock = clock
+
+    def _execution_timeout(self, task: TaskRecord) -> float:
+        value = self._registrations.get(task.collector_id)
+        if value is None:
+            return self._policy.execution_timeout_seconds
+        return min(float(value), MAX_EXECUTION_TIMEOUT_SECONDS)
 
     def run_once(
         self,
@@ -332,8 +344,10 @@ class CollectionWorkerSupervisor:
                             self._database,
                             sqlite_timeout_seconds=_SUPERVISOR_SQLITE_TIMEOUT_SECONDS,
                         )
+                        claimed_task = store.get(task_id)
+                        execution_timeout = self._execution_timeout(claimed_task)
                         wall_now = self._clock()
-                        wall_deadline = wall_now + timedelta(seconds=self._policy.execution_timeout_seconds)
+                        wall_deadline = wall_now + timedelta(seconds=execution_timeout)
                         store.attach_worker_process(
                             task_id,
                             worker_id,
@@ -342,7 +356,7 @@ class CollectionWorkerSupervisor:
                             wall_deadline,
                             wall_now,
                         )
-                        deadline = time.monotonic() + self._policy.execution_timeout_seconds
+                        deadline = time.monotonic() + execution_timeout
                         next_heartbeat = time.monotonic() + self._policy.heartbeat_seconds
                         parent.send({"command": "execute"})
                     elif kind == "waiting" and message.get("task_id") == task_id and store is not None:
@@ -408,7 +422,8 @@ class CollectionWorkerSupervisor:
                                 command_sent = True
                             elif current.resume_requested:
                                 wall_now = self._clock()
-                                wall_deadline = wall_now + timedelta(seconds=self._policy.execution_timeout_seconds)
+                                execution_timeout = self._execution_timeout(current)
+                                wall_deadline = wall_now + timedelta(seconds=execution_timeout)
                                 store.update_worker_deadline(
                                     task_id,
                                     worker_id,
@@ -417,7 +432,7 @@ class CollectionWorkerSupervisor:
                                     wall_deadline,
                                     wall_now,
                                 )
-                                deadline = time.monotonic() + self._policy.execution_timeout_seconds
+                                deadline = time.monotonic() + execution_timeout
                                 waiting = False
                                 parent.send({"command": "resume"})
                                 command_sent = True

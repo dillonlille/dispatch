@@ -82,7 +82,7 @@ def _selected_plugins(layout: InstallLayout) -> list[str]:
         return []
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError) as exc:
         raise InstallerError("plugin_config_invalid", "plugin configuration is unreadable") from exc
     selected = payload.get("selected_plugins", [])
     if not isinstance(selected, list) or any(not isinstance(item, str) for item in selected):

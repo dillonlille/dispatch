@@ -7,11 +7,15 @@ from typing import Any
 import pytest
 
 import plugin_runtime
+from collection_manager import CollectionDisposition, CollectionReceipt, CollectorRegistration
 from paths import DispatchPaths
 from plugin_runtime import (
+    COLLECTOR_ENTRY_POINT_GROUP,
     CONFIGURATOR_ENTRY_POINT_GROUP,
     SERVICE_ENTRY_POINT_GROUP,
     PluginRuntimeError,
+    discover_collector_providers,
+    discover_collector_registrations,
     discover_configurator,
     discover_plugins,
     discover_service,
@@ -55,6 +59,10 @@ def _envelope(action: str = "health", *, ok: bool = True) -> dict[str, Any]:
         "delivery": None,
         "error": None if ok else {"code": "invalid_input", "message": "invalid"},
     }
+
+
+def _collector_receipt(_context):
+    return CollectionReceipt(CollectionDisposition.NO_DATA, None, 0, True)
 
 
 def _install_metadata(monkeypatch, *entry_points: _EntryPoint) -> None:
@@ -104,6 +112,101 @@ def test_duplicate_active_entry_points_are_rejected(monkeypatch) -> None:
     assert error.value.code == "plugin_entry_point_invalid"
 
 
+def test_collector_provider_is_optional_and_returns_trusted_registrations(monkeypatch) -> None:
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+    _install_metadata(monkeypatch)
+    assert discover_collector_providers() == []
+
+    registration = CollectorRegistration(
+        "example-collector",
+        "example",
+        "1.2.3",
+        _collector_receipt,
+        execution_timeout_seconds=12.5,
+    )
+    _install_metadata(
+        monkeypatch,
+        _EntryPoint("example", lambda request: _envelope(request["action"])),
+        _GroupedEntryPoint(
+            "example",
+            COLLECTOR_ENTRY_POINT_GROUP,
+            lambda: (registration,),
+        ),
+    )
+
+    providers = discover_collector_providers()
+    assert providers[0].safe_data()["collectors"][0]["collector_id"] == "example-collector"
+    assert discover_collector_registrations() == (registration,)
+
+
+def test_collector_provider_rejects_wrong_plugin_registration(monkeypatch) -> None:
+    _install_metadata(
+        monkeypatch,
+        _EntryPoint("example", lambda request: _envelope(request["action"])),
+        _GroupedEntryPoint(
+            "example",
+            COLLECTOR_ENTRY_POINT_GROUP,
+            lambda: (CollectorRegistration("other-collector", "other", "1.0.0", _collector_receipt),),
+        ),
+    )
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+
+    with pytest.raises(PluginRuntimeError) as error:
+        discover_collector_registrations()
+
+    assert error.value.code == "plugin_collector_registration_invalid"
+
+
+def test_collector_provider_rejects_empty_or_unpicklable_registrations(monkeypatch) -> None:
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+    plugin = _EntryPoint("example", lambda request: _envelope(request["action"]))
+    _install_metadata(
+        monkeypatch,
+        plugin,
+        _GroupedEntryPoint("example", COLLECTOR_ENTRY_POINT_GROUP, lambda: ()),
+    )
+    with pytest.raises(PluginRuntimeError) as empty_error:
+        discover_collector_providers()
+    assert empty_error.value.code == "plugin_collector_registration_invalid"
+
+    registration = CollectorRegistration(
+        "example-collector",
+        "example",
+        "1.2.3",
+        lambda context: _collector_receipt(context),
+    )
+    _install_metadata(
+        monkeypatch,
+        plugin,
+        _GroupedEntryPoint("example", COLLECTOR_ENTRY_POINT_GROUP, lambda: (registration,)),
+    )
+    with pytest.raises(PluginRuntimeError) as pickle_error:
+        discover_collector_providers()
+    assert pickle_error.value.code == "plugin_collector_registration_invalid"
+
+
+def test_collector_provider_is_bound_to_plugin_distribution_and_release(monkeypatch) -> None:
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+    registration = CollectorRegistration("example-collector", "example", "wrong", _collector_receipt)
+    plugin_distribution = _Distribution("dispatch-example", "1.2.3")
+    provider_distribution = _Distribution("dispatch-other", "9.9.9")
+    _install_metadata(
+        monkeypatch,
+        _EntryPoint("example", lambda request: _envelope(request["action"]), plugin_distribution),
+        _GroupedEntryPoint(
+            "example",
+            COLLECTOR_ENTRY_POINT_GROUP,
+            lambda: (registration,),
+            provider_distribution,
+        ),
+    )
+
+    with pytest.raises(PluginRuntimeError) as error:
+        discover_collector_providers()
+
+    assert error.value.code == "plugin_collector_provider_invalid"
+
+
 def test_paths_are_not_required_when_no_plugins_are_selected(monkeypatch) -> None:
     monkeypatch.delenv("DISPATCH_ACTIVE_PLUGINS", raising=False)
     monkeypatch.setenv("DISPATCH_PLUGIN_PATHS", "/obsolete/and/ignored")
@@ -119,6 +222,52 @@ def test_invalid_response_envelope_is_rejected(monkeypatch) -> None:
         invoke_plugin("example", {"action": "health"})
 
     assert error.value.code == "plugin_response_invalid"
+
+
+def test_deeply_nested_plugin_request_is_rejected_as_bounded_json(monkeypatch) -> None:
+    request: dict[str, Any] = {"leaf": True}
+    for _ in range(2000):
+        request = {"nested": request}
+    monkeypatch.setattr(
+        plugin_runtime.json,
+        "dumps",
+        lambda *args, **kwargs: (_ for _ in ()).throw(RecursionError()),
+    )
+
+    with pytest.raises(PluginRuntimeError) as error:
+        invoke_plugin("example", request)
+
+    assert error.value.code == "plugin_request_invalid"
+    assert str(error.value) == "plugin request is not valid bounded JSON"
+
+
+def test_deeply_nested_plugin_response_is_rejected_as_bounded_json(monkeypatch) -> None:
+    response: dict[str, Any] = {}
+
+    def handle(request):
+        data: dict[str, Any] = {"leaf": True}
+        for _ in range(2000):
+            data = {"nested": data}
+        result = {**_envelope(request["action"]), "data": data}
+        response["value"] = result
+        return result
+
+    _install_metadata(monkeypatch, _EntryPoint("example", handle))
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+    original_dumps = plugin_runtime.json.dumps
+
+    def dumps(value, *args, **kwargs):
+        if response.get("value") is value:
+            raise RecursionError
+        return original_dumps(value, *args, **kwargs)
+
+    monkeypatch.setattr(plugin_runtime.json, "dumps", dumps)
+
+    with pytest.raises(PluginRuntimeError) as error:
+        invoke_plugin("example", {"action": "health"})
+
+    assert error.value.code == "plugin_response_invalid"
+    assert str(error.value) == "plugin example response is not valid bounded JSON"
 
 
 def test_service_entry_point_is_active_and_receives_core_context(monkeypatch, tmp_path) -> None:

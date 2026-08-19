@@ -75,6 +75,20 @@ capabilities = ["read_local_data"]
 
 The `dispatch.plugins` group contains exactly one entry named by the ID. The target is a callable accepting one bounded JSON object and returning the exact response envelope. The plugin retains control of its normal `[project.dependencies]`.
 
+A plugin declaring the `collect` capability additionally publishes exactly one
+same-ID collector provider:
+
+```toml
+[project.entry-points."dispatch.collectors"]
+example = "dispatch_example.collectors:registrations"
+```
+
+The provider accepts no arguments and returns a bounded tuple of Core
+`CollectorRegistration` objects owned by that plugin ID. Collector IDs must be
+globally unique across selected plugins. Runners are top-level, spawn-picklable
+callables; browser-backed runners receive only the Core-managed session in their
+`CollectionContext`. A plugin without `collect` must not publish this entry point.
+
 A root `dispatch-plugin.yaml` is optional. If retained, its `id` must exactly match `[tool.dispatch].id`; it is descriptive source metadata, not an activation authority.
 
 Long-running plugins additionally publish exactly one service entry point with the
@@ -113,7 +127,11 @@ python -m pip install -e plugins/<owner>
 export DISPATCH_ACTIVE_PLUGINS=<owner>
 ```
 
-Core loads only the installed `dispatch.plugins` entry points whose names are selected. It must require exactly one matching entry point for every selected ID. It must not scan repositories, use package-specific registry code, or consult `DISPATCH_PLUGIN_PATHS`; that variable is obsolete.
+Core loads only the installed entry points whose names are selected. It requires
+exactly one matching `dispatch.plugins` entry point for every selected ID and
+loads the optional same-ID collector provider only from that installed metadata.
+It must not scan repositories, use package-specific registry code, or consult
+`DISPATCH_PLUGIN_PATHS`; that variable is obsolete.
 
 ## 5. Capability boundaries
 
@@ -130,7 +148,12 @@ A read request never implies collection.
 
 ### Collector, delivery, service, and auth planes
 
-Collectors declare network/browser/authentication needs and own validation. Scheduling and retries belong to an approved coordinator. Slack/Discord credentials belong to a reviewed delivery boundary. Long-running services and auth providers document privilege and private data boundaries explicitly.
+Collectors declare network/browser/authentication needs and own validation.
+Core owns durable submission, worker isolation, retries, browser/authentication
+coordination, and per-registration execution deadlines. Scheduling remains an
+approved coordinator concern. Slack/Discord credentials belong to a reviewed
+delivery boundary. Long-running services and auth providers document privilege
+and private data boundaries explicitly.
 
 Selection does not implicitly enable a long-running service. Setup installs the
 approved dependency closure and direct-source metadata, then publishes a disabled,
@@ -228,7 +251,7 @@ recoverable; an in-place partial dependency install is not accepted as complete.
 
 Minimum focused coverage:
 
-1. pyproject identity, capability, dependency, and entry-point metadata;
+1. pyproject identity, capability, dependency, and plugin/service/configurator/collector entry-point metadata;
 2. optional manifest ID consistency;
 3. lifecycle script permissions;
 4. direct entry-point health and invalid-input envelopes;

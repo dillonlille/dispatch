@@ -163,6 +163,22 @@ def test_registration_and_request_contracts_are_closed_and_bounded() -> None:
             lambda context: receipt(),
             authentication_required=True,
         )
+    timed = CollectorRegistration(
+        "timed-collector",
+        "synthetic-plugin",
+        "1.0.0",
+        lambda context: receipt(),
+        execution_timeout_seconds=30,
+    )
+    assert timed.safe_data()["execution_timeout_seconds"] == 30
+    with pytest.raises(CollectionManagerError, match="execution timeout"):
+        CollectorRegistration(
+            "too-slow",
+            "synthetic-plugin",
+            "1.0.0",
+            lambda context: receipt(),
+            execution_timeout_seconds=86_401,
+        )
 
 
 def test_nonbrowser_collection_returns_only_a_bounded_receipt() -> None:

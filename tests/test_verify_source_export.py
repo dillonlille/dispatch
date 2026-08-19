@@ -39,6 +39,23 @@ class VerifySourceExportTests(unittest.TestCase):
         result = run_verifier(root)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
+    def test_git_worktree_control_file_is_ignored(self) -> None:
+        temporary, root = self.make_root()
+        self.addCleanup(temporary.cleanup)
+        control = "/" + "home" + "/example/repository/.git/worktrees/task"
+        (root / ".git").write_text(f"gitdir: {control}\n", encoding="utf-8")
+        result = run_verifier(root)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(json.loads(result.stdout)["files_checked"], 1)
+
+        nested = root / "nested"
+        nested.mkdir()
+        personal = "/" + "home" + "/realoperator/private"
+        (nested / ".git").write_text(f"token: {personal}\n", encoding="utf-8")
+        result = run_verifier(root)
+        self.assertNotEqual(result.returncode, 0)
+        self.assertTrue(any("nested/.git" in item for item in json.loads(result.stdout)["errors"]))
+
     def test_unlisted_source_file_is_checked_without_scope_manifest(self) -> None:
         temporary, root = self.make_root()
         self.addCleanup(temporary.cleanup)

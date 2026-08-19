@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "dispatch-paycom"
+version = "0.1.0"
+description = "Source-owned Paycom meal comparison and authenticated collectors for Dispatch"
+requires-python = ">=3.11,<3.14"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest==9.1.1"]
+
+[project.entry-points."dispatch.plugins"]
+paycom = "dispatch_paycom.service:handle"
+
+[project.entry-points."dispatch.collectors"]
+paycom = "dispatch_paycom.collector_provider:registrations"
+
+[tool.dispatch]
+id = "paycom"
+capabilities = [
+  "read_local_data",
+  "mutate_data",
+  "collect",
+  "network",
+  "authentication",
+]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+addopts = "-q -p no:cacheprovider"
+testpaths = ["tests"]

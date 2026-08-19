@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 
+import pytest
+
 import command_interface as command_interface
-from command_interface import main
+from collection_manager import CollectionDisposition, CollectionReceipt, CollectorRegistration
+from command_interface import CommandInterfaceError, main
 
 ENVELOPE = {"ok", "action", "status", "data", "freshness", "delivery", "error"}
 
@@ -217,6 +221,77 @@ def test_auth_enroll_uses_hidden_prompts_and_never_outputs_values(monkeypatch, t
     assert payload["data"]["status"] == "configured"
     assert "synthetic-user" not in output
     assert "synthetic-password-not-a-secret" not in output
+
+
+def test_collection_submit_queues_a_discovered_collector(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+    registration = CollectorRegistration(
+        "example-collector",
+        "example",
+        "1.0.0",
+        lambda context: CollectionReceipt(CollectionDisposition.NO_DATA, None, 0, True),
+    )
+    monkeypatch.setattr(command_interface, "discover_collector_registrations", lambda: (registration,))
+
+    assert main(
+        [
+            "collection",
+            "submit",
+            "example-collector",
+            "--parameters",
+            '{"date":"2026-08-19"}',
+            "--idempotency-key",
+            "example-submit-1",
+        ]
+    ) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["action"] == "collection-submit"
+    assert payload["data"]["collector_id"] == "example-collector"
+    assert payload["data"]["state"] == "queued"
+
+
+def test_collection_submit_converts_json_recursion_to_stable_error(monkeypatch) -> None:
+    monkeypatch.setattr(command_interface.json, "loads", lambda value: (_ for _ in ()).throw(RecursionError()))
+    args = argparse.Namespace(
+        parameters="{\"nested\": true}",
+        collector_id="example-collector",
+        account_alias="default",
+        max_attempts=3,
+        not_before=None,
+        idempotency_key=None,
+    )
+
+    with pytest.raises(CommandInterfaceError) as error:
+        command_interface._collection_submission(args, object())
+
+    assert error.value.code == "collection_request_invalid"
+    assert str(error.value) == "collection parameters must be valid JSON"
+
+
+def test_plugin_invoke_converts_deeply_nested_json_to_stable_error(monkeypatch, capsys) -> None:
+    request = '{"nested":' + "[" * 2000 + "0" + "]" * 2000 + "}"
+    original_loads = command_interface.json.loads
+
+    def loads(value, *args, **kwargs):
+        if value == request:
+            raise RecursionError
+        return original_loads(value, *args, **kwargs)
+
+    monkeypatch.setattr(command_interface.json, "loads", loads)
+
+    assert main(["plugin", "invoke", "example", "--request", request]) == 1
+    monkeypatch.setattr(command_interface.json, "loads", original_loads)
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["action"] == "plugin-invoke"
+    assert payload["error"] == {
+        "code": "plugin_request_invalid",
+        "message": "plugin request must be valid JSON",
+    }
 
 
 def test_collection_status_is_read_only_with_no_queue(monkeypatch, tmp_path, capsys) -> None:

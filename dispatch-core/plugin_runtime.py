@@ -6,6 +6,7 @@ import importlib.metadata
 import inspect
 import json
 import os
+import pickle
 import re
 import sys
 from contextlib import redirect_stdout
@@ -27,11 +28,13 @@ except ImportError:  # pragma: no cover - exercised by dependency-resolution env
 ENTRY_POINT_GROUP = "dispatch.plugins"
 SERVICE_ENTRY_POINT_GROUP = "dispatch.services"
 CONFIGURATOR_ENTRY_POINT_GROUP = "dispatch.configurators"
+COLLECTOR_ENTRY_POINT_GROUP = "dispatch.collectors"
 _PLUGIN_ID = re.compile(r"[a-z][a-z0-9-]{0,63}")
 _ERROR_CODE = re.compile(r"[a-z][a-z0-9_]{0,63}")
 _ENVELOPE_KEYS = {"ok", "action", "status", "data", "freshness", "delivery", "error"}
 _MAX_INTERACTIVE_TEXT = 4096
 _MAX_PLUGIN_STDOUT = 64 * 1024
+_MAX_COLLECTOR_REGISTRATIONS = 64
 
 
 class PluginRuntimeError(RuntimeError):
@@ -74,6 +77,14 @@ def _default_output(message: str) -> None:
 def _accepts_context(handler: Callable[..., Any]) -> bool:
     try:
         inspect.signature(handler).bind(object())
+    except (TypeError, ValueError):
+        return False
+    return True
+
+
+def _accepts_no_arguments(handler: Callable[..., Any]) -> bool:
+    try:
+        inspect.signature(handler).bind()
     except (TypeError, ValueError):
         return False
     return True
@@ -272,6 +283,24 @@ class DiscoveredPluginConfigurator:
 
     def safe_data(self) -> dict[str, str]:
         return {"id": self.id, "distribution": self.distribution, "version": self.version}
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveredCollectorProvider:
+    """An optional source-owned collector provider from the active environment."""
+
+    id: str
+    distribution: str
+    version: str
+    registrations: tuple[Any, ...] = field(repr=False, compare=False)
+
+    def safe_data(self) -> dict[str, Any]:
+        return {
+            "id": self.id,
+            "distribution": self.distribution,
+            "version": self.version,
+            "collectors": [registration.safe_data() for registration in self.registrations],
+        }
 
 
 def _configured_ids() -> list[str]:
@@ -474,6 +503,142 @@ def discover_configurators() -> list[DiscoveredPluginConfigurator]:
     )
 
 
+def _validate_collector_registrations(plugin_id: str, value: Any) -> tuple[Any, ...]:
+    """Validate the object boundary returned by a trusted collector provider."""
+    from collection_manager import CollectorRegistration
+
+    if type(value) is not tuple or not value or len(value) > _MAX_COLLECTOR_REGISTRATIONS:
+        raise PluginRuntimeError(
+            "plugin_collector_registration_invalid",
+            f"active plugin {plugin_id} collector provider must return a non-empty bounded tuple",
+        )
+    registrations = []
+    collector_ids: set[str] = set()
+    for registration in value:
+        if not isinstance(registration, CollectorRegistration) or registration.plugin_id != plugin_id:
+            raise PluginRuntimeError(
+                "plugin_collector_registration_invalid",
+                f"active plugin {plugin_id} returned an invalid collector registration",
+            )
+        try:
+            pickle.dumps(registration.runner)
+            pickle.dumps(registration)
+        except BaseException as exc:
+            raise PluginRuntimeError(
+                "plugin_collector_registration_invalid",
+                f"active plugin {plugin_id} returned an unpicklable collector registration",
+            ) from exc
+        if registration.collector_id in collector_ids:
+            raise PluginRuntimeError(
+                "plugin_collector_registration_invalid",
+                f"active plugin {plugin_id} returned a duplicate collector identity",
+            )
+        collector_ids.add(registration.collector_id)
+        registrations.append(registration)
+    return tuple(registrations)
+
+
+def discover_collector_providers() -> list[DiscoveredCollectorProvider]:
+    """Discover at most one optional collector provider for each active plugin.
+
+    Providers are intentionally not required: a selected query-only plugin may
+    have no collector entry point. A present provider is loaded from the
+    installed shared environment and must return only Core-owned
+    ``CollectorRegistration`` objects for its own plugin ID.
+    """
+    active_ids = _configured_ids()
+    if not active_ids:
+        return []
+    entry_points = _environment_entry_points(COLLECTOR_ENTRY_POINT_GROUP)
+    discovered: list[DiscoveredCollectorProvider] = []
+    selected_plugins: dict[str, DiscoveredPlugin] | None = None
+    for plugin_id in active_ids:
+        candidates = _entry_point_candidates(entry_points, plugin_id, COLLECTOR_ENTRY_POINT_GROUP)
+        if not candidates:
+            continue
+        if selected_plugins is None:
+            selected_plugins = {plugin.id: plugin for plugin in discover_plugins()}
+        selected_plugin = selected_plugins.get(plugin_id)
+        if selected_plugin is None:
+            raise PluginRuntimeError(
+                "plugin_entry_point_invalid",
+                f"active plugin {plugin_id} has no matching dispatch.plugins entry point",
+            )
+        if len(candidates) != 1:
+            raise PluginRuntimeError(
+                "plugin_entry_point_invalid",
+                f"active plugin {plugin_id} must publish at most one {COLLECTOR_ENTRY_POINT_GROUP} entry point",
+            )
+        entry_point = candidates[0]
+        try:
+            handler = entry_point.load()
+        except BaseException as exc:
+            raise PluginRuntimeError(
+                "plugin_load_failed",
+                f"active plugin {plugin_id} collector provider could not be loaded",
+            ) from exc
+        if not callable(handler) or not _accepts_no_arguments(handler):
+            raise PluginRuntimeError(
+                "plugin_entry_point_invalid",
+                f"active plugin {plugin_id} collector provider must accept no arguments",
+            )
+        try:
+            with redirect_stdout(_BoundedPluginStdout()):
+                registrations = _validate_collector_registrations(plugin_id, handler())
+        except PluginRuntimeError:
+            raise
+        except BaseException as exc:
+            raise PluginRuntimeError(
+                "plugin_collector_provider_failed",
+                f"active plugin {plugin_id} collector provider failed",
+            ) from exc
+        distribution, version = _distribution_details(entry_point)
+        if (distribution, version) != (selected_plugin.distribution, selected_plugin.version):
+            raise PluginRuntimeError(
+                "plugin_collector_provider_invalid",
+                f"active plugin {plugin_id} collector provider distribution does not match dispatch.plugins",
+            )
+        if any(registration.plugin_release != selected_plugin.version for registration in registrations):
+            raise PluginRuntimeError(
+                "plugin_collector_registration_invalid",
+                f"active plugin {plugin_id} collector registration release does not match dispatch.plugins",
+            )
+        discovered.append(
+            DiscoveredCollectorProvider(
+                plugin_id,
+                selected_plugin.distribution,
+                selected_plugin.version,
+                registrations,
+            )
+        )
+    all_ids: set[str] = set()
+    for provider in discovered:
+        for registration in provider.registrations:
+            if registration.collector_id in all_ids:
+                raise PluginRuntimeError(
+                    "plugin_collector_registration_invalid",
+                    "active plugins returned a duplicate collector identity",
+                )
+            all_ids.add(registration.collector_id)
+    return discovered
+
+
+def discover_collector_registrations() -> tuple[Any, ...]:
+    """Return the trusted registrations exposed by active source-owned plugins."""
+    registrations: list[Any] = []
+    for provider in discover_collector_providers():
+        registrations.extend(provider.registrations)
+    return tuple(registrations)
+
+
+def list_collector_providers() -> list[dict[str, Any]]:
+    return [provider.safe_data() for provider in discover_collector_providers()]
+
+
+def list_collectors() -> list[dict[str, object]]:
+    return [registration.safe_data() for registration in discover_collector_registrations()]
+
+
 def discover_service(plugin_id: str) -> DiscoveredPluginService:
     handler, distribution, version = _load_entry_point(
         plugin_id,
@@ -610,7 +775,7 @@ def list_plugins() -> list[dict[str, str]]:
 def _json_bytes(value: Any, *, limit: int, message: str, code: str) -> bytes:
     try:
         encoded = json.dumps(value, sort_keys=True, allow_nan=False).encode()
-    except (TypeError, ValueError) as exc:
+    except (TypeError, ValueError, RecursionError) as exc:
         raise PluginRuntimeError(code, message) from exc
     if len(encoded) > limit:
         raise PluginRuntimeError(code, message)
@@ -690,15 +855,19 @@ __all__ = [
     "ENTRY_POINT_GROUP",
     "SERVICE_ENTRY_POINT_GROUP",
     "CONFIGURATOR_ENTRY_POINT_GROUP",
+    "COLLECTOR_ENTRY_POINT_GROUP",
     "DiscoveredPlugin",
     "DiscoveredPluginService",
     "DiscoveredPluginConfigurator",
+    "DiscoveredCollectorProvider",
     "PluginServiceContext",
     "PluginConfiguratorContext",
     "PluginRuntimeError",
     "discover_plugins",
     "discover_services",
     "discover_configurators",
+    "discover_collector_providers",
+    "discover_collector_registrations",
     "discover_service",
     "discover_configurator",
     "invoke_plugin",
@@ -713,5 +882,7 @@ __all__ = [
     "list_plugins",
     "list_services",
     "list_configurators",
+    "list_collector_providers",
+    "list_collectors",
     "plugin_health",
 ]
