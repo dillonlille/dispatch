@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://dispatch.example.invalid/schemas/dispatch-plugin-v1.schema.json",
-  "title": "Dispatch Plugin Manifest v1",
+  "title": "Dispatch Plugin Source Manifest v1",
+  "description": "Optional descriptive metadata for a source-owned Dispatch plugin. It is not runtime, activation, release, or receipt authority.",
   "type": "object",
   "additionalProperties": false,
   "required": [
@@ -33,18 +34,13 @@
     "paths": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["source", "tests", "state", "staging", "locks", "receipts"],
+      "required": ["source", "tests"],
       "properties": {
         "source": {"$ref": "#/$defs/relativePath"},
         "tests": {"$ref": "#/$defs/relativePath"},
-        "database": {"$ref": "#/$defs/workspacePath"},
-        "databases": {"$ref": "#/$defs/workspacePathMap"},
-        "artifacts": {"$ref": "#/$defs/workspacePath"},
-        "artifact_stores": {"$ref": "#/$defs/workspacePathMap"},
-        "state": {"$ref": "#/$defs/workspacePath"},
-        "staging": {"$ref": "#/$defs/workspacePath"},
-        "locks": {"$ref": "#/$defs/workspacePath"},
-        "receipts": {"$ref": "#/$defs/workspacePath"}
+        "data": {"$ref": "#/$defs/relativePath"},
+        "references": {"$ref": "#/$defs/relativePath"},
+        "hermes_integration": {"$ref": "#/$defs/relativePath"}
       }
     },
     "commands": {
@@ -62,33 +58,34 @@
       "type": "array",
       "minItems": 1,
       "items": {"$ref": "#/$defs/component"}
-    },
-    "retention": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["keep_current", "keep_rollback", "preserve_pinned"],
-      "properties": {
-        "keep_current": {"const": true},
-        "keep_rollback": {"type": "integer", "minimum": 1, "maximum": 10},
-        "preserve_pinned": {"const": true}
-      }
     }
   },
   "$defs": {
-    "slug": {"type": "string", "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$", "maxLength": 64},
-    "version": {"type": "string", "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"},
-    "relativePath": {"type": "string", "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"},
-    "workspacePath": {"type": "string", "pattern": "^(?:plugins|db|artifacts)/[a-z0-9][a-z0-9_./-]*$"},
-    "workspacePathMap": {
-      "type": "object",
-      "minProperties": 1,
-      "additionalProperties": {"$ref": "#/$defs/workspacePath"},
-      "propertyNames": {"pattern": "^[a-z][a-z0-9-]*$"}
+    "slug": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$",
+      "maxLength": 64
+    },
+    "version": {
+      "type": "string",
+      "pattern": "^[0-9]+\\.[0-9]+\\.[0-9]+(?:[-+][0-9A-Za-z.-]+)?$"
+    },
+    "relativePath": {
+      "type": "string",
+      "pattern": "^(?!/)(?!.*(?:^|/)\\.\\.(?:/|$)).+$"
     },
     "capabilities": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["read_local_data", "mutate_data", "collect", "network", "authentication", "direct_delivery", "long_running"],
+      "required": [
+        "read_local_data",
+        "mutate_data",
+        "collect",
+        "network",
+        "authentication",
+        "direct_delivery",
+        "long_running"
+      ],
       "properties": {
         "read_local_data": {"type": "boolean"},
         "mutate_data": {"type": "boolean"},
@@ -120,44 +117,45 @@
         "toolset": {"type": "string", "pattern": "^[a-z][a-z0-9_]*$"}
       }
     },
-    "runtime": {
-      "type": "object",
-      "additionalProperties": false,
-      "required": ["releases", "activation_record"],
-      "properties": {
-        "releases": {"$ref": "#/$defs/relativePath"},
-        "activation_record": {"$ref": "#/$defs/relativePath"},
-        "current_pointer": {"$ref": "#/$defs/relativePath"},
-        "launcher_manifest": {"$ref": "#/$defs/relativePath"}
-      }
-    },
     "component": {
       "type": "object",
       "additionalProperties": false,
       "required": ["id", "kind", "source", "capabilities"],
       "properties": {
         "id": {"$ref": "#/$defs/slug"},
-        "kind": {"enum": ["hermes-tool", "collector", "service", "auth-provider", "library", "control-plane", "retired"]},
+        "kind": {
+          "enum": [
+            "hermes-tool",
+            "collector",
+            "service",
+            "auth-provider",
+            "library",
+            "control-plane",
+            "retired"
+          ]
+        },
         "source": {"$ref": "#/$defs/relativePath"},
         "capabilities": {"$ref": "#/$defs/capabilities"},
         "hermes": {"$ref": "#/$defs/hermes"},
-        "actions": {"type": "array", "minItems": 1, "items": {"$ref": "#/$defs/action"}},
-        "runtime": {"$ref": "#/$defs/runtime"},
+        "actions": {
+          "type": "array",
+          "minItems": 1,
+          "items": {"$ref": "#/$defs/action"}
+        },
         "coordinator_mode": {"type": "string", "pattern": "^[a-z][a-z0-9-]*$"},
-        "service_units": {"type": "array", "items": {"$ref": "#/$defs/relativePath"}, "uniqueItems": true}
+        "service_units": {
+          "type": "array",
+          "items": {"$ref": "#/$defs/relativePath"},
+          "uniqueItems": true
+        }
       },
       "allOf": [
         {
-          "if": {"properties": {"kind": {"const": "hermes-tool"}}, "required": ["kind"]},
-          "then": {"required": ["hermes", "actions", "runtime"]}
-        },
-        {
-          "if": {"properties": {"kind": {"const": "collector"}}, "required": ["kind"]},
-          "then": {"required": ["runtime"]}
-        },
-        {
-          "if": {"properties": {"kind": {"const": "service"}}, "required": ["kind"]},
-          "then": {"required": ["runtime", "service_units"]}
+          "if": {
+            "properties": {"kind": {"const": "hermes-tool"}},
+            "required": ["kind"]
+          },
+          "then": {"required": ["hermes", "actions"]}
         }
       ]
     }
