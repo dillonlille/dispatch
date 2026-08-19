@@ -217,6 +217,7 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
         )
         browser_ready = inspection["ready"] is True
         setup = _setup_state(paths)
+        setup_invalid = setup.get("invalid") is True
         plugins = (
             plugin_health(setup["selected_plugins"])
             if setup["complete"] is True
@@ -243,6 +244,7 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
         )
         core_operational = (
             collector_ready
+            and not setup_invalid
             and (not browser_required or browser_ready)
             and (not authentication_required or authentication_ready)
         )
@@ -252,9 +254,9 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             {
                 "registration": "ready",
                 "runtime_integrity": "ready",
-                "configuration": "ready" if configured else "unavailable",
+                "configuration": "invalid" if setup_invalid else ("ready" if configured else "unavailable"),
                 "browser": "ready" if browser_ready else ("unavailable" if browser_required else "not_applicable"),
-                "overall": "ready" if setup_ready else "setup_incomplete",
+                "overall": "degraded" if setup_invalid else ("ready" if setup_ready else "setup_incomplete"),
             }
         )
         if action in {"health", "verify"}:
@@ -281,19 +283,36 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
         }
         if authentication is not None:
             data["authentication"] = authentication
+        installation_invalid = False
         if action == "verify":
             data["application"] = "dispatch-core"
             identity = paths.dispatch_home / "installation.json"
             try:
                 installed = json.loads(identity.read_text(encoding="utf-8"))
+            except FileNotFoundError:
+                installed = {}
             except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
                 installed = {}
+                installation_invalid = True
+            if not isinstance(installed, dict):
+                installed = {}
+                installation_invalid = True
             data["version"] = installed.get("ref") or "development"
             data["channel"] = installed.get("channel")
             data["commit"] = installed.get("commit")
 
         error = None
-        if collector_error is not None:
+        if setup_invalid:
+            error = {
+                "code": "plugin_config_invalid",
+                "message": "plugin configuration is unreadable or invalid",
+            }
+        elif installation_invalid:
+            error = {
+                "code": "installation_record_invalid",
+                "message": "installation record is unreadable or invalid",
+            }
+        elif collector_error is not None:
             error = {"code": collector_error.code, "message": str(collector_error)}
         elif collector_required and not collector_registrations:
             error = {
@@ -312,8 +331,8 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
                 "code": str(inspection["error_code"]),
                 "message": str(inspection["error_message"]),
             }
-        ok = browser_ready if action == "browser-doctor" else core_operational
-        status = "ready" if setup_ready else ("setup_incomplete" if ok else "degraded")
+        ok = browser_ready if action == "browser-doctor" else core_operational and not installation_invalid
+        status = "ready" if setup_ready and not installation_invalid else ("setup_incomplete" if ok else "degraded")
         return envelope(ok=ok, action=action, status=status, data=data, error=error)
 
     raise ValueError(f"unsupported health action: {action}")

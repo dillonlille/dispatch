@@ -3,7 +3,6 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
-import os
 from pathlib import Path
 import re
 import sqlite3
@@ -13,7 +12,7 @@ from uuid import uuid4
 
 from .artifacts import TimecardArtifact, verify_artifact_run
 from .period import Period, canonical_timecard_url, is_captured_timecard_url, parse_period_key, period_from_end, validate_code
-from ..filesystem import FilesystemError, ensure_private_directory, validate_private_regular_file
+from ..filesystem import FilesystemError, create_private_file, ensure_private_directory, validate_private_regular_file
 
 
 class TimecardStorageError(RuntimeError):
@@ -82,8 +81,10 @@ class TimecardStore:
         self.path = Path(path)
         _secure_db(self.path)
         if not self.path.exists():
-            descriptor = os.open(self.path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0), 0o600)
-            os.close(descriptor)
+            try:
+                create_private_file(self.path)
+            except FilesystemError as exc:
+                raise TimecardStorageError("schema_invalid") from exc
         self.db = sqlite3.connect(self.path, timeout=5.0)
         self.db.row_factory = sqlite3.Row
         self.db.execute("PRAGMA foreign_keys=ON")

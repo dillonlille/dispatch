@@ -202,8 +202,12 @@ def test_health_fails_closed_on_deeply_nested_plugins_json(monkeypatch, tmp_path
 
     health = resolved("health")
 
+    assert health["ok"] is False
+    assert health["status"] == "degraded"
+    assert health["error"]["code"] == "plugin_config_invalid"
     assert health["data"]["configured"] is False
     assert health["data"]["setup"]["invalid"] is True
+    assert health["data"]["planes"]["configuration"] == "invalid"
 
 
 def test_selected_plugin_must_report_ready_before_setup_is_ready(monkeypatch, tmp_path: Path) -> None:
@@ -293,6 +297,22 @@ def test_verify_reports_installed_channel_ref_and_commit(monkeypatch, tmp_path: 
     assert verification["data"]["version"] == "1.2.3"
     assert verification["data"]["channel"] == "stable"
     assert verification["data"]["commit"] == "0123456789abcdef0123456789abcdef01234567"
+
+
+def test_verify_fails_closed_on_deeply_nested_installation_record(monkeypatch, tmp_path: Path) -> None:
+    configure(monkeypatch, tmp_path)
+    root = tmp_path / "installed-home" / ".dispatch"
+    root.mkdir(mode=0o700, parents=True)
+    (root / "installation.json").write_text(
+        '{"nested":' + "[" * 2000 + "0" + "]" * 2000 + "}",
+        encoding="utf-8",
+    )
+
+    verification = resolved("verify")
+
+    assert verification["ok"] is False
+    assert verification["status"] == "degraded"
+    assert verification["error"]["code"] == "installation_record_invalid"
 
 
 def test_health_fails_closed_on_unsupported_collection_schema(monkeypatch, tmp_path: Path) -> None:

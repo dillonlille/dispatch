@@ -227,6 +227,15 @@ def _write_private_file_at(parent_descriptor: int, name: str, data: bytes) -> os
         os.close(descriptor)
 
 
+def create_private_file(path: str | Path) -> Path:
+    """Create one empty private regular file below a descriptor-pinned parent."""
+    value = _absolute(path)
+    parent = ensure_private_directory(value.parent)
+    with pinned_private_directory(parent) as (parent_descriptor, _anchor):
+        _write_private_file_at(parent_descriptor, value.name, b"")
+    return value
+
+
 @contextmanager
 def exclusive_private_lock(root: str | Path, name: str = ".collector.lock") -> Iterator[None]:
     try:
@@ -260,6 +269,7 @@ def exclusive_private_lock(root: str | Path, name: str = ".collector.lock") -> I
 
 __all__ = [
     "FilesystemError",
+    "create_private_file",
     "ensure_private_directory",
     "exclusive_private_lock",
     "fsync_open_directory",

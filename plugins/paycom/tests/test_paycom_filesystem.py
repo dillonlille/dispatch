@@ -8,6 +8,7 @@ import pytest
 
 from dispatch_paycom.filesystem import (
     FilesystemError,
+    create_private_file,
     ensure_private_directory,
     exclusive_private_lock,
     pinned_private_directory,
@@ -118,4 +119,32 @@ def test_store_rejects_symlink_parent_without_chmod(tmp_path: Path, store_type, 
     with pytest.raises(error_type):
         store_type(private / "link" / "database.sqlite3")
     assert stat.S_IMODE(outside.stat().st_mode) == before
+    assert not (outside / "database.sqlite3").exists()
+
+
+def test_private_file_creation_rejects_parent_swap(tmp_path: Path, monkeypatch) -> None:
+    import dispatch_paycom.filesystem as filesystem
+
+    private = tmp_path / "private"
+    private.mkdir(mode=0o700)
+    parent = private / "database"
+    parent.mkdir(mode=0o700)
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o755)
+    held = private / "held"
+    original = filesystem._open_path_no_follow
+    calls = 0
+
+    def race(value):
+        nonlocal calls
+        if Path(value) == parent:
+            calls += 1
+            if calls == 2:
+                parent.rename(held)
+                parent.symlink_to(outside, target_is_directory=True)
+        return original(value)
+
+    monkeypatch.setattr(filesystem, "_open_path_no_follow", race)
+    with pytest.raises(FilesystemError):
+        create_private_file(parent / "database.sqlite3")
     assert not (outside / "database.sqlite3").exists()
