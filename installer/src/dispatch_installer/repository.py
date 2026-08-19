@@ -247,28 +247,28 @@ def checkout_existing(
                 ),
                 run=run,
             )
-            _checked(
-                (
-                    "git",
-                    "-C",
-                    str(clone),
-                    "config",
-                    f"branch.{DEVELOPMENT_BRANCH}.remote",
-                    "origin",
-                ),
-                run=run,
-            )
-            _checked(
-                (
-                    "git",
-                    "-C",
-                    str(clone),
-                    "config",
-                    f"branch.{DEVELOPMENT_BRANCH}.merge",
-                    f"refs/heads/{DEVELOPMENT_BRANCH}",
-                ),
-                run=run,
-            )
+        _checked(
+            (
+                "git",
+                "-C",
+                str(clone),
+                "config",
+                f"branch.{DEVELOPMENT_BRANCH}.remote",
+                "origin",
+            ),
+            run=run,
+        )
+        _checked(
+            (
+                "git",
+                "-C",
+                str(clone),
+                "config",
+                f"branch.{DEVELOPMENT_BRANCH}.merge",
+                f"refs/heads/{DEVELOPMENT_BRANCH}",
+            ),
+            run=run,
+        )
         _checked(
             ("git", "-C", str(clone), "merge", "--ff-only", f"origin/{DEVELOPMENT_BRANCH}"),
             run=run,
@@ -366,6 +366,23 @@ def local_checkout_matches_record(clone: Path, record: dict[str, object] | None)
             )
             if branch.returncode != 0 or branch.stdout.strip() != DEVELOPMENT_BRANCH:
                 return False
+            branch_remote = invoke(
+                "config",
+                "--get",
+                f"branch.{DEVELOPMENT_BRANCH}.remote",
+            )
+            branch_merge = invoke(
+                "config",
+                "--get",
+                f"branch.{DEVELOPMENT_BRANCH}.merge",
+            )
+            if (
+                branch_remote.returncode != 0
+                or branch_remote.stdout.strip() != "origin"
+                or branch_merge.returncode != 0
+                or branch_merge.stdout.strip() != f"refs/heads/{DEVELOPMENT_BRANCH}"
+            ):
+                return False
         else:
             authority = invoke("rev-parse", "--verify", f"refs/tags/{ref}^{{commit}}")
             if branch.returncode != 1:
@@ -424,10 +441,37 @@ def verify_checkout_authority(
             ("git", "-C", str(clone), "symbolic-ref", "--quiet", "--short", "HEAD"),
             run=run,
         )
-        if branch.stdout.strip() != DEVELOPMENT_BRANCH or head != expected:
+        branch_remote = _checked(
+            (
+                "git",
+                "-C",
+                str(clone),
+                "config",
+                "--get",
+                f"branch.{DEVELOPMENT_BRANCH}.remote",
+            ),
+            run=run,
+        )
+        branch_merge = _checked(
+            (
+                "git",
+                "-C",
+                str(clone),
+                "config",
+                "--get",
+                f"branch.{DEVELOPMENT_BRANCH}.merge",
+            ),
+            run=run,
+        )
+        if (
+            branch.stdout.strip() != DEVELOPMENT_BRANCH
+            or branch_remote.stdout.strip() != "origin"
+            or branch_merge.stdout.strip() != f"refs/heads/{DEVELOPMENT_BRANCH}"
+            or head != expected
+        ):
             raise InstallerError(
                 "dev_authority_invalid",
-                "dev checkout must exactly track the GitHub main branch",
+                "dev checkout must exactly track origin/main from the canonical GitHub branch",
             )
     else:
         raise InstallerError("channel_invalid", "channel must be stable or dev")
