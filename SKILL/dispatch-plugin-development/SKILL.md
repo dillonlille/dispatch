@@ -36,6 +36,10 @@ python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin_policy.py \
    ```
 
 3. Publish exactly one `[project.entry-points."dispatch.plugins"]` entry whose name equals that ID. Its callable accepts one bounded JSON object and returns the exact seven-field response envelope.
+   A plugin declaring `long_running` also publishes exactly one matching
+   `[project.entry-points."dispatch.services"]` foreground service callable.
+   Interactive private onboarding uses an optional matching
+   `[project.entry-points."dispatch.configurators"]` callable, never a model action.
 4. Install the cloned source editable into the shared Dispatch virtual environment:
 
    ```bash
@@ -46,6 +50,8 @@ python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin_policy.py \
    Core discovers installed `dispatch.plugins` entry points from that environment and filters them only by `DISPATCH_ACTIVE_PLUGINS`. `DISPATCH_PLUGIN_PATHS` is obsolete.
 5. Keep owner-managed data outside source, normally under `plugins/<owner>/data` or an explicitly documented private data root. Never put secrets, cookies, credentials, or private business rows in source, manifests, tests, skills, or receipts.
 6. Keep query, collection, authentication, browser, mutation, service, and delivery capabilities separate. A read action never collects implicitly.
+   Plugin selection installs source but does not by itself authorize service
+   enablement; configuration and enablement remain explicit operator steps.
 7. Use bounded schemas: required `action`, a closed action enum, `additionalProperties: false`, exact action fields, and bounded strings/rows/ranges/timeouts.
 8. Provide executable `scripts/test`, `scripts/build`, `scripts/verify`, and `scripts/health` commands. They operate on source and local configuration; they do not build, publish, activate, or verify generated plugin artifacts.
 9. Keep the Hermes adapter narrow. Its tool name, toolset, action schema, availability check, and response envelopes must agree with the source entry point and optional `dispatch-plugin.yaml`.
@@ -90,6 +96,8 @@ Do not create `runtime/`, `current` pointers, generation directories, release ma
 
 - pyproject metadata has a valid `tool.dispatch.id` and non-empty capability list;
 - the entry-point group has exactly one matching plugin ID and a loadable source callable;
+- long-running capability and `dispatch.services` metadata agree exactly;
+- any `dispatch.configurators` entry point is operator-only and never accepts secret JSON fields;
 - an optional root manifest has the same ID as pyproject metadata;
 - lifecycle scripts are regular owner-executable files and not group/world writable;
 - entry-point and Hermes responses use exactly `ok`, `action`, `status`, `data`, `freshness`, `delivery`, and `error`;

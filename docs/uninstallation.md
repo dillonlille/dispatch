@@ -36,6 +36,7 @@ Ordinary uninstall removes only validated Dispatch-owned paths:
 - temporary installation directories;
 - `${HOME}/.local/bin/dispatch` when it matches the Dispatch-owned launcher;
 - the Dispatch systemd user service and its generated service record.
+- every receipt-owned selected-plugin service projection;
 
 It preserves:
 
@@ -49,6 +50,11 @@ It preserves:
 - all Hermes binaries, profiles, configuration, state, and runtime files.
 
 `cache` and `run` are disposable. Durable configuration, credentials, data, operational state, and logs survive updates, repairs, channel switches, and ordinary uninstall.
+
+Before code, environment, or Browser Manager removal, Dispatch stops every owned
+plugin service. A modified, unrelated, or unreceipted unit blocks removal rather
+than being guessed as Dispatch-owned. Deselecting a long-running plugin follows
+the same rule while preserving that plugin's private durable roots.
 
 ## Purge and safety
 

@@ -9,7 +9,8 @@ from typing import NoReturn
 from .doctor import inspect_installation
 from .layout import InstallLayout, InstallerError, installation_lock, read_installation
 from .lifecycle import install_or_update, repair_existing
-from .setup import run_setup
+from .setup import run_setup, selected_long_running_plugins
+from .service import disable_plugin_service, enable_plugin_service, status_plugin_service
 from .uninstall import plan_uninstall, uninstall
 
 
@@ -45,6 +46,9 @@ def _parser() -> argparse.ArgumentParser:
     setup.add_argument("--plugin", action="append", default=[])
     setup.add_argument("--list", action="store_true")
     setup.add_argument("--yes", action="store_true")
+    plugin_service = actions.add_parser("plugin-service", help="operate a receipt-owned plugin service")
+    plugin_service.add_argument("operation", choices=("status", "enable", "disable"))
+    plugin_service.add_argument("plugin_id")
     remove = actions.add_parser("uninstall", help="remove Dispatch user files")
     remove.add_argument("--plan", action="store_true")
     remove.add_argument("--purge", action="store_true")
@@ -120,6 +124,26 @@ def main(argv: list[str] | None = None) -> int:
                     [*(f"--plugin={plugin}" for plugin in args.plugin), *( ["--list"] if args.list else []), *( ["--yes"] if args.yes else [])],
                     human=not args.json,
                 )
+        if args.action == "plugin-service":
+            if read_installation(layout) is None:
+                raise InstallerError("installation_missing", "Dispatch is not installed")
+            if args.plugin_id not in selected_long_running_plugins(layout):
+                raise InstallerError(
+                    "plugin_service_not_selected",
+                    "plugin service must be selected and declared long-running",
+                )
+            if args.operation == "status":
+                result = status_plugin_service(layout, args.plugin_id)
+            else:
+                with installation_lock(layout):
+                    result = (
+                        enable_plugin_service(layout, args.plugin_id)
+                        if args.operation == "enable"
+                        else disable_plugin_service(layout, args.plugin_id)
+                    )
+            ready = result.get("status") not in {"unsafe", "incomplete", "missing"}
+            _emit(ready, "plugin-service", str(result.get("status", "error")), result)
+            return 0 if ready else 1
         if args.action == "uninstall":
             if args.plan and args.yes:
                 raise InstallerError("uninstall_arguments", "--plan and --yes cannot be combined")

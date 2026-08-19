@@ -1,0 +1,34 @@
+{
+  "display_information": {
+    "name": "DSP Companion",
+    "description": "Allowlisted Slack bridge for DSP Companion responses.",
+    "background_color": "#232f3e"
+  },
+  "features": {
+    "bot_user": {
+      "display_name": "DSP Companion",
+      "always_online": false
+    }
+  },
+  "oauth_config": {
+    "scopes": {
+      "bot": [
+        "app_mentions:read",
+        "chat:write",
+        "channels:read",
+        "channels:history",
+        "groups:read",
+        "groups:history"
+      ]
+    }
+  },
+  "settings": {
+    "event_subscriptions": {
+      "bot_events": ["app_mention", "message.channels", "message.groups"]
+    },
+    "interactivity": {"is_enabled": false},
+    "org_deploy_enabled": false,
+    "socket_mode_enabled": true,
+    "token_rotation_enabled": false
+  }
+}

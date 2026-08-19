@@ -2,13 +2,15 @@
 from __future__ import annotations
 
 import os
+
 import stat
 from pathlib import Path
 from typing import Any
 
 from .layout import InstallLayout, InstallerError, read_installation
 from .repository import local_checkout_matches_record
-from .service import inspect_user_service
+from .service import inspect_plugin_services, inspect_user_service
+from .setup import load_plugin_config
 from .user_command import inspect_user_command
 
 
@@ -75,12 +77,28 @@ def inspect_installation(layout: InstallLayout) -> dict[str, Any]:
         }
     checks["clone"]["git"] = _git_status(layout.clone, record)
     plugin_config = layout.config / "plugins.json"
-    checks["plugins"] = {"status": "ready" if plugin_config.is_file() else "not_configured", "path": str(plugin_config)}
+    selected_plugins: list[str] = []
+    if plugin_config.exists() or plugin_config.is_symlink():
+        try:
+            plugin_payload = load_plugin_config(layout)
+            selected = plugin_payload.get("selected_plugins", [])
+            if not isinstance(selected, list) or any(not isinstance(item, str) for item in selected):
+                raise InstallerError("plugin_config_invalid", "plugin configuration selection is invalid")
+            selected_plugins = list(selected)
+        except InstallerError as exc:
+            checks["plugins"] = {"status": "unsafe", "path": str(plugin_config), "error": str(exc)[:256]}
+        else:
+            checks["plugins"] = {"status": "ready", "path": str(plugin_config)}
+    else:
+        checks["plugins"] = {"status": "not_configured", "path": str(plugin_config)}
+    checks["plugin_services"] = inspect_plugin_services(layout, selected_plugins)
     required = ("dispatch_home", "clone", "venv", "config", "secrets", "data", "state", "cache", "logs", "run")
     unsafe = (
         any(checks[name]["status"] == "unsafe" for name in required)
         or checks["clone"]["git"] == "unsafe"
         or checks["venv"]["python"] == "unsafe"
+        or checks["plugins"]["status"] == "unsafe"
+        or checks["plugin_services"]["status"] == "unsafe"
     )
     ready = (
         not unsafe

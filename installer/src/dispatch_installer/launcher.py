@@ -12,7 +12,7 @@ from .doctor import inspect_installation
 from .layout import InstallLayout, InstallerError
 from .setup import load_plugin_config, run_setup
 
-_LIFECYCLE = {"doctor", "verify", "setup", "uninstall", "update", "repair", "channel", "switch-channel"}
+_LIFECYCLE = {"doctor", "verify", "setup", "plugin-service", "uninstall", "update", "repair", "channel", "switch-channel"}
 
 _HELP = """Usage: dispatch <command> [options]
 
@@ -20,7 +20,7 @@ Core commands:
   health, authentication, browser, collection, service
 
 Lifecycle commands:
-  setup, update, repair, channel, doctor, verify, uninstall
+  setup, plugin-service, update, repair, channel, doctor, verify, uninstall
 
 Run 'dispatch <command> --help' for command-specific help.
 """

@@ -25,7 +25,15 @@ python -m pip install -e plugins/<owner>
 DISPATCH_ACTIVE_PLUGINS=<owner> dispatch plugin health <owner>
 ```
 
-Core discovers the installed `dispatch.plugins` entry point and selects only IDs named by `DISPATCH_ACTIVE_PLUGINS`. Do not configure source paths or repository scans. `DISPATCH_PLUGIN_PATHS` is obsolete.
+Core discovers the installed `dispatch.plugins` entry point and selects only IDs named by `DISPATCH_ACTIVE_PLUGINS`. Do not configure source paths or repository scans.
+
+For a long-running plugin, source verification also proves one same-ID
+`dispatch.services` entry point. Product setup installs the approved pinned
+runtime dependency closure before direct-source registration and publishes the
+service projection disabled. Run an optional same-ID `dispatch.configurators`
+entry point through the explicit operator command, then enable the service only
+after private configuration and local health are ready. Unit tests must never
+start that service or contact its external providers.
 
 ## Proof gates
 

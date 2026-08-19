@@ -77,6 +77,33 @@ The `dispatch.plugins` group contains exactly one entry named by the ID. The tar
 
 A root `dispatch-plugin.yaml` is optional. If retained, its `id` must exactly match `[tool.dispatch].id`; it is descriptive source metadata, not an activation authority.
 
+Long-running plugins additionally publish exactly one service entry point with the
+same ID:
+
+```toml
+[project.entry-points."dispatch.services"]
+example = "dispatch_example.service:serve"
+```
+
+The service callable runs in the foreground through `dispatch plugin serve <id>`
+and receives Core's bounded service context. It must honor the stop callback,
+keep credentials and browser/session objects out of JSON responses, and return
+only after clean shutdown. A plugin declaring `long_running` must publish this
+entry point; a plugin without that capability must not publish one.
+
+A plugin that needs interactive secret onboarding may publish one optional
+configurator entry point with the same ID:
+
+```toml
+[project.entry-points."dispatch.configurators"]
+example = "dispatch_example.configure:configure"
+```
+
+Configurators run only through the explicit operator command
+`dispatch plugin configure <id>`. They may read hidden values from the controlling
+terminal and write below approved private roots, but must never accept secrets in
+JSON requests, command arguments, service units, receipts, or model-facing tools.
+
 ### 4.2 Editable setup
 
 From the Dispatch environment:
@@ -104,6 +131,12 @@ A read request never implies collection.
 ### Collector, delivery, service, and auth planes
 
 Collectors declare network/browser/authentication needs and own validation. Scheduling and retries belong to an approved coordinator. Slack/Discord credentials belong to a reviewed delivery boundary. Long-running services and auth providers document privilege and private data boundaries explicitly.
+
+Selection does not implicitly enable a long-running service. Setup installs the
+approved dependency closure and direct-source metadata, then publishes a disabled,
+receipt-owned service projection. Configuration and service enablement remain
+explicit operations. Update, repair, channel switching, deselection, uninstall,
+and rollback must account for every enabled plugin service.
 
 ## 6. Hermes contract
 
@@ -186,6 +219,12 @@ Every conforming owner provides executable commands that work from the owner roo
 ```
 
 `test` discovers a nonzero count. `build` is a direct source syntax/import check. `verify` runs source-owned conformance. `health` is read-only. None publishes or validates a generated plugin artifact.
+
+Runtime dependencies declared by a built-in plugin must have an approved pinned
+closure. Setup and environment replacement install that closure before registering
+the direct source with dependency installation disabled. Dependency or service
+activation failure must leave the prior environment and enabled-service set
+recoverable; an in-place partial dependency install is not accepted as complete.
 
 Minimum focused coverage:
 

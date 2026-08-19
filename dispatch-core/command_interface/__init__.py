@@ -16,7 +16,13 @@ from collection_manager.supervisor import (
 )
 from health import envelope, resolved
 from paths import DispatchPaths, PathConfigError
-from plugin_runtime import PluginRuntimeError, invoke_plugin, list_plugins
+from plugin_runtime import (
+    PluginRuntimeError,
+    configure_plugin,
+    invoke_plugin,
+    list_plugins,
+    serve_plugin,
+)
 
 
 class CommandInterfaceError(RuntimeError):
@@ -57,6 +63,10 @@ def parser(*, prog: str = "dispatch-core") -> argparse.ArgumentParser:
     plugin_invoke = plugin_actions.add_parser("invoke", help="send one bounded JSON request to a plugin")
     plugin_invoke.add_argument("plugin_id")
     plugin_invoke.add_argument("--request", required=True, help="JSON object accepted by the plugin")
+    plugin_serve = plugin_actions.add_parser("serve", help="run one active plugin service in the foreground")
+    plugin_serve.add_argument("plugin_id")
+    plugin_configure = plugin_actions.add_parser("configure", help="run one active plugin configurator interactively")
+    plugin_configure.add_argument("plugin_id")
 
     auth = subcommands.add_parser("auth", help="manage private Core authentication credentials")
     auth_actions = auth.add_subparsers(dest="auth_action", required=True)
@@ -153,13 +163,44 @@ def _plugin_result(args: argparse.Namespace) -> dict[str, Any]:
         return envelope(ok=True, action=action, status="ready", data={"plugins": list_plugins()})
     if args.plugin_action == "health":
         request = {"action": "health"}
-    else:
+    elif args.plugin_action == "invoke":
         try:
             request = json.loads(args.request)
         except json.JSONDecodeError as exc:
             raise CommandInterfaceError("plugin_request_invalid", "plugin request must be valid JSON") from exc
         if type(request) is not dict:
             raise CommandInterfaceError("plugin_request_invalid", "plugin request must be a JSON object")
+    elif args.plugin_action == "configure":
+        paths = DispatchPaths.from_environment()
+        response = configure_plugin(args.plugin_id, paths=paths)
+        return envelope(
+            ok=response["ok"],
+            action=action,
+            status=response["status"],
+            data={"plugin": args.plugin_id, "response": response},
+            error=response["error"],
+        )
+    else:  # serve
+        paths = DispatchPaths.from_environment()
+        stopping = False
+
+        def request_stop(_signum: int, _frame: object) -> None:
+            nonlocal stopping
+            stopping = True
+
+        previous_term = signal.signal(signal.SIGTERM, request_stop)
+        previous_int = signal.signal(signal.SIGINT, request_stop)
+        try:
+            serve_plugin(args.plugin_id, paths=paths, stop_requested=lambda: stopping)
+        finally:
+            signal.signal(signal.SIGTERM, previous_term)
+            signal.signal(signal.SIGINT, previous_int)
+        return envelope(
+            ok=True,
+            action=action,
+            status="stopped",
+            data={"plugin": args.plugin_id},
+        )
     response = invoke_plugin(args.plugin_id, request)
     return envelope(
         ok=response["ok"],
