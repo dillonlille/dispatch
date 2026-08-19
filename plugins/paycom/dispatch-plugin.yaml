@@ -1,0 +1,57 @@
+schema_version: 1
+id: paycom
+display_name: Dispatch Paycom
+version: 0.1.0
+summary: Read-only Paycom meal comparison and audit actions plus two Core-managed authenticated collectors.
+owner:
+  data: paycom
+  team: Dispatch Operations
+paths:
+  source: src
+  tests: tests
+  data: data/paycom
+commands:
+  test: ./scripts/test
+  build: ./scripts/build
+  verify: ./scripts/verify
+  health: ./scripts/health
+components:
+  - id: paycom-query
+    kind: library
+    source: src/dispatch_paycom
+    capabilities:
+      read_local_data: true
+      mutate_data: false
+      collect: false
+      network: false
+      authentication: false
+      direct_delivery: false
+      long_running: false
+    actions:
+      - {name: health, privilege: health}
+      - {name: meal_comparison, privilege: read}
+      - {name: audit, privilege: health}
+  - id: paycom-roster
+    kind: collector
+    source: src/dispatch_paycom/roster
+    capabilities:
+      read_local_data: true
+      mutate_data: true
+      collect: true
+      network: true
+      authentication: true
+      direct_delivery: false
+      long_running: false
+    coordinator_mode: paycom-roster
+  - id: paycom-timecards
+    kind: collector
+    source: src/dispatch_paycom/timecards
+    capabilities:
+      read_local_data: true
+      mutate_data: true
+      collect: true
+      network: true
+      authentication: true
+      direct_delivery: false
+      long_running: false
+    coordinator_mode: paycom-timecards

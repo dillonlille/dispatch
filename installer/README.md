@@ -34,6 +34,7 @@ dispatch setup --plugin handbook --yes
 dispatch setup --plugin companion-bridge --yes
 dispatch plugin configure companion-bridge
 dispatch auth enroll amazon-operations
+dispatch collection submit <collector-id> --parameters '{"target":"..."}'
 dispatch plugin-service status companion-bridge
 dispatch plugin-service enable companion-bridge
 dispatch plugin-service disable companion-bridge

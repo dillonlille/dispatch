@@ -11,6 +11,7 @@ SCHEMA_PATH = ROOT / "docs" / "schemas" / "dispatch-plugin-v1.schema.json"
 MANIFESTS = (
     ROOT / "SKILL" / "dispatch-plugin-development" / "templates" / "dispatch-plugin.yaml",
     ROOT / "plugins" / "handbook" / "dispatch-plugin.yaml",
+    ROOT / "plugins" / "paycom" / "dispatch-plugin.yaml",
 )
 
 

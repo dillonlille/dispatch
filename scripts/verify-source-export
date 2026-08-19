@@ -301,6 +301,8 @@ def verify(root: Path, max_file_size: int = MAX_FILE_SIZE) -> dict:
                 dirnames.remove(name)
 
         for name in filenames:
+            if name == ".git":
+                continue
             path = current / name
             relative = path.relative_to(root)
             key = relative.as_posix()

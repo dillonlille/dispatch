@@ -6,6 +6,7 @@ from datetime import datetime
 from enum import StrEnum
 from types import MappingProxyType
 import hashlib
+import math
 import re
 import secrets
 from typing import TYPE_CHECKING, Any, Callable, Mapping
@@ -42,6 +43,8 @@ _RELEASE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._+-]{0,127}$")
 _RUN_ID = re.compile(r"^[0-9a-f]{32}$")
 _MAX_PARAMETERS = 16
 _MAX_PARAMETER_TEXT = 256
+_MAX_EXECUTION_TIMEOUT_SECONDS = 86_400.0
+MAX_EXECUTION_TIMEOUT_SECONDS = _MAX_EXECUTION_TIMEOUT_SECONDS
 
 
 class CollectionManagerError(RuntimeError):
@@ -157,6 +160,7 @@ class CollectorRegistration:
     publication_verifier: Callable[[CollectionRequest, Mapping[str, object] | None], PublicationVerification] | None = field(
         default=None, repr=False, compare=False
     )
+    execution_timeout_seconds: float | None = None
 
     def __post_init__(self) -> None:
         _slug(self.collector_id, "collector_id")
@@ -174,17 +178,34 @@ class CollectorRegistration:
                 "invalid_collector_registration",
                 "authenticated collectors require a browser realm",
             )
+        if self.execution_timeout_seconds is not None:
+            try:
+                timeout_valid = (
+                    type(self.execution_timeout_seconds) in {int, float}
+                    and math.isfinite(float(self.execution_timeout_seconds))
+                    and 0.1 <= float(self.execution_timeout_seconds) <= _MAX_EXECUTION_TIMEOUT_SECONDS
+                )
+            except (OverflowError, ValueError):
+                timeout_valid = False
+            if not timeout_valid:
+                raise CollectionManagerError(
+                    "invalid_collector_registration",
+                    "collector execution timeout is invalid",
+                )
         if self.publication_verifier is not None and not callable(self.publication_verifier):
             raise CollectionManagerError("invalid_collector_registration", "publication verifier must be callable")
 
     def safe_data(self) -> dict[str, object]:
-        return {
+        data = {
             "collector_id": self.collector_id,
             "plugin_id": self.plugin_id,
             "plugin_release": self.plugin_release,
             "browser_realm": self.browser_realm,
             "authentication_required": self.authentication_required,
         }
+        if self.execution_timeout_seconds is not None:
+            data["execution_timeout_seconds"] = self.execution_timeout_seconds
+        return data
 
 
 @dataclass(frozen=True)
@@ -935,4 +956,5 @@ __all__ = [
     "ServiceTick",
     "WorkerOutcome",
     "WorkerPolicy",
+    "MAX_EXECUTION_TIMEOUT_SECONDS",
 ]

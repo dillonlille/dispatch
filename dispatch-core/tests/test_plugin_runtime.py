@@ -7,11 +7,15 @@ from typing import Any
 import pytest
 
 import plugin_runtime
+from collection_manager import CollectionDisposition, CollectionReceipt, CollectorRegistration
 from paths import DispatchPaths
 from plugin_runtime import (
+    COLLECTOR_ENTRY_POINT_GROUP,
     CONFIGURATOR_ENTRY_POINT_GROUP,
     SERVICE_ENTRY_POINT_GROUP,
     PluginRuntimeError,
+    discover_collector_providers,
+    discover_collector_registrations,
     discover_configurator,
     discover_plugins,
     discover_service,
@@ -55,6 +59,10 @@ def _envelope(action: str = "health", *, ok: bool = True) -> dict[str, Any]:
         "delivery": None,
         "error": None if ok else {"code": "invalid_input", "message": "invalid"},
     }
+
+
+def _collector_receipt(_context):
+    return CollectionReceipt(CollectionDisposition.NO_DATA, None, 0, True)
 
 
 def _install_metadata(monkeypatch, *entry_points: _EntryPoint) -> None:
@@ -102,6 +110,49 @@ def test_duplicate_active_entry_points_are_rejected(monkeypatch) -> None:
         discover_plugins()
 
     assert error.value.code == "plugin_entry_point_invalid"
+
+
+def test_collector_provider_is_optional_and_returns_trusted_registrations(monkeypatch) -> None:
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+    _install_metadata(monkeypatch)
+    assert discover_collector_providers() == []
+
+    registration = CollectorRegistration(
+        "example-collector",
+        "example",
+        "1.0.0",
+        _collector_receipt,
+        execution_timeout_seconds=12.5,
+    )
+    _install_metadata(
+        monkeypatch,
+        _GroupedEntryPoint(
+            "example",
+            COLLECTOR_ENTRY_POINT_GROUP,
+            lambda: (registration,),
+        ),
+    )
+
+    providers = discover_collector_providers()
+    assert providers[0].safe_data()["collectors"][0]["collector_id"] == "example-collector"
+    assert discover_collector_registrations() == (registration,)
+
+
+def test_collector_provider_rejects_wrong_plugin_registration(monkeypatch) -> None:
+    _install_metadata(
+        monkeypatch,
+        _GroupedEntryPoint(
+            "example",
+            COLLECTOR_ENTRY_POINT_GROUP,
+            lambda: (CollectorRegistration("other-collector", "other", "1.0.0", _collector_receipt),),
+        ),
+    )
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "example")
+
+    with pytest.raises(PluginRuntimeError) as error:
+        discover_collector_registrations()
+
+    assert error.value.code == "plugin_collector_registration_invalid"
 
 
 def test_paths_are_not_required_when_no_plugins_are_selected(monkeypatch) -> None:

@@ -27,6 +27,12 @@ DISPATCH_ACTIVE_PLUGINS=<owner> dispatch plugin health <owner>
 
 Core discovers the installed `dispatch.plugins` entry point and selects only IDs named by `DISPATCH_ACTIVE_PLUGINS`. Do not configure source paths or repository scans.
 
+For a collecting plugin, source verification also proves one same-ID
+`dispatch.collectors` provider. The zero-argument provider returns only a bounded
+tuple of Core `CollectorRegistration` objects owned by that plugin. Unit tests
+exercise registration and synthetic runners without authenticating, launching a
+browser, or contacting the external provider.
+
 For a long-running plugin, source verification also proves one same-ID
 `dispatch.services` entry point. Product setup installs the approved pinned
 runtime dependency closure before direct-source registration and publishes the
@@ -39,7 +45,7 @@ start that service or contact its external providers.
 
 1. Tests discover and pass a nonzero test count.
 2. Source syntax/build checks pass without generating a runtime copy.
-3. pyproject identity, capabilities, and entry point are valid.
+3. pyproject identity, capabilities, and plugin/service/configurator/collector entry points are valid.
 4. An optional root manifest ID matches pyproject metadata.
 5. Lifecycle scripts are executable and not group/world writable.
 6. The entry-point health response uses the exact seven-field envelope.

@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import command_interface as command_interface
+from collection_manager import CollectionDisposition, CollectionReceipt, CollectorRegistration
 from command_interface import main
 
 ENVELOPE = {"ok", "action", "status", "data", "freshness", "delivery", "error"}
@@ -217,6 +218,37 @@ def test_auth_enroll_uses_hidden_prompts_and_never_outputs_values(monkeypatch, t
     assert payload["data"]["status"] == "configured"
     assert "synthetic-user" not in output
     assert "synthetic-password-not-a-secret" not in output
+
+
+def test_collection_submit_queues_a_discovered_collector(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+    registration = CollectorRegistration(
+        "example-collector",
+        "example",
+        "1.0.0",
+        lambda context: CollectionReceipt(CollectionDisposition.NO_DATA, None, 0, True),
+    )
+    monkeypatch.setattr(command_interface, "discover_collector_registrations", lambda: (registration,))
+
+    assert main(
+        [
+            "collection",
+            "submit",
+            "example-collector",
+            "--parameters",
+            '{"date":"2026-08-19"}',
+            "--idempotency-key",
+            "example-submit-1",
+        ]
+    ) == 0
+    payload = json.loads(capsys.readouterr().out)
+
+    assert payload["action"] == "collection-submit"
+    assert payload["data"]["collector_id"] == "example-collector"
+    assert payload["data"]["state"] == "queued"
 
 
 def test_collection_status_is_read_only_with_no_queue(monkeypatch, tmp_path, capsys) -> None:

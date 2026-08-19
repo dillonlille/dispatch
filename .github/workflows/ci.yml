@@ -39,6 +39,7 @@ jobs:
             installer/pyproject.toml
             plugins/handbook/pyproject.toml
             plugins/companion-bridge/pyproject.toml
+            plugins/paycom/pyproject.toml
 
       - name: Verify source safety
         run: python -B scripts/verify-source-export . --json
@@ -46,11 +47,11 @@ jobs:
       - name: Install test dependencies and editable components
         run: |
           python -m pip install -r dispatch-core/requirements-dev.txt
-          python -m pip install --no-deps --editable ./installer --editable ./plugins/handbook
+          python -m pip install --no-deps --editable ./installer --editable ./plugins/handbook --editable ./plugins/paycom
           python -m pip install --editable ./plugins/companion-bridge
 
       - name: Run source, Core, installer, and built-in plugin tests
-        run: python -B -m pytest -q -p no:cacheprovider tests dispatch-core/tests installer/tests plugins/handbook/tests plugins/companion-bridge/tests
+        run: python -B -m pytest -q -p no:cacheprovider tests dispatch-core/tests installer/tests plugins/handbook/tests plugins/companion-bridge/tests plugins/paycom/tests
 
       - name: Shell-check installation scripts
         run: |

@@ -10,7 +10,7 @@ Before proposing a change:
 
 1. read `docs/dispatch-plugin-standard-v1.md` when the change touches the plugin boundary;
 2. run `python3 -B scripts/verify-source-export . --json`;
-3. install `dispatch-core/requirements-dev.txt` and the editable `installer`, Handbook, and Companion Bridge components;
+3. install `dispatch-core/requirements-dev.txt` and the editable `installer`, Handbook, Companion Bridge, and Paycom components;
 4. run the affected tests, then the complete source/Core/installer/built-in-plugin test command from the README;
 5. shell-check the canonical root `install.sh` and run `python3 dispatch-core --help`;
 6. use only synthetic fixtures declared in `synthetic-data.json`;

@@ -36,6 +36,9 @@ python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin_policy.py \
    ```
 
 3. Publish exactly one `[project.entry-points."dispatch.plugins"]` entry whose name equals that ID. Its callable accepts one bounded JSON object and returns the exact seven-field response envelope.
+   A plugin declaring `collect` also publishes exactly one matching
+   `[project.entry-points."dispatch.collectors"]` zero-argument provider that
+   returns a bounded tuple of Core `CollectorRegistration` objects.
    A plugin declaring `long_running` also publishes exactly one matching
    `[project.entry-points."dispatch.services"]` foreground service callable.
    Interactive private onboarding uses an optional matching
@@ -96,6 +99,7 @@ Do not create `runtime/`, `current` pointers, generation directories, release ma
 
 - pyproject metadata has a valid `tool.dispatch.id` and non-empty capability list;
 - the entry-point group has exactly one matching plugin ID and a loadable source callable;
+- `collect` capability and `dispatch.collectors` metadata agree exactly;
 - long-running capability and `dispatch.services` metadata agree exactly;
 - any `dispatch.configurators` entry point is operator-only and never accepts secret JSON fields;
 - an optional root manifest has the same ID as pyproject metadata;

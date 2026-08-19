@@ -1,0 +1,18 @@
+#!/usr/bin/env sh
+set -eu
+ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
+export PYTHONDONTWRITEBYTECODE=1
+exec python3 -B -c '
+import ast
+from pathlib import Path
+import tomllib
+
+root = Path.cwd()
+tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+for directory in (root / "src", root / "tests"):
+    if directory.is_dir():
+        for path in sorted(directory.rglob("*.py")):
+            ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+print("paycom source syntax and metadata parse: ok")
+'

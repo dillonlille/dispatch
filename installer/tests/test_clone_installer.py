@@ -3257,6 +3257,58 @@ def test_real_companion_source_metadata_is_installer_readable() -> None:
     assert metadata["dependencies"]
 
 
+def test_real_paycom_source_metadata_is_installer_readable() -> None:
+    source = Path(__file__).resolve().parents[2] / "plugins" / "paycom"
+    metadata = setup_runtime.plugin_metadata(source, expected_id="paycom")
+    assert metadata["collects"] is True
+    assert metadata["long_running"] is False
+    assert metadata["dependencies"] == []
+
+
+def test_collect_capability_requires_one_matching_collector_entry_point(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    plugin = _write_runtime_plugin(layout.clone)
+    project = plugin / "pyproject.toml"
+    text = project.read_text(encoding="utf-8").replace(
+        "capabilities=['long_running']",
+        "capabilities=['long_running','collect']",
+    )
+    project.write_text(text, encoding="utf-8")
+
+    with pytest.raises(InstallerError) as missing:
+        setup_runtime.plugin_metadata(plugin, expected_id="worker")
+    assert missing.value.code == "plugin_collector_missing"
+
+    project.write_text(
+        text
+        + "[project.entry-points.\"dispatch.collectors\"]\n"
+        + "worker='dispatch_worker:collectors'\n",
+        encoding="utf-8",
+    )
+    metadata = setup_runtime.plugin_metadata(plugin, expected_id="worker")
+    assert metadata["collects"] is True
+
+
+def test_non_collecting_plugin_rejects_collector_entry_point(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    plugin = _write_runtime_plugin(layout.clone)
+    project = plugin / "pyproject.toml"
+    project.write_text(
+        project.read_text(encoding="utf-8")
+        + "[project.entry-points.\"dispatch.collectors\"]\n"
+        + "worker='dispatch_worker:collectors'\n",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(InstallerError) as unexpected:
+        setup_runtime.plugin_metadata(plugin, expected_id="worker")
+    assert unexpected.value.code == "plugin_collector_unexpected"
+
+
 def test_replacement_venv_installs_plugin_dependencies_before_direct_registration(tmp_path: Path) -> None:
     layout = make_layout(tmp_path)
     layout.prepare()

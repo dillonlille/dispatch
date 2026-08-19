@@ -141,22 +141,33 @@ def _plugin_project(source: Path, *, expected_id: str | None = None) -> dict[str
         ):
             raise InstallerError("plugin_dependency_invalid", f"plugin dependency is invalid: {plugin_id}")
         safe_dependencies.append(dependency)
-    service_points = project.get("entry-points", {}).get("dispatch.services", {}) if isinstance(project.get("entry-points"), dict) else {}
-    if not isinstance(service_points, dict) or any(
-        not isinstance(name, str) or not isinstance(value, str)
-        for name, value in service_points.items()
-    ):
-        raise InstallerError("plugin_manifest_invalid", f"plugin service entry points are invalid: {plugin_id}")
+    entry_points = project.get("entry-points", {})
+    if not isinstance(entry_points, dict):
+        raise InstallerError("plugin_manifest_invalid", f"plugin entry points are invalid: {plugin_id}")
+    service_points = entry_points.get("dispatch.services", {})
+    collector_points = entry_points.get("dispatch.collectors", {})
+    for role, points in (("service", service_points), ("collector", collector_points)):
+        if not isinstance(points, dict) or any(
+            not isinstance(name, str) or not isinstance(value, str)
+            for name, value in points.items()
+        ):
+            raise InstallerError("plugin_manifest_invalid", f"plugin {role} entry points are invalid: {plugin_id}")
     long_running = "long_running" in capabilities
     if long_running and set(service_points) != {plugin_id}:
         raise InstallerError("plugin_service_missing", f"long-running plugin has no unique service entry point: {plugin_id}")
     if not long_running and service_points:
         raise InstallerError("plugin_service_unexpected", f"non-service plugin publishes a service entry point: {plugin_id}")
+    collects = "collect" in capabilities
+    if collects and set(collector_points) != {plugin_id}:
+        raise InstallerError("plugin_collector_missing", f"collecting plugin has no unique collector entry point: {plugin_id}")
+    if not collects and collector_points:
+        raise InstallerError("plugin_collector_unexpected", f"non-collecting plugin publishes a collector entry point: {plugin_id}")
     return {
         "id": plugin_id,
         "capabilities": list(capabilities),
         "dependencies": safe_dependencies,
         "long_running": long_running,
+        "collects": collects,
         "project": project,
         "configuration": configuration,
     }
