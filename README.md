@@ -96,7 +96,7 @@ These commands do not perform live account, browser-launch, production-service, 
 
 A release is a reviewed Git tag on the exact approved `main` commit. The manual release workflow reruns source safety and tests, then creates a published GitHub Release with generated notes and no custom assets.
 
-Bootstrap publication is a separate explicitly approved operator action performed from private tooling outside this repository. That tooling fetches the canonical root `install.sh` from the exact latest immutable Release, verifies release/tag/current-`main` identity, stages it transiently for Cloudflare, and verifies the public bytes and headers after deployment. Neither release publication nor bootstrap promotion runs automatically merely because CI passed or a branch changed.
+Bootstrap publication is a separate explicitly approved operator action performed from private tooling outside this repository. That tooling fetches the canonical root `install.sh` from an exact reviewed current-`main` commit, verifies that it is still current `main`, stages it transiently for Cloudflare, and verifies the public bytes and headers after deployment. The promoted bootstrap dynamically resolves stable to the latest published immutable Release and development to the latest `main`. Ordinary source or Release changes require no bootstrap redeployment only when canonical `install.sh` bytes are unchanged; every bootstrap-byte change requires independent exact-current-main approval and promotion. Neither release publication nor bootstrap promotion runs automatically merely because CI passed or a branch changed.
 
 See [`docs/releasing.md`](docs/releasing.md).
 
