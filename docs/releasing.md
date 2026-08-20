@@ -40,10 +40,7 @@ A defect found after merge is corrected through a new task branch and PR from cu
 
 There is no `dev → main` release pull request and no permanent release branch. Use a temporary release or hotfix branch only for an exceptional, explicitly reviewed stabilization need; merge any correction back through a normal PR to `main` before tagging.
 
-The former remote `dev` branch can be deleted only after the first stable Release
-containing this main-tracking channel implementation is published, promoted, and
-accepted. Until then it is a frozen compatibility ref for old published
-bootstraps, not an integration target.
+The former remote `dev` branch can be deleted only after the first stable Release containing the main-tracking installer is published, the current-main bootstrap is promoted publicly, and literal public stable/development acceptance passes. Until then it is a frozen compatibility ref for already-published bootstraps, not an integration target.
 
 ## Tag and publish
 
@@ -58,17 +55,30 @@ Only after explicit approval for the exact commit and version:
 
 The manual workflow has no push, tag, schedule, or automatic-release trigger. It uploads no wheel, archive, manifest, checksum list, or installer file. GitHub-generated source archives are provider output, not Dispatch-managed installation assets. Never move, rewrite, or reuse a published stable tag.
 
-## Stable acceptance and promotion
+## Stable acceptance
 
 After publication:
 
 1. fetch the exact released `install.sh` and verify its digest;
 2. install through `--channel stable` on `dispatch-testing` and require resolution to the approved immutable tag;
 3. rerun stable doctor, health, verify, service, launcher, setup, and lifecycle checks;
-4. under the same exact-version production approval, run private bootstrap promotion checks and promotion from the external operator workspace;
-5. verify public HTTPS status, defensive headers, and byte identity;
-6. exercise the literal public stable installer on `dispatch-testing`.
+4. exercise the literal public stable installer and require resolution to the same approved immutable tag. If the public bootstrap cannot resolve that release, promote a compatible exact-current-main bootstrap first; stable acceptance is incomplete until the literal public check passes.
 
-Cloudflare configuration, credentials, and promotion tooling intentionally live outside this repository. A failed release is corrected by a new `main` PR and a new version tag; never overwrite an immutable release.
+A failed release is corrected by a new `main` PR and a new version tag; never overwrite an immutable release.
+
+## Bootstrap promotion
+
+Bootstrap promotion is independent from stable Release publication. It changes only the mutable Cloudflare entry point; the promoted script continues to resolve stable from the latest published immutable Release and development from current `main` at invocation time.
+
+For a bootstrap promotion:
+
+1. select an exact reviewed current-`main` commit and record `<commit>:install.sh` SHA-256;
+2. require source CI, any proportional exact audit, and development-channel acceptance for that commit;
+3. from the private operator workspace, run `./promote --check <commit>` and require current-main, source, provider-account, dry-run, and cleanup gates to pass;
+4. present the exact commit, bootstrap digest, current public digest, check evidence, and intended production change for explicit approval;
+5. after approval, revalidate the same current-main commit and run `./promote <commit>`;
+6. verify public HTTPS status, defensive headers, byte identity, Cloudflare version attribution, and literal public stable/development behavior on `dispatch-testing`.
+
+Source and stable Release changes require no bootstrap redeployment only when canonical `install.sh` bytes are unchanged. Any bootstrap-byte change requires a new exact-current-main check, approval, promotion, and literal public acceptance. Cloudflare configuration, credentials, and promotion tooling intentionally live outside this repository.
 
 For a reviewed rollback, install an earlier published stable tag explicitly. Private `config`, `secrets`, `data`, `state`, and `logs` remain outside the checkout, while incompatible schema changes must follow their owning component's migration and rollback contract.
