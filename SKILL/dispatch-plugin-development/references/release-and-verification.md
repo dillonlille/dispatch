@@ -16,9 +16,9 @@ python3 dispatch-core/plugin_policy.py .
 
 The commands must run against the maintained clone and use the plugin's own dependencies. `build` may compile or import source in memory; it must not publish files outside the clone. `health` is read-only and reports configuration, data, freshness, and capability readiness honestly.
 
-## Shared-environment setup
+## Shared-environment development setup
 
-Install the clone editable into the shared Dispatch virtual environment:
+For source development, install the clone editable into the shared Dispatch virtual environment. Product acceptance uses `install.sh`, which installs from a validated private copy instead:
 
 ```bash
 python -m pip install -e plugins/<owner>
@@ -35,7 +35,7 @@ browser, or contacting the external provider.
 
 For a long-running plugin, source verification also proves one same-ID
 `dispatch.services` entry point. Product setup installs the approved pinned
-runtime dependency closure before direct-source registration and publishes the
+runtime dependency closure before standard source-package installation and publishes the
 service projection disabled. Run an optional same-ID `dispatch.configurators`
 entry point through the explicit operator command, then enable the service only
 after private configuration and local health are ready. Unit tests must never
@@ -52,7 +52,7 @@ start that service or contact its external providers.
 7. Every Hermes projection registers exactly one tool with a closed action schema.
 8. Invalid input fails closed and health remains a valid readiness response.
 9. Owner data stays outside source and below its documented private root.
-10. The selected editable install responds through Core with the expected plugin ID.
+10. The selected installed package responds through Core with the expected plugin ID; development also proves the editable workflow.
 
 ## Readiness reporting
 

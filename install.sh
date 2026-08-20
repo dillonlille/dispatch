@@ -137,6 +137,54 @@ else:
     details = parent.stat(follow_symlinks=False)
     if details.st_uid != os.geteuid() or details.st_mode & 0o022:
         raise SystemExit("unsafe DISPATCH_HOME: the installation root parent is not safe")
+private_roots = []
+for variable, suffix in (
+    ("DISPATCH_CONFIG_ROOT", "config"),
+    ("DISPATCH_SECRETS_ROOT", "secrets"),
+    ("DISPATCH_DATA_ROOT", "data"),
+    ("DISPATCH_STATE_ROOT", "state"),
+    ("DISPATCH_CACHE_ROOT", "cache"),
+    ("DISPATCH_LOGS_ROOT", "logs"),
+    ("DISPATCH_RUNTIME_ROOT", "run"),
+):
+    configured = os.environ.get(variable)
+    if configured:
+        if any(ord(character) < 32 or ord(character) == 127 for character in configured):
+            raise SystemExit(f"unsafe {variable}: control characters are not allowed")
+        raw_private = pathlib.Path(configured)
+        if not raw_private.is_absolute() or ".." in raw_private.parts:
+            raise SystemExit(f"unsafe {variable}: it must be an absolute path without traversal")
+    else:
+        raw_private = path / suffix
+    private = pathlib.Path(os.path.abspath(raw_private))
+    if private == path or private in path.parents:
+        raise SystemExit(f"unsafe {variable}: it cannot equal or contain DISPATCH_HOME")
+    if private == home or private in home.parents:
+        raise SystemExit(f"unsafe {variable}: it cannot equal or contain HOME")
+    for managed in (path / "dispatch", path / "venv", path / ".install-tmp"):
+        if private == managed or managed in private.parents or private in managed.parents:
+            raise SystemExit(f"unsafe {variable}: it cannot overlap managed installation code")
+    for candidate in (private, *private.parents):
+        if candidate.is_symlink():
+            raise SystemExit(f"unsafe {variable} symlink ancestor: {candidate}")
+        if candidate.exists() and not candidate.is_dir():
+            raise SystemExit(f"unsafe {variable} non-directory ancestor: {candidate}")
+        if candidate.exists():
+            details = candidate.stat(follow_symlinks=False)
+            writable = stat.S_IMODE(details.st_mode) & 0o022
+            sticky_boundary = bool(details.st_mode & stat.S_ISVTX)
+            if details.st_uid not in {0, os.geteuid()} or (writable and not sticky_boundary):
+                raise SystemExit(f"unsafe {variable} ownership or mode ancestor: {candidate}")
+    if private.exists():
+        details = private.stat(follow_symlinks=False)
+        if details.st_uid != os.geteuid() or stat.S_IMODE(details.st_mode) != 0o700:
+            raise SystemExit(f"unsafe {variable}: the existing root must be private and user-owned")
+    private_roots.append((variable, private))
+for index, (left_name, left) in enumerate(private_roots):
+    for right_name, right in private_roots[index + 1:]:
+        if left == right or left in right.parents or right in left.parents:
+            raise SystemExit(f"unsafe private roots: {left_name} and {right_name} overlap")
+if not path.exists():
     path.mkdir(mode=0o700)
 PY
 temporary_root="$DISPATCH_HOME/.install-tmp"

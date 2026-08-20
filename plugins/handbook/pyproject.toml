@@ -14,9 +14,6 @@ dependencies = []
 [project.optional-dependencies]
 dev = ["pytest==9.1.1"]
 
-[project.scripts]
-dispatch-handbook = "dispatch_handbook.cli:main"
-
 [project.entry-points."dispatch.plugins"]
 handbook = "dispatch_handbook.service:handle"
 

@@ -5,7 +5,7 @@ description: Use when answering from a configured local handbook index.
 
 # Dispatch Handbook
 
-Use the `dispatch_handbook` tool only for explicit local-handbook questions. The tool is backed by the cloned built-in source in `plugins/handbook`, installed editable in the shared Dispatch virtual environment.
+Use the `dispatch_handbook` tool only for explicit local-handbook questions. The tool is backed by the canonical built-in source in `plugins/handbook`, installed into the shared Dispatch virtual environment from a validated private copy.
 
 - `lookup` accepts one question and returns bounded evidence.
 - `contents` lists verified sections.

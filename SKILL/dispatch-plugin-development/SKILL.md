@@ -26,10 +26,14 @@ python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin_policy.py \
 
 ## Non-negotiable rules
 
-1. Keep one canonical, editable source tree under `plugins/<owner>/` for a built-in plugin. External plugins remain in their own cloned repositories.
-2. Declare the plugin ID and effective capabilities in `pyproject.toml`:
+1. Keep one canonical source tree under `plugins/<owner>/` for a built-in plugin. External plugins remain in their own cloned repositories.
+2. Use the installer-supported pinned build backend, then declare the plugin ID and effective capabilities in `pyproject.toml`:
 
    ```toml
+   [build-system]
+   requires = ["setuptools==83.0.0"]
+   build-backend = "setuptools.build_meta"
+
    [tool.dispatch]
    id = "example"
    capabilities = ["read_local_data"]
@@ -43,7 +47,7 @@ python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin_policy.py \
    `[project.entry-points."dispatch.services"]` foreground service callable.
    Interactive private onboarding uses an optional matching
    `[project.entry-points."dispatch.configurators"]` callable, never a model action.
-4. Install the cloned source editable into the shared Dispatch virtual environment:
+4. Product setup installs a validated private copy into the shared Dispatch virtual environment without mutating the checkout. For development, install the clone editable:
 
    ```bash
    python -m pip install -e ${DISPATCH_CODE_ROOT}/plugins/<owner>
@@ -93,7 +97,7 @@ Do not create `runtime/`, `current` pointers, generation directories, release ma
    python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin_policy.py .
    ```
 
-6. Install editable into the shared environment and test selection through `DISPATCH_ACTIVE_PLUGINS`.
+6. For development, install editable into the shared environment and test selection through `DISPATCH_ACTIVE_PLUGINS`; product lifecycle acceptance must use `install.sh` and the standard private-copy installation path.
 
 ## Contract checks
 

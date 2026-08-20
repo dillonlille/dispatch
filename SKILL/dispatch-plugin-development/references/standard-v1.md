@@ -4,7 +4,7 @@ This reference defines the source contract for built-in and cloned Dispatch plug
 
 ## Source ownership
 
-A built-in plugin is maintained as a clone under `plugins/<owner>/`. That clone is authoritative for implementation, tests, documentation, metadata, and source checks. Install it editable into the shared Dispatch virtual environment:
+A built-in plugin is maintained as a clone under `plugins/<owner>/`. That clone is authoritative for implementation, tests, documentation, metadata, and source checks. Product setup validates the clone, copies it to private temporary build state, and installs it into the shared environment without mutating source. Developers may install it editable:
 
 ```bash
 python -m pip install -e plugins/<owner>
@@ -15,9 +15,13 @@ Core reads the installed environment's `dispatch.plugins` entry points and filte
 
 ## Required metadata
 
-`pyproject.toml` declares the plugin identity and effective capabilities:
+`pyproject.toml` uses the installer-supported pinned build backend and declares plugin identity and effective capabilities:
 
 ```toml
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
 [project.entry-points."dispatch.plugins"]
 example = "dispatch_example.service:handle"
 

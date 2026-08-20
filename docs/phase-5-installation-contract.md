@@ -14,14 +14,14 @@ Hermes is a user-supplied prerequisite. Dispatch does not install, configure, in
 ## Installation phases
 
 1. choose an immutable published tag for stable or current `main` for development;
-2. clone or fetch that exact Git ref into `${DISPATCH_HOME}/dispatch`;
-3. create `${DISPATCH_HOME}/venv` and install the reviewed development/runtime requirements plus editable source components;
+2. clone that exact Git ref into private staging and promote it to `${DISPATCH_HOME}/dispatch`;
+3. create `${DISPATCH_HOME}/venv`, install reviewed runtime requirements, and install validated installer/plugin packages from private source copies without mutating the checkout;
 4. create the private `config`, `secrets`, `data`, `state`, `cache`, `logs`, and `run` roots with restrictive ownership and modes;
 5. publish `${HOME}/.local/bin/dispatch` pointing at the selected checkout and environment;
 6. run non-mutating help, health, and verification checks;
 7. perform integration setup only after the operator explicitly asks for it.
 
-The installation process must not enumerate release assets, infer packages from a source archive, download a wheel catalog, or import private configuration from the repository. A source update is an explicit Git operation followed by verification; it is not an atomic selector swap between generated release trees.
+The installation process must not enumerate release assets, infer packages from a source archive, download a wheel catalog, or import private configuration from the repository. Updates reconcile through the same verified staged-clone path as installation; they do not mutate the active checkout in place or select generated release trees.
 
 ## Safety requirements
 

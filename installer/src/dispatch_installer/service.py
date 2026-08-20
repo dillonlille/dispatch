@@ -15,7 +15,6 @@ from .layout import (
     InstallLayout,
     InstallerError,
     assert_user_owned_directory,
-    atomic_json,
     ensure_private_directory,
     read_json,
 )
@@ -100,69 +99,41 @@ def plugin_service_unit(layout: InstallLayout, plugin_id: str) -> bytes:
     ).encode("utf-8")
 
 
-def _plugin_receipt(layout: InstallLayout, plugin_id: str, content: bytes, status: str) -> dict[str, object]:
-    return {
-        "schema_version": 1,
-        "plugin_id": _plugin_service_id(plugin_id),
-        "unit": str(plugin_service_path(layout, plugin_id)),
-        "unit_sha256": hashlib.sha256(content).hexdigest(),
-        "service": plugin_service_name(plugin_id),
-        "status": status,
-        "contains_secrets": False,
-    }
-
-
-def _read_plugin_receipt(layout: InstallLayout, plugin_id: str) -> dict[str, object] | None:
-    root = plugin_service_receipt_path(layout, plugin_id).parent
-    if not _plugin_receipt_root_is_owned(root):
-        return None
+def _remove_obsolete_plugin_receipt(
+    layout: InstallLayout,
+    plugin_id: str,
+    content: bytes,
+    *,
+    remove: bool = True,
+) -> None:
+    path = plugin_service_receipt_path(layout, plugin_id)
+    if not path.exists() and not path.is_symlink():
+        return
     try:
-        payload = read_json(plugin_service_receipt_path(layout, plugin_id), maximum=16 * 1024)
-    except InstallerError:
-        return None
+        assert_user_owned_directory(path.parent, "plugin service state")
+        details = path.lstat()
+        payload = read_json(path, maximum=16 * 1024)
+    except (InstallerError, OSError) as exc:
+        raise InstallerError("plugin_service_unsafe", "obsolete plugin service receipt is unsafe") from exc
     expected = {"schema_version", "plugin_id", "unit", "unit_sha256", "service", "status", "contains_secrets"}
     if (
-        set(payload) != expected
+        path.is_symlink()
+        or not stat.S_ISREG(details.st_mode)
+        or details.st_uid != os.geteuid()
+        or details.st_nlink != 1
+        or stat.S_IMODE(details.st_mode) != 0o600
+        or set(payload) != expected
         or payload.get("schema_version") != 1
         or payload.get("plugin_id") != plugin_id
         or payload.get("unit") != str(plugin_service_path(layout, plugin_id))
+        or payload.get("unit_sha256") != hashlib.sha256(content).hexdigest()
         or payload.get("service") != plugin_service_name(plugin_id)
         or payload.get("status") not in {"prepared", "enabled", "disabled"}
         or payload.get("contains_secrets") is not False
-        or not isinstance(payload.get("unit_sha256"), str)
     ):
-        return None
-    return payload
-
-
-def _plugin_receipt_root_is_owned(path: Path) -> bool:
-    try:
-        assert_user_owned_directory(path, "plugin service state")
-        details = path.lstat()
-    except (InstallerError, OSError):
-        return False
-    return (
-        not path.is_symlink()
-        and stat.S_ISDIR(details.st_mode)
-        and details.st_uid == os.geteuid()
-        and stat.S_IMODE(details.st_mode) == 0o700
-    )
-
-
-def _plugin_receipt_is_owned(layout: InstallLayout, plugin_id: str) -> bool:
-    path = plugin_service_receipt_path(layout, plugin_id)
-    try:
-        details = path.lstat()
-    except OSError:
-        return False
-    return (
-        not path.is_symlink()
-        and stat.S_ISREG(details.st_mode)
-        and details.st_uid == os.geteuid()
-        and details.st_nlink == 1
-        and stat.S_IMODE(details.st_mode) == 0o600
-        and _read_plugin_receipt(layout, plugin_id) is not None
-    )
+        raise InstallerError("plugin_service_unsafe", "obsolete plugin service receipt is unsafe")
+    if remove:
+        path.unlink()
 
 
 def plugin_service_unit_is_owned(layout: InstallLayout, plugin_id: str) -> bool:
@@ -173,52 +144,40 @@ def plugin_service_unit_is_owned(layout: InstallLayout, plugin_id: str) -> bool:
         if path.is_symlink() or not path.is_file():
             return False
         details = path.stat(follow_symlinks=False)
-        if details.st_uid != os.geteuid() or details.st_nlink != 1 or stat.S_IMODE(details.st_mode) != 0o600:
-            return False
-        content = path.read_bytes()
-        receipt = _read_plugin_receipt(layout, plugin_id)
         return (
-            len(content) <= 64 * 1024
-            and content == plugin_service_unit(layout, plugin_id)
-            and receipt is not None
-            and _plugin_receipt_is_owned(layout, plugin_id)
-            and receipt.get("unit_sha256") == hashlib.sha256(content).hexdigest()
+            details.st_uid == os.geteuid()
+            and details.st_nlink == 1
+            and stat.S_IMODE(details.st_mode) == 0o600
+            and details.st_size <= 64 * 1024
+            and path.read_bytes() == plugin_service_unit(layout, plugin_id)
         )
     except (InstallerError, OSError):
         return False
 
 
-def _write_plugin_service(layout: InstallLayout, plugin_id: str, *, status: str) -> dict[str, object]:
+def _write_plugin_service(layout: InstallLayout, plugin_id: str) -> dict[str, object]:
     plugin_id = _plugin_service_id(plugin_id)
     ensure_private_directory(layout.service_directory, "service directory")
-    receipt_path = plugin_service_receipt_path(layout, plugin_id)
-    ensure_private_directory(receipt_path.parent, "plugin service state")
     path = plugin_service_path(layout, plugin_id)
-    content = plugin_service_unit(layout, plugin_id)
     if path.exists() or path.is_symlink():
         if not plugin_service_unit_is_owned(layout, plugin_id):
             raise InstallerError("plugin_service_conflict", "existing plugin service unit is not Dispatch-owned")
+    content = plugin_service_unit(layout, plugin_id)
+    _remove_obsolete_plugin_receipt(layout, plugin_id, content)
     _atomic_bytes(path, content)
-    receipt = _plugin_receipt(layout, plugin_id, content, status)
-    atomic_json(receipt_path, receipt)
-    return {"status": status, "plugin_id": plugin_id, "unit": str(path), "service": plugin_service_name(plugin_id)}
+    return {
+        "status": "prepared",
+        "plugin_id": plugin_id,
+        "unit": str(path),
+        "service": plugin_service_name(plugin_id),
+    }
 
 
 def prepare_plugin_service(layout: InstallLayout, plugin_id: str) -> dict[str, object]:
-    """Publish a disabled, receipt-owned service projection without starting it."""
+    """Publish a disabled service projection without starting it."""
 
     plugin_id = _plugin_service_id(plugin_id)
-    previous = _read_plugin_receipt(layout, plugin_id)
-    status = "prepared"
-    if previous is not None and previous.get("status") == "enabled" and plugin_service_unit_is_owned(layout, plugin_id):
-        status = "enabled"
-    return _write_plugin_service(layout, plugin_id, status=status)
-
-
-def _set_plugin_receipt_status(layout: InstallLayout, plugin_id: str, status: str) -> None:
-    path = plugin_service_receipt_path(layout, plugin_id)
-    content = plugin_service_path(layout, plugin_id).read_bytes()
-    atomic_json(path, _plugin_receipt(layout, plugin_id, content, status))
+    return _write_plugin_service(layout, plugin_id)
 
 
 def enable_plugin_service(
@@ -228,31 +187,19 @@ def enable_plugin_service(
     run: RunCommand = _run,
 ) -> dict[str, object]:
     plugin_id = _plugin_service_id(plugin_id)
-    unit_path = plugin_service_path(layout, plugin_id)
-    receipt_path = plugin_service_receipt_path(layout, plugin_id)
-    unit_before: bytes | None = None
-    receipt_before: bytes | None = None
-    active_before = False
-    enabled_before = False
-    systemd_touched = False
-    if unit_path.exists() or unit_path.is_symlink():
+    path = plugin_service_path(layout, plugin_id)
+    previous_content: bytes | None = None
+    previous_state = {"active": False, "enabled": False}
+    if path.exists() or path.is_symlink():
         if not plugin_service_unit_is_owned(layout, plugin_id):
             raise InstallerError("plugin_service_unsafe", "plugin service unit is not Dispatch-owned")
-        unit_before = unit_path.read_bytes()
-        receipt_before = receipt_path.read_bytes()
-        service_name = plugin_service_name(plugin_id)
-        if unit_before is not None:
-            previous_state = systemd_service_state(service_name, run=run)
-            active_before = previous_state["active"]
-            enabled_before = previous_state["enabled"]
-    elif receipt_path.exists() or receipt_path.is_symlink():
-        raise InstallerError("plugin_service_unsafe", "plugin service receipt has no owned unit")
-
+        previous_content = path.read_bytes()
+        previous_state = systemd_service_state(plugin_service_name(plugin_id), run=run)
+    systemd_touched = False
     try:
-        prepared = prepare_plugin_service(layout, plugin_id)
-        service = str(prepared["service"])
-        preflight = run((str(layout.command_path), "plugin", "health", plugin_id), None)
-        if preflight.returncode != 0:
+        prepared = _write_plugin_service(layout, plugin_id)
+        service = plugin_service_name(plugin_id)
+        if run((str(layout.command_path), "plugin", "health", plugin_id), None).returncode != 0:
             raise InstallerError(
                 "plugin_service_not_ready",
                 "plugin configuration health must pass before its service can be enabled",
@@ -262,13 +209,12 @@ def enable_plugin_service(
             ("systemctl", "--user", "enable", "--now", service),
             ("systemctl", "--user", "restart", service),
         ):
+            systemd_touched = True
             if run(command, None).returncode != 0:
                 raise InstallerError("plugin_service_activation_failed", "plugin service could not be enabled and restarted")
-            systemd_touched = True
         current = status_plugin_service(layout, plugin_id, run=run)
         if current.get("active") is not True or current.get("enabled") is not True:
             raise InstallerError("plugin_service_activation_failed", "plugin service did not remain active and enabled")
-        _set_plugin_receipt_status(layout, plugin_id, "enabled")
         prepared["status"] = "enabled"
         return prepared
     except BaseException as activation_error:
@@ -285,23 +231,14 @@ def enable_plugin_service(
 
         if systemd_touched:
             attempt(lambda: run(("systemctl", "--user", "disable", "--now", plugin_service_name(plugin_id)), None))
-        if unit_before is None:
-            attempt(lambda: unit_path.unlink(missing_ok=True))
-            attempt(lambda: receipt_path.unlink(missing_ok=True))
+        if previous_content is None:
+            attempt(lambda: path.unlink(missing_ok=True))
         else:
-            attempt(lambda: _atomic_bytes(unit_path, unit_before))
-            if receipt_before is not None:
-                attempt(lambda: _atomic_bytes(receipt_path, receipt_before))
+            attempt(lambda: _atomic_bytes(path, previous_content))
         if systemd_touched:
             attempt(lambda: run(("systemctl", "--user", "daemon-reload"), None))
-        if unit_before is not None and systemd_touched:
-            attempt(
-                lambda: restore_systemd_service_state(
-                    plugin_service_name(plugin_id),
-                    {"active": active_before, "enabled": enabled_before},
-                    run=run,
-                )
-            )
+        if previous_content is not None and systemd_touched:
+            attempt(lambda: restore_systemd_service_state(plugin_service_name(plugin_id), previous_state, run=run))
         if rollback_failure is not None:
             raise InstallerError(
                 "plugin_service_activation_rollback_failed",
@@ -319,13 +256,18 @@ def disable_plugin_service(
     plugin_id = _plugin_service_id(plugin_id)
     path = plugin_service_path(layout, plugin_id)
     if not path.exists() and not path.is_symlink():
+        _remove_obsolete_plugin_receipt(
+            layout,
+            plugin_id,
+            plugin_service_unit(layout, plugin_id),
+        )
         return {"status": "missing", "plugin_id": plugin_id, "unit": str(path), "service": plugin_service_name(plugin_id)}
     if not plugin_service_unit_is_owned(layout, plugin_id):
         raise InstallerError("plugin_service_unsafe", "plugin service unit is not Dispatch-owned")
     service = plugin_service_name(plugin_id)
     if run(("systemctl", "--user", "disable", "--now", service), None).returncode != 0:
         raise InstallerError("plugin_service_stop_failed", "plugin service could not be disabled")
-    _set_plugin_receipt_status(layout, plugin_id, "disabled")
+    _remove_obsolete_plugin_receipt(layout, plugin_id, path.read_bytes())
     return {"status": "disabled", "plugin_id": plugin_id, "unit": str(path), "service": service}
 
 
@@ -338,23 +280,14 @@ def status_plugin_service(
     plugin_id = _plugin_service_id(plugin_id)
     path = plugin_service_path(layout, plugin_id)
     if not path.exists() and not path.is_symlink():
-        receipt = plugin_service_receipt_path(layout, plugin_id)
-        return {
-            "status": "unsafe" if receipt.exists() or receipt.is_symlink() else "missing",
-            "plugin_id": plugin_id,
-            "unit": str(path),
-            "service": plugin_service_name(plugin_id),
-        }
+        return {"status": "missing", "plugin_id": plugin_id, "unit": str(path), "service": plugin_service_name(plugin_id)}
     if not plugin_service_unit_is_owned(layout, plugin_id):
         return {"status": "unsafe", "plugin_id": plugin_id, "unit": str(path), "service": plugin_service_name(plugin_id)}
     service = plugin_service_name(plugin_id)
-    active = run(("systemctl", "--user", "is-active", "--quiet", service), None).returncode == 0
-    enabled = run(("systemctl", "--user", "is-enabled", "--quiet", service), None).returncode == 0
-    receipt = _read_plugin_receipt(layout, plugin_id)
-    receipt_status = receipt.get("status") if receipt else None
-    if active and enabled and receipt_status == "enabled":
+    state = systemd_service_state(service, run=run)
+    if state["active"] and state["enabled"]:
         status = "ready"
-    elif not active and not enabled and receipt_status in {"prepared", "disabled"}:
+    elif not state["active"] and not state["enabled"]:
         status = "prepared"
     else:
         status = "incomplete"
@@ -363,9 +296,7 @@ def status_plugin_service(
         "plugin_id": plugin_id,
         "unit": str(path),
         "service": service,
-        "active": active,
-        "enabled": enabled,
-        "receipt_status": receipt_status,
+        **state,
     }
 
 
@@ -377,33 +308,34 @@ def remove_plugin_service(
 ) -> None:
     plugin_id = _plugin_service_id(plugin_id)
     path = plugin_service_path(layout, plugin_id)
-    receipt_path = plugin_service_receipt_path(layout, plugin_id)
     if not path.exists() and not path.is_symlink():
-        if receipt_path.exists() or receipt_path.is_symlink():
-            if not _plugin_receipt_is_owned(layout, plugin_id):
-                raise InstallerError("plugin_service_unsafe", "plugin service receipt is unsafe")
-            receipt_path.unlink()
+        _remove_obsolete_plugin_receipt(
+            layout,
+            plugin_id,
+            plugin_service_unit(layout, plugin_id),
+        )
         return
     if not plugin_service_unit_is_owned(layout, plugin_id):
         raise InstallerError("plugin_service_unsafe", "plugin service unit is not Dispatch-owned")
     service = plugin_service_name(plugin_id)
-    previous_receipt = _read_plugin_receipt(layout, plugin_id)
-    previous_state = systemd_service_state(service, run=run)
-    if run(("systemctl", "--user", "disable", "--now", service), None).returncode != 0:
-        raise InstallerError("plugin_service_stop_failed", "plugin service could not be stopped")
     content = path.read_bytes()
-    path.unlink()
-    if run(("systemctl", "--user", "daemon-reload"), None).returncode != 0:
+    _remove_obsolete_plugin_receipt(layout, plugin_id, content, remove=False)
+    previous_state = systemd_service_state(service, run=run)
+    try:
+        if run(("systemctl", "--user", "disable", "--now", service), None).returncode != 0:
+            raise InstallerError("plugin_service_stop_failed", "plugin service could not be stopped")
+        path.unlink()
+        if run(("systemctl", "--user", "daemon-reload"), None).returncode != 0:
+            raise InstallerError("plugin_service_reload_failed", "systemd user manager could not reload")
+    except BaseException as primary:
         rollback_failure: BaseException | None = None
         try:
-            _atomic_bytes(path, content)
-            if previous_receipt is not None:
-                atomic_json(receipt_path, previous_receipt)
+            if not path.exists() and not path.is_symlink():
+                _atomic_bytes(path, content)
         except BaseException as exc:
             rollback_failure = exc
         try:
-            reload_result = run(("systemctl", "--user", "daemon-reload"), None)
-            if reload_result.returncode != 0:
+            if run(("systemctl", "--user", "daemon-reload"), None).returncode != 0:
                 raise InstallerError("plugin_service_rollback_failed", "systemd reload failed during plugin service rollback")
             restore_systemd_service_state(service, previous_state, run=run)
         except BaseException as exc:
@@ -413,8 +345,8 @@ def remove_plugin_service(
                 "plugin_service_rollback_failed",
                 "plugin service removal failed and its previous state could not be restored",
             ) from rollback_failure
-        raise InstallerError("plugin_service_reload_failed", "systemd user manager could not reload")
-    receipt_path.unlink(missing_ok=True)
+        raise primary
+    _remove_obsolete_plugin_receipt(layout, plugin_id, content)
 
 
 def inspect_plugin_services(
@@ -447,11 +379,17 @@ def plugin_service_ids(layout: InstallLayout, plugin_ids: Iterable[str] = ()) ->
     ids = {_plugin_service_id(plugin_id) for plugin_id in plugin_ids}
     receipt_root = layout.state / "plugins" / "services"
     if receipt_root.exists() or receipt_root.is_symlink():
-        if not _plugin_receipt_root_is_owned(receipt_root):
-            raise InstallerError("plugin_service_unsafe", "plugin service receipt root is unsafe")
+        assert_user_owned_directory(receipt_root, "plugin service state")
         for receipt in receipt_root.glob("*.json"):
-            if receipt.is_symlink() or not receipt.is_file():
-                raise InstallerError("plugin_service_unsafe", "plugin service receipt is unsafe")
+            details = receipt.lstat()
+            if (
+                receipt.is_symlink()
+                or not stat.S_ISREG(details.st_mode)
+                or details.st_uid != os.geteuid()
+                or details.st_nlink != 1
+                or stat.S_IMODE(details.st_mode) != 0o600
+            ):
+                raise InstallerError("plugin_service_unsafe", "obsolete plugin service receipt is unsafe")
             ids.add(_plugin_service_id(receipt.stem))
     if layout.service_directory.exists() or layout.service_directory.is_symlink():
         assert_user_owned_directory(layout.service_directory, "service directory")
@@ -459,50 +397,6 @@ def plugin_service_ids(layout: InstallLayout, plugin_ids: Iterable[str] = ()) ->
             name = unit.name.removeprefix("dispatch-plugin-").removesuffix(".service")
             ids.add(_plugin_service_id(name))
     return ids
-
-
-def remove_plugin_services(
-    layout: InstallLayout,
-    plugin_ids: Iterable[str],
-    *,
-    run: RunCommand = _run,
-) -> None:
-    for plugin_id in sorted(set(plugin_ids)):
-        remove_plugin_service(layout, plugin_id, run=run)
-
-
-def prepare_plugin_services(layout: InstallLayout, plugin_ids: Iterable[str]) -> list[dict[str, object]]:
-    return [prepare_plugin_service(layout, plugin_id) for plugin_id in sorted(set(plugin_ids))]
-
-
-def enable_plugin_services(
-    layout: InstallLayout,
-    plugin_ids: Iterable[str],
-    *,
-    run: RunCommand = _run,
-) -> list[dict[str, object]]:
-    return [enable_plugin_service(layout, plugin_id, run=run) for plugin_id in sorted(set(plugin_ids))]
-
-
-def disable_plugin_services(
-    layout: InstallLayout,
-    plugin_ids: Iterable[str],
-    *,
-    run: RunCommand = _run,
-) -> list[dict[str, object]]:
-    return [disable_plugin_service(layout, plugin_id, run=run) for plugin_id in sorted(set(plugin_ids))]
-
-
-def status_plugin_services(
-    layout: InstallLayout,
-    plugin_ids: Iterable[str],
-    *,
-    run: RunCommand = _run,
-) -> dict[str, dict[str, object]]:
-    return {
-        plugin_id: status_plugin_service(layout, plugin_id, run=run)
-        for plugin_id in sorted(set(plugin_ids))
-    }
 
 
 def stop_plugin_services_for_activation(
@@ -513,25 +407,34 @@ def stop_plugin_services_for_activation(
 ) -> list[dict[str, object]]:
     """Stop every active/enabled owned plugin service and retain its exact state."""
     stopped: list[dict[str, object]] = []
-    for plugin_id in sorted(plugin_service_ids(layout, plugin_ids)):
-        status = status_plugin_service(layout, plugin_id, run=run)
-        if status.get("status") == "unsafe":
-            raise InstallerError("plugin_service_unsafe", "plugin service unit is not Dispatch-owned")
-        active = status.get("active") is True
-        enabled = status.get("enabled") is True
-        if not active and not enabled:
-            continue
-        service = plugin_service_name(plugin_id)
-        if run(("systemctl", "--user", "stop", service), None).returncode != 0:
-            raise InstallerError("plugin_service_stop_failed", "plugin service could not be stopped for activation")
-        stopped.append(
-            {
-                "plugin_id": plugin_id,
-                "active": active,
-                "enabled": enabled,
-                "receipt_status": status.get("receipt_status"),
-            }
-        )
+    try:
+        for plugin_id in sorted(plugin_service_ids(layout, plugin_ids)):
+            status = status_plugin_service(layout, plugin_id, run=run)
+            if status.get("status") == "unsafe":
+                raise InstallerError("plugin_service_unsafe", "plugin service unit is not Dispatch-owned")
+            active = status.get("active") is True
+            enabled = status.get("enabled") is True
+            if not active and not enabled:
+                continue
+            service = plugin_service_name(plugin_id)
+            stopped.append(
+                {
+                    "plugin_id": plugin_id,
+                    "active": active,
+                    "enabled": enabled,
+                }
+            )
+            if run(("systemctl", "--user", "stop", service), None).returncode != 0:
+                raise InstallerError("plugin_service_stop_failed", "plugin service could not be stopped for activation")
+    except BaseException as primary:
+        try:
+            restore_plugin_service_states(layout, stopped, run=run)
+        except BaseException as rollback_error:
+            raise InstallerError(
+                "plugin_service_rollback_failed",
+                "plugin service stop failed and prior services could not be restored",
+            ) from rollback_error
+        raise primary
     return stopped
 
 
@@ -640,30 +543,38 @@ def _atomic_bytes(path: Path, content: bytes, *, mode: int = 0o600) -> None:
         temporary.unlink(missing_ok=True)
 
 
-def _record_matches(layout: InstallLayout, content: bytes) -> bool:
-    record_path = layout.state / "service.json"
+def _remove_obsolete_main_service_record(
+    layout: InstallLayout,
+    content: bytes,
+    *,
+    remove: bool = True,
+) -> None:
+    path = layout.state / "service.json"
+    if not path.exists() and not path.is_symlink():
+        return
     try:
         assert_user_owned_directory(layout.state, "Dispatch state directory")
-        details = record_path.lstat()
-        if (
-            record_path.is_symlink()
-            or not stat.S_ISREG(details.st_mode)
-            or details.st_uid != os.geteuid()
-            or details.st_nlink != 1
-            or stat.S_IMODE(details.st_mode) != 0o600
-        ):
-            return False
-        payload = read_json(record_path)
-    except (InstallerError, OSError):
-        return False
-    return (
-        set(payload) == {"schema_version", "unit", "unit_sha256", "service", "contains_secrets"}
-        and payload.get("schema_version") == 1
-        and payload.get("unit") == str(layout.service_path)
-        and payload.get("service") == "dispatch.service"
-        and payload.get("contains_secrets") is False
-        and payload.get("unit_sha256") == hashlib.sha256(content).hexdigest()
-    )
+        details = path.lstat()
+        payload = read_json(path, maximum=16 * 1024)
+    except (InstallerError, OSError) as exc:
+        raise InstallerError("service_record_unsafe", "obsolete Dispatch service record is unsafe") from exc
+    expected = {"schema_version", "unit", "unit_sha256", "service", "contains_secrets"}
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(details.st_mode)
+        or details.st_uid != os.geteuid()
+        or details.st_nlink != 1
+        or stat.S_IMODE(details.st_mode) != 0o600
+        or set(payload) != expected
+        or payload.get("schema_version") != 1
+        or payload.get("unit") != str(layout.service_path)
+        or payload.get("unit_sha256") != hashlib.sha256(content).hexdigest()
+        or payload.get("service") != "dispatch.service"
+        or payload.get("contains_secrets") is not False
+    ):
+        raise InstallerError("service_record_unsafe", "obsolete Dispatch service record is unsafe")
+    if remove:
+        path.unlink()
 
 
 def service_unit_is_owned(layout: InstallLayout) -> bool:
@@ -692,7 +603,6 @@ def service_unit_is_owned(layout: InstallLayout) -> bool:
             _clone_service_unit(layout),
             _previous_clone_service_unit(layout),
         }
-        and _record_matches(layout, content)
     )
 
 
@@ -745,15 +655,8 @@ def install_user_service(
             raise InstallerError("service_conflict", "existing service unit is not Dispatch-owned")
         if not service_unit_is_owned(layout):
             raise InstallerError("service_conflict", "existing service unit is not Dispatch-owned")
+    _remove_obsolete_main_service_record(layout, content)
     _atomic_bytes(layout.service_path, content)
-    record = {
-        "schema_version": 1,
-        "unit": str(layout.service_path),
-        "unit_sha256": hashlib.sha256(content).hexdigest(),
-        "service": "dispatch.service",
-        "contains_secrets": False,
-    }
-    atomic_json(layout.state / "service.json", record)
     if activate:
         for command in (
             ("systemctl", "--user", "daemon-reload"),
@@ -777,7 +680,7 @@ def inspect_user_service(layout: InstallLayout, *, run: RunCommand = _run) -> di
         if not service_unit_is_owned(layout):
             raise InstallerError(
                 "service_unit_unsafe",
-                "Dispatch service unit is unsafe or differs from its record",
+                "Dispatch service unit is unsafe or differs from a recognized Dispatch projection",
             )
         active = run(("systemctl", "--user", "is-active", "--quiet", "dispatch.service"), None).returncode == 0
         enabled = run(("systemctl", "--user", "is-enabled", "--quiet", "dispatch.service"), None).returncode == 0
@@ -798,17 +701,20 @@ def remove_user_service(layout: InstallLayout, *, run: RunCommand = _run) -> Non
     assert_user_owned_directory(layout.service_directory, "service directory")
     if not service_unit_is_owned(layout):
         raise InstallerError("service_unit_unsafe", "Dispatch service unit is not Dispatch-owned")
-    previous_state = systemd_service_state("dispatch.service", run=run)
-    completed = run(("systemctl", "--user", "disable", "--now", "dispatch.service"), None)
-    if completed.returncode != 0:
-        raise InstallerError("service_stop_failed", "Dispatch user service could not be stopped")
     content = layout.service_path.read_bytes()
-    layout.service_path.unlink()
-    reload_result = run(("systemctl", "--user", "daemon-reload"), None)
-    if reload_result.returncode != 0:
+    _remove_obsolete_main_service_record(layout, content, remove=False)
+    previous_state = systemd_service_state("dispatch.service", run=run)
+    try:
+        if run(("systemctl", "--user", "disable", "--now", "dispatch.service"), None).returncode != 0:
+            raise InstallerError("service_stop_failed", "Dispatch user service could not be stopped")
+        layout.service_path.unlink()
+        if run(("systemctl", "--user", "daemon-reload"), None).returncode != 0:
+            raise InstallerError("service_reload_failed", "systemd user manager could not reload")
+    except BaseException as primary:
         rollback_failure: BaseException | None = None
         try:
-            _atomic_bytes(layout.service_path, content)
+            if not layout.service_path.exists() and not layout.service_path.is_symlink():
+                _atomic_bytes(layout.service_path, content)
         except BaseException as exc:
             rollback_failure = exc
         try:
@@ -817,15 +723,14 @@ def remove_user_service(layout: InstallLayout, *, run: RunCommand = _run) -> Non
                 raise InstallerError("service_rollback_command_failed", "service rollback command failed")
             restore_systemd_service_state("dispatch.service", previous_state, run=run)
         except BaseException as exc:
-            if rollback_failure is None:
-                rollback_failure = exc
+            rollback_failure = rollback_failure or exc
         if rollback_failure is not None:
             raise InstallerError(
                 "service_rollback_failed",
                 "service removal failed and the previous service could not be fully restored",
             ) from rollback_failure
-        raise InstallerError("service_reload_failed", "systemd user manager could not reload")
-    (layout.state / "service.json").unlink(missing_ok=True)
+        raise primary
+    _remove_obsolete_main_service_record(layout, content)
 
 
 def stop_legacy_user_service(layout: InstallLayout, *, run: RunCommand = _run) -> bool:
@@ -835,44 +740,58 @@ def stop_legacy_user_service(layout: InstallLayout, *, run: RunCommand = _run) -
     assert_user_owned_directory(layout.service_directory, "service directory")
     if not legacy_service_unit_is_owned(layout):
         raise InstallerError("legacy_service_unsafe", "legacy service unit is not Dispatch-owned")
-    completed = run(("systemctl", "--user", "disable", "--now", "dispatch-core.service"), None)
-    if completed.returncode != 0:
-        raise InstallerError("legacy_service_stop_failed", "legacy Dispatch service could not be stopped")
+    previous_state = systemd_service_state("dispatch-core.service", run=run)
+    try:
+        if run(("systemctl", "--user", "disable", "--now", "dispatch-core.service"), None).returncode != 0:
+            raise InstallerError("legacy_service_stop_failed", "legacy Dispatch service could not be stopped")
+    except BaseException as primary:
+        try:
+            restore_systemd_service_state("dispatch-core.service", previous_state, run=run)
+        except BaseException as rollback_error:
+            raise InstallerError(
+                "legacy_service_rollback_failed",
+                "legacy service stop failed and its previous state could not be restored",
+            ) from rollback_error
+        raise primary
     return True
 
 
 def remove_legacy_user_service(layout: InstallLayout, *, run: RunCommand = _run) -> None:
     path = layout.service_directory / "dispatch-core.service"
-    if not stop_legacy_user_service(layout, run=run):
+    if not path.exists() and not path.is_symlink():
         return
+    assert_user_owned_directory(layout.service_directory, "service directory")
+    if not legacy_service_unit_is_owned(layout):
+        raise InstallerError("legacy_service_unsafe", "legacy service unit is not Dispatch-owned")
     receipt = layout.state / "install" / "service.json"
     assert_user_owned_directory(receipt.parent, "legacy installation state")
     content = path.read_bytes()
-    path.unlink()
-    reload_result = run(("systemctl", "--user", "daemon-reload"), None)
-    if reload_result.returncode != 0:
+    previous_state = systemd_service_state("dispatch-core.service", run=run)
+    try:
+        if not stop_legacy_user_service(layout, run=run):
+            return
+        path.unlink()
+        if run(("systemctl", "--user", "daemon-reload"), None).returncode != 0:
+            raise InstallerError("legacy_service_reload_failed", "systemd user manager could not reload")
+    except BaseException as primary:
         rollback_failure: BaseException | None = None
         try:
-            _atomic_bytes(path, content)
+            if not path.exists() and not path.is_symlink():
+                _atomic_bytes(path, content)
         except BaseException as exc:
             rollback_failure = exc
-        for command in (
-            ("systemctl", "--user", "daemon-reload"),
-            ("systemctl", "--user", "enable", "--now", "dispatch-core.service"),
-        ):
-            try:
-                result = run(command, None)
-                if result.returncode != 0:
-                    raise InstallerError("legacy_service_rollback_command_failed", "legacy service rollback command failed")
-            except BaseException as exc:
-                if rollback_failure is None:
-                    rollback_failure = exc
+        try:
+            if run(("systemctl", "--user", "daemon-reload"), None).returncode != 0:
+                raise InstallerError("legacy_service_rollback_command_failed", "legacy service rollback command failed")
+            restore_systemd_service_state("dispatch-core.service", previous_state, run=run)
+        except BaseException as exc:
+            rollback_failure = rollback_failure or exc
         if rollback_failure is not None:
             raise InstallerError(
                 "legacy_service_rollback_failed",
                 "legacy service cleanup failed and the previous service could not be fully restored",
             ) from rollback_failure
-        raise InstallerError("legacy_service_reload_failed", "systemd user manager could not reload")
+        raise primary
     receipt.unlink(missing_ok=True)
     try:
         receipt.parent.rmdir()
@@ -882,9 +801,7 @@ def remove_legacy_user_service(layout: InstallLayout, *, run: RunCommand = _run)
 
 __all__ = [
     "disable_plugin_service",
-    "disable_plugin_services",
     "enable_plugin_service",
-    "enable_plugin_services",
     "inspect_plugin_services",
     "install_user_service",
     "inspect_user_service",
@@ -896,13 +813,10 @@ __all__ = [
     "plugin_service_unit",
     "plugin_service_unit_is_owned",
     "prepare_plugin_service",
-    "prepare_plugin_services",
     "remove_plugin_service",
-    "remove_plugin_services",
     "restore_plugin_service_states",
     "restore_systemd_service_state",
     "status_plugin_service",
-    "status_plugin_services",
     "stop_plugin_services_for_activation",
     "remove_legacy_user_service",
     "remove_user_service",

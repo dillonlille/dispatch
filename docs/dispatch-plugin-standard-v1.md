@@ -6,8 +6,8 @@ This document defines how Dispatch plugins are authored, installed, tested, and 
 
 ## 1. Design principles
 
-1. **One editable source.** A built-in plugin lives in its cloned source tree under `plugins/<owner>`; that tree is authoritative for code, tests, metadata, and documentation.
-2. **Shared-environment discovery.** The plugin is installed editable into the same shared virtual environment as Core. Core discovers `dispatch.plugins` entry points from that environment and filters only by `DISPATCH_ACTIVE_PLUGINS`.
+1. **One canonical source.** A built-in plugin lives in its cloned source tree under `plugins/<owner>`; that tree is authoritative for code, tests, metadata, and documentation.
+2. **Shared-environment discovery.** Product setup installs a validated private copy into the same shared virtual environment as Core without mutating the checkout. Development may use an editable install. Core discovers `dispatch.plugins` entry points from that environment and filters only by `DISPATCH_ACTIVE_PLUGINS`.
 3. **Own dependencies.** Plugin dependencies belong in the plugin's `pyproject.toml`. Discovery does not require a `dispatch-core` distribution dependency.
 4. **Explicit capabilities.** Query, collection, authentication, service, delivery, and control-plane privileges are declared independently in `[tool.dispatch]` and kept separate in code.
 5. **Owner-scoped data.** Source and tests are separate from owner-managed data. Use `plugins/<owner>/data` by default or document an operator-owned private root for databases and artifacts.
@@ -52,9 +52,13 @@ plugins/<owner>/
 
 ### 4.1 pyproject metadata
 
-Every Python plugin declares:
+Every Python plugin uses the installer-supported pinned build backend and declares:
 
 ```toml
+[build-system]
+requires = ["setuptools==83.0.0"]
+build-backend = "setuptools.build_meta"
+
 [project.entry-points."dispatch.plugins"]
 example = "dispatch_example.service:handle"
 
@@ -156,8 +160,8 @@ delivery boundary. Long-running services and auth providers document privilege
 and private data boundaries explicitly.
 
 Selection does not implicitly enable a long-running service. Setup installs the
-approved dependency closure and direct-source metadata, then publishes a disabled,
-receipt-owned service projection. Configuration and service enablement remain
+approved dependency closure and standard source package, then publishes a disabled,
+exactly generated service projection. Configuration and service enablement remain
 explicit operations. Update, repair, channel switching, deselection, uninstall,
 and rollback must account for every enabled plugin service.
 

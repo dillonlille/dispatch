@@ -20,7 +20,7 @@ The plugin does not own browser installation, browser profiles, credential stora
 
 ## Setup
 
-Install the source editable into the shared Dispatch environment:
+Product setup installs the plugin from a validated private source copy. For source development, install it editable:
 
 ```bash
 python -m pip install -e plugins/companion-bridge
@@ -30,7 +30,7 @@ export DISPATCH_ACTIVE_PLUGINS=companion-bridge
 Run the secure configurator through the Dispatch configurator entry point. It
 prompts for Slack tokens through hidden input and writes them only below the
 Dispatch secrets root. Configure at least one approved channel and user plus an
-admin alert channel, then explicitly enable the receipt-owned service:
+admin alert channel, then explicitly enable the exactly generated service:
 
 ```bash
 dispatch plugin configure companion-bridge
