@@ -19,13 +19,12 @@ Release containing the main-tracking installer has been published, the Vercel
 custom-domain cutover is complete, and literal public stable and development
 acceptance has passed.
 
-Agents may merge bounded task PRs into `main` after their required local gates, hosted CI, proportional exact audit, and mergeability checks pass. Merging into `main` does not authorize a tag, GitHub Release, or the one-time production-domain cutover to Vercel.
+Agents may merge bounded task PRs into `main` after their required local gates, hosted CI, proportional exact audit, and mergeability checks pass. Merging into `main` does not authorize a tag or GitHub Release.
 
 Dillon's explicit approval remains required for:
 
 1. the exact `main` commit and proposed production version for a stable release;
-2. creation of the production tag and GitHub Release;
-3. the initial custom-domain cutover from the existing Cloudflare deployment to the verified Vercel project.
+2. creation of the production tag and GitHub Release.
 
 Any byte change invalidates exact release approval and acceptance evidence.
 
@@ -62,4 +61,4 @@ Source CI needs no repository, environment, browser, account, or production secr
 - Stable channel: latest or explicitly selected immutable published Release tag, detached.
 - Production bootstrap hosting: release-triggered Vercel publication of canonical `install.sh`, which resolves stable Releases and development `main` dynamically at install time.
 
-Vercel-hosted bootstrap files are deployment surfaces, not a package registry or source authority. They must resolve the documented stable/development channel contract and use defensive headers. The old Cloudflare route remains only through the verified custom-domain cutover and rollback window.
+Vercel-hosted bootstrap files are deployment surfaces, not a package registry or source authority. They must resolve the documented stable/development channel contract, publish the exact source-commit marker, and use defensive headers. `dispatch.dillonlille.com` is DNS-only at Cloudflare and serves the Vercel project directly.
