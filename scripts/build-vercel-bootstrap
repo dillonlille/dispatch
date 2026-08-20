@@ -18,10 +18,10 @@ case "$OUTPUT" in
 esac
 
 SOURCE=$ROOT/install.sh
-[ -f "$SOURCE" ] && [ ! -L "$SOURCE" ] || {
+if [ ! -f "$SOURCE" ] || [ -L "$SOURCE" ]; then
     printf '%s\n' 'Canonical install.sh is missing or unsafe.' >&2
     exit 1
-}
+fi
 [ "$(stat -c %u "$SOURCE")" -eq "$(id -u)" ] || {
     printf '%s\n' 'Canonical install.sh is not user-owned.' >&2
     exit 1
@@ -69,10 +69,10 @@ esac
 PARENT=${OUTPUT%/*}
 candidate=$PARENT
 while :; do
-    [ -d "$candidate" ] && [ ! -L "$candidate" ] || {
+    if [ ! -d "$candidate" ] || [ -L "$candidate" ]; then
         printf 'Output ancestor is unsafe: %s\n' "$candidate" >&2
         exit 1
-    }
+    fi
     [ "$candidate" = / ] && break
     candidate=${candidate%/*}
     [ -n "$candidate" ] || candidate=/
