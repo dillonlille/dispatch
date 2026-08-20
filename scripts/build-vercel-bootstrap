@@ -1,0 +1,88 @@
+#!/bin/sh
+set -eu
+umask 077
+
+case "$0" in
+    /*) SCRIPT=$0 ;;
+    *) SCRIPT=$PWD/$0 ;;
+esac
+ROOT=${SCRIPT%/scripts/build-vercel-bootstrap}
+[ "$ROOT" != "$SCRIPT" ] || {
+    printf '%s\n' 'Could not resolve repository root.' >&2
+    exit 1
+}
+OUTPUT=${1:-$ROOT/.vercel-bootstrap}
+case "$OUTPUT" in
+    /*) ;;
+    *) OUTPUT=$ROOT/$OUTPUT ;;
+esac
+
+SOURCE=$ROOT/install.sh
+[ -f "$SOURCE" ] && [ ! -L "$SOURCE" ] || {
+    printf '%s\n' 'Canonical install.sh is missing or unsafe.' >&2
+    exit 1
+}
+[ "$(stat -c %u "$SOURCE")" -eq "$(id -u)" ] || {
+    printf '%s\n' 'Canonical install.sh is not user-owned.' >&2
+    exit 1
+}
+[ "$(stat -c %s "$SOURCE")" -le 1048576 ] || {
+    printf '%s\n' 'Canonical install.sh exceeds the size limit.' >&2
+    exit 1
+}
+sh -n "$SOURCE"
+
+COMMIT=${VERCEL_GIT_COMMIT_SHA:-}
+if [ -z "$COMMIT" ]; then
+    COMMIT=$(git -C "$ROOT" rev-parse HEAD)
+fi
+[ "${#COMMIT}" -eq 40 ] || {
+    printf '%s\n' 'Vercel source commit is not a full SHA.' >&2
+    exit 1
+}
+case "$COMMIT" in
+    *[!0-9a-f]*)
+        printf '%s\n' 'Vercel source commit is invalid.' >&2
+        exit 1
+        ;;
+esac
+
+if [ -e "$OUTPUT" ] || [ -L "$OUTPUT" ]; then
+    printf 'Output path already exists: %s\n' "$OUTPUT" >&2
+    exit 1
+fi
+case "$OUTPUT" in
+    */../*|*/./*|*/..|*/.)
+        printf 'Output path contains traversal: %s\n' "$OUTPUT" >&2
+        exit 1
+        ;;
+esac
+case "$OUTPUT" in
+    "$ROOT/.vercel-bootstrap"|/tmp/*) ;;
+    *)
+        if [ -z "${RUNNER_TEMP:-}" ] || [ "${OUTPUT#"$RUNNER_TEMP"/}" = "$OUTPUT" ]; then
+            printf 'Output path is outside approved staging: %s\n' "$OUTPUT" >&2
+            exit 1
+        fi
+        ;;
+esac
+PARENT=${OUTPUT%/*}
+candidate=$PARENT
+while :; do
+    [ -d "$candidate" ] && [ ! -L "$candidate" ] || {
+        printf 'Output ancestor is unsafe: %s\n' "$candidate" >&2
+        exit 1
+    }
+    [ "$candidate" = / ] && break
+    candidate=${candidate%/*}
+    [ -n "$candidate" ] || candidate=/
+done
+mkdir -m 0700 "$OUTPUT"
+install -m 0600 "$SOURCE" "$OUTPUT/install.sh"
+printf '%s\n' 'User-agent: *' 'Disallow: /' >"$OUTPUT/robots.txt"
+chmod 0600 "$OUTPUT/robots.txt"
+mkdir -m 0700 "$OUTPUT/.well-known"
+printf '{"commit":"%s","schema_version":1}\n' "$COMMIT" \
+    >"$OUTPUT/.well-known/dispatch-bootstrap.json"
+chmod 0600 "$OUTPUT/.well-known/dispatch-bootstrap.json"
+printf 'Staged Vercel bootstrap: output=%s\n' "$OUTPUT"

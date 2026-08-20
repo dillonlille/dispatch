@@ -15,17 +15,17 @@ This repository has one long-lived source branch: `main`. It is the latest revie
 During the one-time migration, the former remote `dev` branch may remain frozen
 as a compatibility ref for already-published installers that still fetch it.
 No new PR may target it. Delete that compatibility branch only after a stable
-Release containing the main-tracking installer has been published, its public
-bootstrap has been promoted, and literal public stable and development acceptance
-has passed.
+Release containing the main-tracking installer has been published, the Vercel
+custom-domain cutover is complete, and literal public stable and development
+acceptance has passed.
 
-Agents may merge bounded task PRs into `main` after their required local gates, hosted CI, proportional exact audit, and mergeability checks pass. Merging into `main` does not authorize a tag, GitHub Release, public bootstrap promotion, or production deployment.
+Agents may merge bounded task PRs into `main` after their required local gates, hosted CI, proportional exact audit, and mergeability checks pass. Merging into `main` does not authorize a tag, GitHub Release, or the one-time production-domain cutover to Vercel.
 
 Dillon's explicit approval remains required for:
 
 1. the exact `main` commit and proposed production version for a stable release;
 2. creation of the production tag and GitHub Release;
-3. production bootstrap promotion for an exact reviewed current-`main` commit.
+3. the initial custom-domain cutover from the existing Cloudflare deployment to the verified Vercel project.
 
 Any byte change invalidates exact release approval and acceptance evidence.
 
@@ -37,7 +37,7 @@ Any byte change invalidates exact release approval and acceptance evidence.
 4. Keep pull requests mandatory while permitting authorized maintainers/agents to merge after the documented gates; repository policy supplies the review/audit boundary rather than an unrelated mandatory GitHub reviewer.
 5. Require conversation resolution and linear history.
 6. Disable force pushes and deletion of `main`.
-7. Keep Cloudflare deployment configuration, credentials, and promotion tooling outside this source repository.
+7. Keep the public Vercel build contract and GitHub-hosted publication workflow in source. Store only the project-scoped deploy hook as a GitHub Actions secret; project and public URL identifiers are non-secret repository variables.
 
 Source CI needs no repository, environment, browser, account, or production secrets. It installs test dependencies and editable source components from the checkout.
 
@@ -54,12 +54,12 @@ Source CI needs no repository, environment, browser, account, or production secr
 
 `.github/workflows/release.yml` is manual-only. The operator supplies an existing approved tag. The job checks out that exact tag, verifies that `HEAD` equals both the tag target and current `main`, reruns source safety and tests, and creates a published GitHub Release with generated notes. It has no automatic trigger and uploads no wheels, manifests, checksums, installer files, or other Dispatch assets.
 
-There is intentionally no Cloudflare deployment workflow or provider configuration in this repository. Bootstrap promotion is an explicitly approved operator action performed from a private workspace using an exact reviewed commit that must still equal current `main`. It is independent from stable Release publication. GitHub Actions therefore requires no Cloudflare account identifier or API token.
+`.github/workflows/publish-bootstrap-vercel.yml` runs on published Releases and explicit dispatch. It verifies Release/tag/current-`main` identity, source and shell safety, exact staging, deploy-hook job creation, deployed byte identity, defensive headers, and a final current-`main` gate. Ordinary Vercel Git auto-deployments are disabled. The workflow does not receive a general Vercel API token and cannot claim real installed-system acceptance.
 
 ## Distribution authority
 
 - Development channel: current reviewed `main`, attached and refreshed through verified staged-clone replacement.
 - Stable channel: latest or explicitly selected immutable published Release tag, detached.
-- Production bootstrap promotion: exact approved current-`main` bootstrap bytes through private operator tooling. The promoted bootstrap then resolves stable Releases and development `main` dynamically at install time.
+- Production bootstrap hosting: release-triggered Vercel publication of canonical `install.sh`, which resolves stable Releases and development `main` dynamically at install time.
 
-Cloudflare-hosted bootstrap files are deployment surfaces, not a package registry or source authority. They must resolve the documented stable/development channel contract and use defensive headers.
+Vercel-hosted bootstrap files are deployment surfaces, not a package registry or source authority. They must resolve the documented stable/development channel contract and use defensive headers. The old Cloudflare route remains only through the verified custom-domain cutover and rollback window.

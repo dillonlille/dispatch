@@ -66,19 +66,22 @@ After publication:
 
 A failed release is corrected by a new `main` PR and a new version tag; never overwrite an immutable release.
 
-## Bootstrap promotion
+## Automated bootstrap publication
 
-Bootstrap promotion is independent from stable Release publication. It changes only the mutable Cloudflare entry point; the promoted script continues to resolve stable from the latest published immutable Release and development from current `main` at invocation time.
+Bootstrap hosting is automated through the repository-linked Vercel project. Ordinary Vercel Git deployments are disabled, so merges to `main` do not publish the endpoint directly.
 
-For a bootstrap promotion:
+A published GitHub Release triggers **Publish verified bootstrap to Vercel**:
 
-1. select an exact reviewed current-`main` commit and record `<commit>:install.sh` SHA-256;
-2. require source CI, any proportional exact audit, and development-channel acceptance for that commit;
-3. from the private operator workspace, run `./promote --check <commit>` and require current-main, source, provider-account, dry-run, and cleanup gates to pass;
-4. present the exact commit, bootstrap digest, current public digest, check evidence, and intended production change for explicit approval;
-5. after approval, revalidate the same current-main commit and run `./promote <commit>`;
-6. verify public HTTPS status, defensive headers, byte identity, Cloudflare version attribution, and literal public stable/development behavior on `dispatch-testing`.
+1. check out the Release source and require its tag, `HEAD`, latest published Release, and current `main` to identify one commit;
+2. run source-export verification, ShellCheck, and shell syntax checks;
+3. stage only the canonical `install.sh` and `robots.txt` outside the checkout and verify the staged digest;
+4. revalidate current `main` immediately before invoking the project-scoped Vercel deploy hook;
+5. require the hook to return one deployment job ID;
+6. wait for the configured Vercel publication URL to return exact `install.sh` bytes, HTTP 200, and all defensive headers;
+7. revalidate current `main` again before reporting success.
 
-Source and stable Release changes require no bootstrap redeployment only when canonical `install.sh` bytes are unchanged. Any bootstrap-byte change requires a new exact-current-main check, approval, promotion, and literal public acceptance. Cloudflare configuration, credentials, and promotion tooling intentionally live outside this repository.
+`workflow_dispatch` provides the same gates for reviewed recovery or initial cutover. The GitHub-hosted workflow proves source identity, Vercel publication, bytes, and headers; it does not claim real systemd/browser/install lifecycle acceptance. Dillon may ask an agent to run literal stable/development acceptance on `dispatch-testing` when installation behavior changed.
+
+The first custom-domain migration requires separate preview verification, DNS/TLS cutover, literal public stable/development checks, and retirement of the old Cloudflare route only after the Vercel endpoint is accepted. After cutover, normal `0.0.N` Release publication performs the Vercel update automatically; no second routine bootstrap approval is required.
 
 For a reviewed rollback, install an earlier published stable tag explicitly. Private `config`, `secrets`, `data`, `state`, and `logs` remain outside the checkout, while incompatible schema changes must follow their owning component's migration and rollback contract.

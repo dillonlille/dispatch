@@ -66,6 +66,8 @@ Thumbs.db
 
 # Local build, acceptance, and release outputs
 /.worktrees/
+/.vercel/
+/.vercel-bootstrap/
 .wrangler/
 *.sha256
 
