@@ -80,8 +80,8 @@ A published GitHub Release triggers **Publish verified bootstrap to Vercel**:
 6. wait for the configured Vercel publication URL to return exact `install.sh` bytes, HTTP 200, and all defensive headers;
 7. revalidate current `main` again before reporting success.
 
-`workflow_dispatch` provides the same gates for reviewed recovery or initial cutover. The GitHub-hosted workflow proves source identity, Vercel publication, bytes, and headers; it does not claim real systemd/browser/install lifecycle acceptance. Dillon may ask an agent to run literal stable/development acceptance on `dispatch-testing` when installation behavior changed.
+`workflow_dispatch` provides the same gates for reviewed recovery. The GitHub-hosted workflow proves source identity, Vercel publication, bytes, and headers; it does not claim real systemd/browser/install lifecycle acceptance. Dillon may ask an agent to run literal stable/development acceptance on `dispatch-testing` when installation behavior changed.
 
-The first custom-domain migration requires separate preview verification, DNS/TLS cutover, literal public stable/development checks, and retirement of the old Cloudflare route only after the Vercel endpoint is accepted. After cutover, normal `0.0.N` Release publication performs the Vercel update automatically; no second routine bootstrap approval is required.
+The Vercel custom-domain migration completed after preview verification, DNS/TLS cutover, exact public identity checks, and literal stable/development acceptance. Normal `0.0.N` Release publication now performs the Vercel update automatically; no second routine bootstrap approval is required.
 
 For a reviewed rollback, install an earlier published stable tag explicitly. Private `config`, `secrets`, `data`, `state`, and `logs` remain outside the checkout, while incompatible schema changes must follow their owning component's migration and rollback contract.
