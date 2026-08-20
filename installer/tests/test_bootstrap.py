@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import json
 import os
 from pathlib import Path
+import stat
 import subprocess
 import sys
 import tomllib
@@ -229,3 +231,92 @@ def test_root_bootstrap_rejects_writable_existing_staging_before_git(tmp_path: P
     assert completed.returncode != 0
     assert "unsafe temporary installation directory" in completed.stderr
     assert not any(staging.iterdir())
+
+
+def test_vercel_bootstrap_contract_is_release_triggered_and_nonautomatic() -> None:
+    config = json.loads((ROOT / "vercel.json").read_text(encoding="utf-8"))
+    assert config["framework"] is None
+    assert config["buildCommand"] == "sh scripts/build-vercel-bootstrap .vercel-bootstrap"
+    assert config["outputDirectory"] == ".vercel-bootstrap"
+    assert config["git"]["deploymentEnabled"] is False
+    headers = config["headers"]
+    assert isinstance(headers, list) and len(headers) == 2
+    assert headers[0]["source"] == "/install.sh"
+    assert {item["key"]: item["value"] for item in headers[0]["headers"]} == {
+        "Content-Type": "text/plain; charset=utf-8",
+        "Cache-Control": "no-store, max-age=0",
+        "X-Content-Type-Options": "nosniff",
+        "Referrer-Policy": "no-referrer",
+        "X-Robots-Tag": "noindex, nofollow",
+    }
+    assert headers[1]["source"] == "/.well-known/dispatch-bootstrap.json"
+
+    workflow = (ROOT / ".github" / "workflows" / "publish-bootstrap-vercel.yml").read_text(
+        encoding="utf-8"
+    )
+    assert "types: [published]" in workflow
+    assert "workflow_dispatch:" in workflow
+    assert 'tag:' in workflow
+    assert "pull_request:" not in workflow
+    assert "persist-credentials: false" in workflow
+    assert "if ! git status --porcelain=v1 --untracked-files=all" in workflow
+    assert workflow.count("git fetch --no-tags origin main") >= 3
+    assert "VERCEL_BOOTSTRAP_DEPLOY_HOOK" in workflow
+    assert "VERCEL_BOOTSTRAP_URL" in workflow
+    assert "dispatch-bootstrap.json" in workflow
+
+    release_workflow = (ROOT / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+    assert "actions: write" in release_workflow
+    assert "gh workflow run publish-bootstrap-vercel.yml" in release_workflow
+    assert '--field tag="$RELEASE_TAG"' in release_workflow
+
+
+def test_vercel_bootstrap_builder_stages_exact_private_copy(tmp_path: Path) -> None:
+    output = tmp_path / "vercel-output"
+    completed = subprocess.run(
+        (str(ROOT / "scripts" / "build-vercel-bootstrap"), str(output)),
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert completed.returncode == 0, completed.stderr
+    assert (output / "install.sh").read_bytes() == (ROOT / "install.sh").read_bytes()
+    assert (output / "robots.txt").read_text(encoding="utf-8") == "User-agent: *\nDisallow: /\n"
+    marker = json.loads((output / ".well-known" / "dispatch-bootstrap.json").read_text(encoding="utf-8"))
+    assert marker == {"commit": subprocess.check_output(("git", "rev-parse", "HEAD"), cwd=ROOT, text=True).strip(), "schema_version": 1}
+    assert stat.S_IMODE(output.stat().st_mode) == 0o700
+    assert stat.S_IMODE((output / "install.sh").stat().st_mode) == 0o600
+    assert stat.S_IMODE((output / "robots.txt").stat().st_mode) == 0o600
+
+    repeated = subprocess.run(
+        (str(ROOT / "scripts" / "build-vercel-bootstrap"), str(output)),
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    assert repeated.returncode != 0
+    assert "already exists" in repeated.stderr
+    assert (output / "install.sh").read_bytes() == (ROOT / "install.sh").read_bytes()
+
+
+def test_vercel_bootstrap_builder_rejects_symlinked_output_ancestor(tmp_path: Path) -> None:
+    external = tmp_path / "external"
+    external.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(external, target_is_directory=True)
+    output = linked / "escaped"
+
+    completed = subprocess.run(
+        (str(ROOT / "scripts" / "build-vercel-bootstrap"), str(output)),
+        cwd=ROOT,
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+
+    assert completed.returncode != 0
+    assert "ancestor is unsafe" in completed.stderr
+    assert not output.exists()
+    assert not any(external.iterdir())
