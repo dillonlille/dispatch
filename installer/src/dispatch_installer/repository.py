@@ -190,107 +190,6 @@ def assert_checkout_clean(clone: Path, *, run: RunCommand = run_command) -> None
         raise InstallerError("clone_dirty", "the Dispatch checkout contains local or ignored files")
 
 
-def checkout_existing(
-    clone: Path,
-    *,
-    channel: str,
-    ref: str,
-    repository_url: str = REPOSITORY_URL,
-    preflight: bool = True,
-    run: RunCommand = run_command,
-) -> None:
-    metadata = clone / ".git"
-    if clone.is_symlink() or not clone.is_dir() or metadata.is_symlink() or not metadata.is_dir():
-        raise InstallerError("clone_missing", "Dispatch clone is missing or unsafe")
-    if preflight:
-        assert_checkout_clean(clone, run=run)
-    if channel == "stable":
-        ref = validate_ref(ref)
-        _checked(
-            ("git", "-C", str(clone), "fetch", "--depth", "1", repository_url, "tag", ref),
-            run=run,
-        )
-        _checked(("git", "-C", str(clone), "checkout", "--detach", f"refs/tags/{ref}"), run=run)
-    elif channel == "dev":
-        if ref != DEVELOPMENT_BRANCH:
-            raise InstallerError("dev_ref_invalid", "the dev channel must track the main branch")
-        shallow = _checked(
-            ("git", "-C", str(clone), "rev-parse", "--is-shallow-repository"),
-            run=run,
-        )
-        fetch_command = ["git", "-C", str(clone), "fetch"]
-        if shallow.stdout.strip() == "true":
-            fetch_command.append("--unshallow")
-        fetch_command.extend(
-            (
-                repository_url,
-                f"refs/heads/{DEVELOPMENT_BRANCH}:refs/remotes/origin/{DEVELOPMENT_BRANCH}",
-            )
-        )
-        _checked(
-            tuple(fetch_command),
-            run=run,
-        )
-        local_branch = _checked(
-            ("git", "-C", str(clone), "branch", "--list", DEVELOPMENT_BRANCH),
-            run=run,
-        )
-        if local_branch.stdout.strip():
-            _checked(("git", "-C", str(clone), "checkout", DEVELOPMENT_BRANCH), run=run)
-        else:
-            _checked(
-                (
-                    "git",
-                    "-C",
-                    str(clone),
-                    "checkout",
-                    "-b",
-                    DEVELOPMENT_BRANCH,
-                    f"refs/remotes/origin/{DEVELOPMENT_BRANCH}",
-                ),
-                run=run,
-            )
-        _checked(
-            (
-                "git",
-                "-C",
-                str(clone),
-                "config",
-                f"branch.{DEVELOPMENT_BRANCH}.remote",
-                "origin",
-            ),
-            run=run,
-        )
-        _checked(
-            (
-                "git",
-                "-C",
-                str(clone),
-                "config",
-                f"branch.{DEVELOPMENT_BRANCH}.merge",
-                f"refs/heads/{DEVELOPMENT_BRANCH}",
-            ),
-            run=run,
-        )
-        _checked(
-            ("git", "-C", str(clone), "merge", "--ff-only", f"origin/{DEVELOPMENT_BRANCH}"),
-            run=run,
-        )
-        head = current_commit(clone, run=run)
-        expected = _resolved_commit(
-            clone,
-            f"refs/remotes/origin/{DEVELOPMENT_BRANCH}",
-            run=run,
-        )
-        if head != expected:
-            raise InstallerError(
-                "dev_local_commits",
-                "dev checkout has local commits not present on origin/main",
-            )
-    else:
-        raise InstallerError("channel_invalid", "channel must be stable or dev")
-
-
 def current_commit(clone: Path, *, run: RunCommand = run_command) -> str:
     completed = _checked(("git", "-C", str(clone), "rev-parse", "HEAD"), run=run)
     commit = completed.stdout.strip()
@@ -493,7 +392,6 @@ __all__ = [
     "REPOSITORY_API",
     "REPOSITORY_URL",
     "assert_checkout_clean",
-    "checkout_existing",
     "clone_repository",
     "current_commit",
     "local_checkout_matches_record",

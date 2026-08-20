@@ -45,6 +45,7 @@ HEALTH_PLANES = {
     "delivery",
     "overall",
 }
+BUILD_BACKEND_REQUIREMENT = "setuptools==83.0.0"
 
 
 class Audit:
@@ -472,6 +473,14 @@ def audit_owner(root: Path) -> Audit:
         return audit
     if not audit.require(isinstance(project, dict), "pyproject.toml must contain a table"):
         return audit
+
+    build_system = project.get("build-system")
+    audit.require(
+        isinstance(build_system, dict)
+        and build_system.get("build-backend") == "setuptools.build_meta"
+        and build_system.get("requires") == [BUILD_BACKEND_REQUIREMENT],
+        f"pyproject build-system must use pinned {BUILD_BACKEND_REQUIREMENT}",
+    )
 
     tool = project.get("tool")
     dispatch = tool.get("dispatch") if isinstance(tool, dict) else None

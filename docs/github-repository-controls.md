@@ -57,7 +57,7 @@ There is intentionally no Cloudflare deployment workflow or provider configurati
 
 ## Distribution authority
 
-- Development channel: current reviewed `main`, attached and fast-forward-only.
+- Development channel: current reviewed `main`, attached and refreshed through verified staged-clone replacement.
 - Stable channel: latest or explicitly selected immutable published Release tag, detached.
 - Production promotion: exact approved stable Release bytes through private operator tooling.
 

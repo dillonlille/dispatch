@@ -45,7 +45,7 @@ def fixture(tmp_path: Path) -> Path:
         textwrap.dedent(
             """
             [build-system]
-            requires = ["setuptools"]
+            requires = ["setuptools==83.0.0"]
             build-backend = "setuptools.build_meta"
 
             [project]
@@ -144,6 +144,22 @@ def test_group_writable_script_fails(tmp_path: Path) -> None:
     result = MODULE.audit_owner(root)
 
     assert any("scripts/verify is group/world writable" in failure for failure in result.failures)
+
+
+def test_build_backend_must_be_exactly_pinned(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    project = root / "pyproject.toml"
+    project.write_text(
+        project.read_text(encoding="utf-8").replace(
+            'requires = ["setuptools==83.0.0"]',
+            'requires = ["setuptools>=68"]',
+        ),
+        encoding="utf-8",
+    )
+
+    result = MODULE.audit_owner(root)
+
+    assert any("must use pinned setuptools==83.0.0" in value for value in result.failures)
 
 
 def test_entry_point_metadata_is_required(tmp_path: Path) -> None:

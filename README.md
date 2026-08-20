@@ -24,7 +24,7 @@ one bounded read-only plugin handler that a future external adapter can invoke.
 ## Install channels
 
 - **Latest Stable:** the newest published, non-draft, non-prerelease GitHub Release tag; installed detached at that immutable tag.
-- **Development:** the complete current `main` branch; installed attached to `main` and updated fast-forward-only.
+- **Development:** the complete current `main` branch; installed attached to `main` and refreshed through a clean staged-clone replacement.
 
 `main` is the only long-lived source branch and the latest reviewed, integrated,
 potentially unreleased source. Stable installations never follow mutable `main`;

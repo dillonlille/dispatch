@@ -4,7 +4,7 @@ This public component is a portable, local-only Handbook query example. Its main
 
 ## Source and setup
 
-The Handbook is installed from the clone into the same shared virtual environment as Dispatch Core. The editable install keeps source changes immediately visible to the runtime:
+Product setup installs the Handbook from a validated private source copy into the shared Dispatch environment without mutating the checkout. For source development, use an editable install:
 
 ```bash
 python -m pip install -e plugins/handbook

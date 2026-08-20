@@ -46,7 +46,7 @@ def _parser() -> argparse.ArgumentParser:
     setup.add_argument("--plugin", action="append", default=[])
     setup.add_argument("--list", action="store_true")
     setup.add_argument("--yes", action="store_true")
-    plugin_service = actions.add_parser("plugin-service", help="operate a receipt-owned plugin service")
+    plugin_service = actions.add_parser("plugin-service", help="operate an exactly generated plugin service")
     plugin_service.add_argument("operation", choices=("status", "enable", "disable"))
     plugin_service.add_argument("plugin_id")
     remove = actions.add_parser("uninstall", help="remove Dispatch user files")

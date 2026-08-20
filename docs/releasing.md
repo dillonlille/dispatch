@@ -6,7 +6,7 @@ Dispatch has one long-lived source branch: `main`. Task branches merge into `mai
 
 - `main` is the latest reviewed, integrated, potentially unreleased source.
 - Short-lived feature, fix, docs, test, and refactor branches start from current `main` and target pull requests back to `main`.
-- The public `dev` installation channel tracks current `main` attached and fast-forward-only; `dev` is a channel name, not a long-lived Git branch.
+- The public `dev` installation channel tracks current `main` attached and refreshes through a clean staged-clone replacement; `dev` is a channel name, not a long-lived Git branch.
 - The stable channel resolves only published, non-draft, non-prerelease GitHub Release tags and checks them out detached.
 - A version tag identifies the exact source released to stable users.
 - Merging a task PR into `main` does not publish a release, create a tag, or promote production.

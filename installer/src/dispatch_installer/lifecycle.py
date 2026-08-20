@@ -1,7 +1,6 @@
 """Transactional clone and environment lifecycle operations."""
 from __future__ import annotations
 
-import ctypes
 import importlib.util
 import json
 import os
@@ -39,9 +38,7 @@ from .repository import (
     DEVELOPMENT_BRANCH,
     REPOSITORY_URL,
     assert_checkout_clean,
-    checkout_existing,
     clone_repository,
-    current_commit,
     resolve_latest_release,
     resolve_published_release,
     run_command,
@@ -58,7 +55,14 @@ from .service import (
     stop_plugin_services_for_activation,
     systemd_service_state,
 )
-from .setup import install_editable_source, migrate_legacy_plugin_config, plugin_dependencies, reconcile_plugin_services
+from .setup import (
+    BUILD_BACKEND_REQUIREMENT,
+    assert_source_project_safe,
+    install_source_distribution,
+    migrate_legacy_plugin_config,
+    plugin_dependencies,
+    reconcile_plugin_services,
+)
 from .user_command import install_user_command
 
 RunCommand = Callable[[Sequence[str], Path | None], subprocess.CompletedProcess[str]]
@@ -207,17 +211,35 @@ def ensure_venv(
     if not os.access(python, os.X_OK):
         raise InstallerError("venv_python_unsafe", "replacement virtual environment Python is not executable")
 
-    requirements = layout.clone / "dispatch-core" / "requirements.txt"
+    core = layout.clone / "dispatch-core"
+    try:
+        core_resolved = core.resolve(strict=True)
+        clone_resolved = layout.clone.resolve(strict=True)
+    except OSError as exc:
+        raise InstallerError("requirements_missing", "Core source directory is missing or unsafe") from exc
+    if core.is_symlink() or not core.is_dir() or not core_resolved.is_relative_to(clone_resolved):
+        raise InstallerError("requirements_missing", "Core source directory is missing or unsafe")
+    assert_source_project_safe(core)
+    requirements = core / "requirements.txt"
     if not requirements.is_file() or requirements.is_symlink():
         raise InstallerError("requirements_missing", "Core runtime requirements are missing")
     _checked(
         private_run,
-        (str(python), "-m", "pip", "install", "--disable-pip-version-check", "-r", str(requirements)),
+        (
+            str(python),
+            "-m",
+            "pip",
+            "install",
+            "--disable-pip-version-check",
+            "-r",
+            str(requirements),
+            BUILD_BACKEND_REQUIREMENT,
+        ),
         None,
         "core_dependencies_failed",
         "could not install Core dependencies",
     )
-    if install_editable_source(
+    if install_source_distribution(
         python,
         layout.installer_source,
         no_deps=True,
@@ -264,7 +286,7 @@ def ensure_venv(
             "could not install the selected plugin dependency closure",
         )
     for plugin_id, source in plugin_sources:
-        if install_editable_source(
+        if install_source_distribution(
             python,
             source,
             no_deps=True,
@@ -331,6 +353,8 @@ def _safe_remove(path: Path) -> None:
     if path.is_symlink():
         path.unlink()
     elif path.is_dir():
+        if details.st_mode & 0o022:
+            raise InstallerError("managed_path_unsafe", f"managed directory is not private: {path}")
         shutil.rmtree(path)
     elif path.is_file():
         if details.st_nlink != 1:
@@ -382,202 +406,124 @@ def _swap_directory(
     *,
     state: _SwapState | None = None,
 ) -> Path | None:
-    replacement = pinned_installation_path(replacement)
-    target = pinned_installation_path(target)
+    """Replace one managed directory and retain one rollback backup."""
+
     transaction = state or _SwapState()
-    if replacement.is_symlink() or not replacement.is_dir():
+    if (
+        replacement.is_symlink()
+        or not replacement.is_dir()
+        or replacement.stat().st_uid != os.geteuid()
+        or replacement.stat().st_mode & 0o022
+    ):
         raise InstallerError("replacement_unsafe", f"replacement directory is unsafe: {replacement}")
     backup: Path | None = None
     if target.exists() or target.is_symlink():
-        if target.is_symlink() or not target.is_dir() or target.stat().st_uid != os.geteuid():
+        if (
+            target.is_symlink()
+            or not target.is_dir()
+            or target.stat().st_uid != os.geteuid()
+            or target.stat().st_mode & 0o022
+        ):
             raise InstallerError("managed_directory_unsafe", f"managed directory is unsafe: {target}")
         backup = target.parent / f".{target.name}.previous-{uuid.uuid4().hex}"
     transaction.backup = backup
-    try:
-        if backup is not None:
-            assert_installation_root_current()
-            os.replace(target, backup)
-            transaction.active = True
-        assert_installation_root_current()
-        os.replace(replacement, target)
-        transaction.active = True
-        target.chmod(0o700)
-    except BaseException:
-        def restore_swap() -> None:
-            if backup is None:
-                if target.exists() or target.is_symlink():
-                    _safe_remove(target)
-                if replacement.exists() or replacement.is_symlink():
-                    _safe_remove(replacement)
-                transaction.active = False
-                return
-            if backup.exists() and (target.exists() or target.is_symlink()):
-                if replacement.exists() or replacement.is_symlink():
-                    raise InstallerError(
-                        "directory_swap_state_unsafe",
-                        "both the active target and replacement exist during rollback",
-                    )
-                os.replace(target, replacement)
-            if backup.exists() and not target.exists() and not target.is_symlink():
-                os.replace(backup, target)
-            if replacement.exists() or replacement.is_symlink():
-                _safe_remove(replacement)
-            if backup.exists() or not target.is_dir():
-                raise InstallerError("directory_swap_state_unsafe", "directory promotion rollback is incomplete")
-            transaction.active = False
 
-        rollback_error: BaseException | None = None
-        for _attempt in range(2):
-            try:
-                _complete_rollback(restore_swap)
-                rollback_error = None
-                break
-            except BaseException as exc:
-                rollback_error = exc
-        if rollback_error is not None:
-            raise InstallerError("directory_swap_rollback_failed", "directory promotion rollback failed") from rollback_error
-        raise
+    def rollback(primary: BaseException) -> None:
+        try:
+            if target.exists() or target.is_symlink():
+                _safe_remove(target)
+            if backup is not None and backup.exists():
+                try:
+                    os.replace(backup, target)
+                except BaseException:
+                    if not target.exists() or backup.exists():
+                        raise
+            transaction.active = False
+        except BaseException:
+            # Preserve active=True so the caller performs bounded rollback.
+            raise primary
+        raise primary
+
+    if backup is not None:
+        try:
+            os.replace(target, backup)
+        except BaseException as primary:
+            if target.exists() or not backup.exists():
+                raise
+            transaction.active = True
+            rollback(primary)
+        transaction.active = True
+
+    try:
+        os.replace(replacement, target)
+    except BaseException as primary:
+        if not target.exists() or replacement.exists():
+            if backup is None:
+                raise
+        transaction.active = True
+        rollback(primary)
+    transaction.active = True
+    try:
+        target.chmod(0o700)
+    except BaseException as primary:
+        rollback(primary)
     return backup
 
 
-def _exchange_directories(left: Path, right: Path) -> None:
-    """Atomically exchange two active directory names without an absent-target window."""
-    if left.parent != right.parent:
-        raise InstallerError("directory_restore_state_unsafe", "directory exchange requires sibling paths")
-    renameat2 = getattr(ctypes.CDLL(None, use_errno=True), "renameat2", None)
-    if renameat2 is None:
-        raise InstallerError("directory_restore_unsupported", "atomic directory exchange is unavailable")
-    renameat2.argtypes = [ctypes.c_int, ctypes.c_char_p, ctypes.c_int, ctypes.c_char_p, ctypes.c_uint]
-    renameat2.restype = ctypes.c_int
-    at_fdcwd = -100
-    rename_exchange = 2
-    if renameat2(
-        at_fdcwd,
-        os.fsencode(left),
-        at_fdcwd,
-        os.fsencode(right),
-        rename_exchange,
-    ) != 0:
-        error_number = ctypes.get_errno()
-        raise OSError(error_number, os.strerror(error_number), str(left), str(right))
-
-
 def _restore_directory(target: Path, backup: Path | None) -> None:
-    target = pinned_installation_path(target)
-    backup = None if backup is None else pinned_installation_path(backup)
-    displaced = target.parent / f".{target.name}.failed-{uuid.uuid4().hex}"
+    """Restore a retained backup and discard the failed active generation."""
+
     if backup is None:
         if target.exists() or target.is_symlink():
-            os.replace(target, displaced)
+            _safe_remove(target)
         return
-    if not backup.exists() and target.is_dir() and not target.is_symlink():
-        return
-    if backup.is_symlink() or not backup.is_dir():
+    if (
+        backup.is_symlink()
+        or not backup.is_dir()
+        or backup.stat().st_uid != os.geteuid()
+        or backup.stat().st_mode & 0o022
+    ):
         raise InstallerError("directory_restore_state_unsafe", "directory restore backup is unsafe")
-
+    backup_details = backup.stat(follow_symlinks=False)
+    backup_identity = (backup_details.st_dev, backup_details.st_ino)
+    displaced: Path | None = None
     if target.exists() or target.is_symlink():
-        if target.is_symlink() or not target.is_dir():
+        if (
+            target.is_symlink()
+            or not target.is_dir()
+            or target.stat().st_uid != os.geteuid()
+            or target.stat().st_mode & 0o022
+        ):
             raise InstallerError("directory_restore_state_unsafe", "active directory is unsafe")
-        target_before = target.lstat()
-        backup_before = backup.lstat()
-        target_identity = (target_before.st_dev, target_before.st_ino)
-        backup_identity = (backup_before.st_dev, backup_before.st_ino)
-        exchange_error: BaseException | None = None
+        displaced = target.parent / f".{target.name}.failed-{uuid.uuid4().hex}"
         try:
-            _exchange_directories(target, backup)
-        except BaseException as error:
-            current_target = target.lstat() if target.exists() and not target.is_symlink() else None
-            current_backup = backup.lstat() if backup.exists() and not backup.is_symlink() else None
-            current_target_identity = (
-                (current_target.st_dev, current_target.st_ino) if current_target is not None else None
-            )
-            current_backup_identity = (
-                (current_backup.st_dev, current_backup.st_ino) if current_backup is not None else None
-            )
-            if (
-                current_target_identity == backup_identity
-                and current_backup_identity == target_identity
-            ):
-                exchange_error = error
-            elif (
-                current_target_identity == target_identity
-                and current_backup_identity == backup_identity
-            ):
+            os.replace(target, displaced)
+        except BaseException:
+            if target.exists() or target.is_symlink() or not displaced.exists():
                 raise
-            else:
-                raise InstallerError(
-                    "directory_restore_rollback_failed",
-                    "atomic directory restore left an unknown state",
-                ) from error
-
-        cleanup_interruption: BaseException | None = None
-        for _attempt in range(3):
-            if not (backup.exists() or backup.is_symlink()):
-                break
-            try:
-                os.replace(backup, displaced)
-            except (KeyboardInterrupt, SystemExit) as error:
-                if cleanup_interruption is None:
-                    cleanup_interruption = error
-        if backup.exists() or backup.is_symlink():
-            raise InstallerError(
-                "directory_restore_rollback_failed",
-                "directory restore cleanup was persistently interrupted",
-            ) from cleanup_interruption
-        restored = target.lstat() if target.exists() and not target.is_symlink() else None
-        if restored is None or (restored.st_dev, restored.st_ino) != backup_identity:
-            raise InstallerError(
-                "directory_restore_rollback_failed",
-                "directory restore cleanup left the wrong active target",
-            )
-        if exchange_error is not None:
-            raise exchange_error
-        if cleanup_interruption is not None:
-            raise cleanup_interruption
-        return
-
     try:
         os.replace(backup, target)
+        target.chmod(0o700)
     except BaseException:
-        def recover_active() -> None:
-            if target.is_dir() and not target.is_symlink():
-                return
-            if target.exists() or target.is_symlink():
-                raise InstallerError("directory_restore_state_unsafe", "active restore path is unsafe")
-            if backup.is_dir() and not backup.is_symlink():
-                os.replace(backup, target)
-            if not target.is_dir() or target.is_symlink():
-                raise InstallerError("directory_restore_state_unsafe", "directory restore left no active target")
-
-        recovery_error: BaseException | None = None
-        for _attempt in range(2):
-            try:
-                _complete_rollback(recover_active)
-                recovery_error = None
-                break
-            except BaseException as exc:
-                recovery_error = exc
-        if recovery_error is not None and not target.exists() and backup.is_dir() and not backup.is_symlink():
-            try:
-                os.rename(backup, target)
-                if not target.is_dir() or target.is_symlink():
-                    raise InstallerError("directory_restore_state_unsafe", "rename fallback restore is unsafe")
-                recovery_error = None
-            except BaseException as exc:
-                recovery_error = exc
-        if recovery_error is not None and not target.exists() and backup.is_dir() and not backup.is_symlink():
-            try:
-                shutil.copytree(backup, target, symlinks=True)
-                if not target.is_dir() or target.is_symlink():
-                    raise InstallerError("directory_restore_state_unsafe", "fallback restore is unsafe")
-                recovery_error = None
-            except BaseException as exc:
-                if target.exists() or target.is_symlink():
-                    _safe_remove(target)
-                recovery_error = exc
-        if recovery_error is not None:
-            raise InstallerError("directory_restore_rollback_failed", "directory restore recovery failed") from recovery_error
+        restored = target.stat(follow_symlinks=False) if target.is_dir() and not target.is_symlink() else None
+        if (
+            restored is not None
+            and (restored.st_dev, restored.st_ino) == backup_identity
+            and not backup.exists()
+            and not backup.is_symlink()
+        ):
+            if displaced is not None and displaced.exists():
+                _safe_remove(displaced)
+            return
+        if displaced is not None and displaced.exists() and not target.exists():
+            os.replace(displaced, target)
         raise
+    if displaced is not None and displaced.exists():
+        try:
+            _safe_remove(displaced)
+        except BaseException:
+            if displaced.exists() or displaced.is_symlink():
+                raise
 
 
 def _complete_rollback(action: Callable[[], RollbackResult]) -> RollbackResult:
@@ -639,21 +585,6 @@ def _promote_clone(
     return _swap_directory(candidate, layout.clone, state=state)
 
 
-def _remove_legacy_code(layout: InstallLayout, *, setup_migrated: bool) -> None:
-    if not setup_migrated:
-        raise InstallerError("legacy_cleanup_unsafe", "legacy code cleanup requires a verified setup receipt")
-    legacy_state = layout.state / "install"
-    assert_user_owned_directory(legacy_state, "legacy installation state")
-    for name in ("releases", "staging", "plugins", "bin", "installer-venv", "runtime"):
-        _safe_remove(layout.dispatch_home / name)
-    if setup_migrated:
-        (legacy_state / "setup.json").unlink(missing_ok=True)
-    try:
-        legacy_state.rmdir()
-    except OSError:
-        pass
-
-
 def _prepare_temporary_root(layout: InstallLayout) -> Path:
     legacy_root = pinned_installation_path(layout.dispatch_home / ".install-tmp")
     if legacy_root.exists() or legacy_root.is_symlink():
@@ -664,7 +595,11 @@ def _prepare_temporary_root(layout: InstallLayout) -> Path:
             or stat.S_IMODE(legacy_root.stat(follow_symlinks=False).st_mode) != 0o700
         ):
             raise InstallerError("staging_unsafe", "installation staging directory is unsafe")
-    temporary_root = Path(tempfile.mkdtemp(prefix=f"dispatch-installer-{os.geteuid()}-"))
+    temporary_parent = Path(tempfile.gettempdir())
+    assert_directory_ancestors(temporary_parent, "temporary directory")
+    temporary_root = Path(
+        tempfile.mkdtemp(prefix=f"dispatch-installer-{os.geteuid()}-", dir=temporary_parent)
+    )
     temporary_root.chmod(0o700)
     return temporary_root
 
@@ -682,18 +617,30 @@ def _build_replacement_venv(layout: InstallLayout, *, run: RunCommand) -> tuple[
             browser_results=browser_results,
             run=run,
         )
-    except BaseException:
-        _safe_remove(work)
-        raise
+    except BaseException as primary:
+        try:
+            _safe_remove(work)
+        except BaseException as cleanup_error:
+            raise InstallerError(
+                "venv_stage_cleanup_failed",
+                "replacement environment failed and private staging could not be removed",
+            ) from cleanup_error
+        raise primary
     if len(browser_results) != 1:
-        _safe_remove(work)
+        try:
+            _safe_remove(work)
+        except BaseException as cleanup_error:
+            raise InstallerError(
+                "venv_stage_cleanup_failed",
+                "invalid browser result left private environment staging behind",
+            ) from cleanup_error
         raise InstallerError("browser_provisioning_failed", "Browser Manager did not return one provisioning result")
     browser_result = browser_results[0]
     staged = browser_replacement if bool(getattr(browser_result, "replacement_required", False)) else None
     return replacement, staged, work, browser_result
 
 
-def _activate(
+def _reconcile_installation(
     layout: InstallLayout,
     *,
     channel: str,
@@ -715,7 +662,7 @@ def _activate(
     work: Path | None = None
     try:
         assert_checkout_clean(pinned_installation_path(layout.clone), run=run)
-        legacy_setup_migrated = migrate_legacy_plugin_config(layout)
+        migrate_legacy_plugin_config(layout)
         replacement, browser_replacement, work, browser_result = _build_replacement_venv(layout, run=run)
         assert_checkout_clean(pinned_installation_path(layout.clone), run=run)
         snapshots = {
@@ -726,16 +673,33 @@ def _activate(
                 _snapshot_file(layout.browser_installation_record),
             ),
             "service": (layout.service_path, _snapshot_file(layout.service_path)),
-            "service_record": (layout.state / "service.json", _snapshot_file(layout.state / "service.json")),
             "plugin_config": (plugin_config, plugin_snapshot),
         }
         if snapshots["service"][1] is not None and not service_unit_is_owned(layout):
             raise InstallerError("service_conflict", "existing service unit is not Dispatch-owned")
-    except BaseException:
-        _restore_file(plugin_config, plugin_snapshot)
+    except BaseException as primary:
+        rollback_error: BaseException | None = None
+        cleanup_error: BaseException | None = None
+        try:
+            _restore_file(plugin_config, plugin_snapshot)
+        except BaseException as exc:
+            rollback_error = exc
         if work is not None:
-            _safe_remove(work)
-        raise
+            try:
+                _safe_remove(work)
+            except BaseException as exc:
+                cleanup_error = exc
+        if rollback_error is not None:
+            raise InstallerError(
+                "preflight_rollback_failed",
+                "installation preflight failed and plugin configuration could not be restored",
+            ) from primary
+        if cleanup_error is not None:
+            raise InstallerError(
+                "venv_stage_cleanup_failed",
+                "installation preflight failed and private environment staging could not be removed",
+            ) from cleanup_error
+        raise primary
     assert work is not None
     old_service_present = snapshots["service"][1] is not None
     main_service_state = (
@@ -816,8 +780,8 @@ def _activate(
         attempt(lambda: restore_plugin_service_states(layout, stopped_plugin_services, run=run))
         try:
             _safe_remove(work)
-        except BaseException:
-            pass
+        except BaseException as exc:
+            rollback_failure = rollback_failure or exc
         release_browser_generation_lock(generation_lock)
         generation_lock = None
         if rollback_failure is not None:
@@ -848,8 +812,6 @@ def _activate(
             _safe_remove(layout.legacy_browser_cache)
         if legacy_present:
             remove_legacy_user_service(layout, run=run)
-        if legacy_present and legacy_setup_migrated:
-            _remove_legacy_code(layout, setup_migrated=True)
     except BaseException:
         cleanup_failed = True
     result_status = f"{status}_cleanup_incomplete" if cleanup_failed else status
@@ -890,7 +852,7 @@ def install_from_clone(
                 ref=ref,
                 run=run,
             )
-            result = _activate(
+            result = _reconcile_installation(
                 layout,
                 channel=channel,
                 ref=ref,
@@ -914,7 +876,9 @@ def install_from_clone(
             try:
                 _safe_remove(clone_swap.backup)
             except BaseException:
-                pass
+                result = dict(result)
+                result["status"] = f"{result.get('status', 'installed')}_cleanup_incomplete"
+                result["cleanup_error_code"] = "post_activation_cleanup_failed"
         return result
 
 
@@ -923,77 +887,16 @@ def _stage_repository(layout: InstallLayout, *, channel: str, ref: str, run: Run
     source = work / "dispatch"
     try:
         clone_repository(source, channel=channel, ref=ref, run=run)
-    except BaseException:
+    except BaseException as primary:
         try:
             _safe_remove(work)
-        except BaseException:
-            pass
-        raise
+        except BaseException as cleanup_error:
+            raise InstallerError(
+                "repository_stage_cleanup_failed",
+                "repository staging failed and private work could not be removed",
+            ) from cleanup_error
+        raise primary
     return source, work
-
-
-def _update_existing(
-    layout: InstallLayout,
-    *,
-    channel: str,
-    ref: str,
-    run: RunCommand,
-    now: Callable[[], datetime],
-) -> dict[str, object]:
-    def rollback_checkout(old_commit: str) -> subprocess.CompletedProcess[str]:
-        clone = pinned_installation_path(layout.clone)
-        restore = (
-            ("git", "reset", "--hard", old_commit)
-            if channel == "dev"
-            else ("git", "checkout", "--detach", old_commit)
-        )
-        result: subprocess.CompletedProcess[str] | None = None
-        first_failure: BaseException | None = None
-        for command in (restore,):
-            try:
-                completed = run(command, clone)
-                result = completed
-                if completed.returncode != 0 and first_failure is None:
-                    first_failure = InstallerError(
-                        "checkout_rollback_failed",
-                        "a checkout rollback command failed",
-                    )
-            except BaseException as command_error:
-                if first_failure is None:
-                    first_failure = command_error
-        try:
-            assert_checkout_clean(clone, run=run)
-        except BaseException as cleanliness_error:
-            if first_failure is None:
-                first_failure = cleanliness_error
-        if first_failure is not None:
-            raise first_failure
-        if result is None:
-            raise InstallerError("checkout_rollback_failed", "the prior checkout could not be restored")
-        return result
-
-    with installation_lock(layout):
-        clone = pinned_installation_path(layout.clone)
-        assert_checkout_clean(clone, run=run)
-        old_commit = current_commit(clone, run=run)
-        try:
-            checkout_existing(clone, channel=channel, ref=ref, preflight=False, run=run)
-            commit = current_commit(clone, run=run)
-            return _activate(
-                layout,
-                channel=channel,
-                ref=ref,
-                commit=commit,
-                run=run,
-                now=now,
-                status="updated",
-            )
-        except BaseException as exc:
-            try:
-                _complete_rollback(lambda: rollback_checkout(old_commit))
-            except BaseException:
-                raise InstallerError("checkout_rollback_failed", "update failed and the prior checkout could not be restored") from exc
-            raise
 
 
 def install_or_update(
@@ -1008,24 +911,48 @@ def install_or_update(
 ) -> dict[str, object]:
     ref = resolve_ref(channel, version)
     current = read_installation(layout)
+    if current is None:
+        for managed in (layout.clone, layout.venv):
+            if managed.exists() or managed.is_symlink():
+                raise InstallerError(
+                    "incomplete_installation",
+                    f"unrecorded managed path blocks installation: {managed}",
+                )
+
+    def result_status() -> str:
+        if current is None:
+            return "installed"
+        if update_current and current.get("channel") == channel:
+            return "updated"
+        return "switched"
+
     if source is not None:
-        return install_from_clone(layout, source=source, channel=channel, ref=ref, run=run, now=now)
-    if update_current and current is not None and current.get("channel") == channel:
-        return _update_existing(layout, channel=channel, ref=ref, run=run, now=now)
+        layout.prepare()
+        with installation_lock(layout):
+            if current is not None and (layout.clone.exists() or layout.clone.is_symlink()):
+                assert_checkout_clean(layout.clone, run=run)
+        result = install_from_clone(layout, source=source, channel=channel, ref=ref, run=run, now=now)
+        result["status"] = result_status()
+        return result
 
     layout.prepare()
     with installation_lock(layout):
         assert_installation_root_current(layout)
+        if current is not None and (layout.clone.exists() or layout.clone.is_symlink()):
+            assert_checkout_clean(layout.clone, run=run)
         staged, work = _stage_repository(layout, channel=channel, ref=ref, run=run)
+    try:
+        result = install_from_clone(layout, source=staged, channel=channel, ref=ref, run=run, now=now)
+        result["status"] = result_status()
+        return result
+    finally:
         try:
-            result = install_from_clone(layout, source=staged, channel=channel, ref=ref, run=run, now=now)
-            result["status"] = "switched" if current is not None else "installed"
-            return result
-        finally:
-            try:
-                _safe_remove(work)
-            except BaseException:
-                pass
+            _safe_remove(work)
+        except BaseException as cleanup_error:
+            raise InstallerError(
+                "repository_stage_cleanup_failed",
+                "repository reconciliation completed but private staging could not be removed",
+            ) from cleanup_error
 
 
 def repair_existing(
@@ -1052,7 +979,7 @@ def repair_existing(
                 "installation_commit_mismatch",
                 "the checkout differs from the recorded installation; run dispatch update",
             )
-        return _activate(
+        return _reconcile_installation(
             layout,
             channel=channel,
             ref=ref,

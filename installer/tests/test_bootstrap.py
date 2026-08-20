@@ -4,9 +4,17 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tomllib
+
+from dispatch_installer import __version__
 
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+def test_installer_component_version_matches_project_metadata() -> None:
+    project = tomllib.loads((ROOT / "installer" / "pyproject.toml").read_text(encoding="utf-8"))
+    assert project["project"]["version"] == __version__
 
 
 def test_root_bootstrap_is_clone_based_and_prompts_on_tty() -> None:
@@ -73,6 +81,31 @@ def test_root_bootstrap_rejects_home_overlap_before_staging(tmp_path: Path) -> N
     assert completed.returncode != 0
     assert "cannot equal HOME or contain HOME" in completed.stderr
     assert not (home / ".install-tmp").exists()
+
+
+def test_root_bootstrap_rejects_external_private_home_before_root_or_staging(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    root = tmp_path / "dispatch-home"
+    environment = dict(
+        os.environ,
+        HOME=str(home),
+        DISPATCH_HOME=str(root),
+        DISPATCH_CONFIG_ROOT=str(home),
+    )
+
+    completed = subprocess.run(
+        ("sh", str(ROOT / "install.sh"), "--channel", "dev"),
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+    )
+
+    assert completed.returncode != 0
+    assert "DISPATCH_CONFIG_ROOT" in completed.stderr
+    assert "cannot equal or contain HOME" in completed.stderr
+    assert not root.exists()
 
 
 def test_root_bootstrap_rejects_traversal_before_staging(tmp_path: Path) -> None:

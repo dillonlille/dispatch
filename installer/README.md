@@ -3,7 +3,8 @@
 The installer is a standard-library runtime package carried by the Dispatch
 checkout. The canonical `install.sh` bootstrap selects a channel, resolves a
 stable GitHub Release when requested, clones `dillonlille/dispatch`, and runs
-this package from the staged clone through `PYTHONPATH`.
+this package from the staged clone with isolated Python and an explicit source
+path insertion.
 
 ## Channels
 
@@ -14,8 +15,10 @@ this package from the staged clone through `PYTHONPATH`.
   tracks `main` and rejects `--version`; no Git branch named `dev` is required.
 
 The active checkout is `~/.dispatch/dispatch`. The bootstrap creates a
-per-user virtual environment at `~/.dispatch/venv` and installs this package
-editable from the active checkout. No wheel, release manifest, browser
+per-user virtual environment at `~/.dispatch/venv`. The installer validates
+each selected source project, copies it to owner-private temporary build state,
+and lets pip install it into the replacement environment without writing
+metadata into the checkout. No published wheel, release manifest, browser
 artifact, or Hermes inspection is involved.
 
 ## Commands
@@ -55,9 +58,10 @@ The final layout is:
 Default uninstall removes code, the virtual environment, cache, runtime,
 launcher, service, and installation record while preserving `config`, `secrets`, `data`,
 `state`, and `logs`. `--purge` removes the complete `~/.dispatch` tree.
-Setup installs selected built-in plugins direct-source from `dispatch/plugins`,
-installs their approved dependency closures, and writes `config/plugins.json`.
-Long-running selections receive disabled receipt-owned service projections;
+Setup installs selected built-in plugins from validated private copies of
+`dispatch/plugins`, installs their approved dependency closures, and writes
+`config/plugins.json`.
+Long-running selections receive disabled, exactly generated service projections;
 private configuration and explicit enablement remain separate steps.
 Installation and repair install the pinned Core
 requirements, then Browser Manager resolves the Chromium revision matched to
@@ -70,6 +74,6 @@ A real sandboxed smoke launch must pass, and checkout, venv, and browser activat
 or roll back together. Hermes is never inspected or modified.
 
 Plugin services run through `dispatch plugin serve <id>` from the same verified
-environment as Core. Service units and receipts contain only product paths and
-plugin IDs, never plugin credentials. Deselect, update, repair, uninstall, and
-rollback account for each owned service projection.
+environment as Core. Service units contain only product paths and plugin IDs,
+never plugin credentials. Deselect, update, repair, uninstall, and rollback
+account for each exact generated projection.

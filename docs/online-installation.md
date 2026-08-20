@@ -33,7 +33,7 @@ The application checkout and dependency environment are separate from durable us
 ```text
 ~/.dispatch/
 ├── dispatch/     selected Git checkout
-├── venv/         Python dependencies and editable installer/plugin adapters
+├── venv/         Python dependencies and installed source packages
 ├── config/       durable private configuration
 ├── secrets/      durable credentials and encryption material
 ├── data/         durable application and plugin data
@@ -44,7 +44,7 @@ The application checkout and dependency environment are separate from durable us
 └── installation.json
 ```
 
-Core runs directly from `~/.dispatch/dispatch/dispatch-core`; it is not installed as a wheel. The installer installs the pinned Core dependencies and selected built-in plugin dependencies. Browser Manager then derives the exact Chromium revision from staged Playwright, reuses a safe matching generation when available, or installs user-owned Chromium under `~/.dispatch/cache/browser-manager/playwright`.
+Core runs directly from `~/.dispatch/dispatch/dispatch-core`; it is not installed as a wheel. The installer copies validated installer and selected plugin projects into owner-private temporary build state, installs them into the replacement environment with the pinned build backend, and leaves the checkout clean. Browser Manager then derives the exact Chromium revision from staged Playwright, reuses a safe matching generation when available, or installs user-owned Chromium under `~/.dispatch/cache/browser-manager/playwright`.
 
 Browser Manager scans Chromium's shared libraries before requesting elevation. On a prepared host, no browser system command runs. When libraries are missing on a supported Linux host, Playwright's dependency operation may request normal administrator authorization; denial or unavailable privilege fails before activation rather than leaving a nominally ready browser. A bounded sandboxed `about:blank` launch must pass before the checkout, venv, and browser generation activate together.
 
@@ -64,7 +64,7 @@ dispatch plugin-service enable companion-bridge
 ```
 
 Selecting a long-running plugin installs its approved dependency closure and
-publishes a disabled, receipt-owned user-service projection. Companion Bridge
+publishes a disabled, exactly generated user-service projection. Companion Bridge
 still requires an explicit private configurator run for Slack credentials and
 allowlists before its service may be enabled. Installation and plugin selection
 never import credentials from another application or operational checkout.
@@ -80,11 +80,7 @@ dispatch channel dev
 dispatch uninstall --plan
 ```
 
-A development update refuses a dirty checkout, fetches `origin/main`, and merges
-with `--ff-only`. A stable update resolves a published release tag and checks it
-out detached. Channel switching uses a newly verified clone while preserving
-`config`, `secrets`, `data`, `state`, and `logs`. The channel name remains `dev`
-for CLI compatibility; no long-lived Git branch named `dev` is required.
+A development update refuses a dirty checkout, clones current `main` into verified private staging, and replaces the checkout and environment through the same reconciliation path used by installation. A stable update stages the selected published Release tag detached. Channel switching uses that same verified clone path while preserving `config`, `secrets`, `data`, `state`, and `logs`. The channel name remains `dev` for CLI compatibility; no long-lived Git branch named `dev` is required.
 
 ## Boundaries
 

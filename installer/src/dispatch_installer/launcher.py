@@ -10,7 +10,7 @@ from pathlib import Path
 from .cli import main as installer_main
 from .doctor import inspect_installation
 from .layout import InstallLayout, InstallerError
-from .setup import load_plugin_config, run_setup
+from .setup import assert_source_project_safe, load_plugin_config, run_setup
 
 _LIFECYCLE = {"doctor", "verify", "setup", "plugin-service", "uninstall", "update", "repair", "channel", "switch-channel"}
 
@@ -28,9 +28,9 @@ Run 'dispatch <command> --help' for command-specific help.
 
 def _prepare_core_environment(layout: InstallLayout) -> list[Path]:
     code_root = layout.clone / "dispatch-core"
-    if not code_root.is_dir():
-        raise InstallerError("core_missing", "cloned Dispatch Core is missing")
-    package_root = code_root
+    if code_root.is_symlink() or not code_root.is_dir():
+        raise InstallerError("core_missing", "cloned Dispatch Core is missing or unsafe")
+    package_root = assert_source_project_safe(code_root)
     config = load_plugin_config(layout)
     plugins = config.get("plugins", [])
     if not isinstance(plugins, list):

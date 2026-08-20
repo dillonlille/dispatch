@@ -24,8 +24,6 @@ from .layout import (
     assert_user_owned_directory,
     atomic_json,
     installation_lock,
-    is_pinned_installation_path,
-    open_pinned_installation_parent,
     pinned_installation_path,
     read_installation,
     read_json,
@@ -107,9 +105,13 @@ def _directory_stage(path: Path) -> _DirectoryStage | None:
     path = pinned_installation_path(path)
     if not path.exists() and not path.is_symlink():
         return None
-    pinned = is_pinned_installation_path(path)
-    details = path.stat(follow_symlinks=pinned)
-    if (path.is_symlink() and not pinned) or not path.is_dir() or details.st_uid != os.geteuid():
+    details = path.stat(follow_symlinks=False)
+    if (
+        path.is_symlink()
+        or not path.is_dir()
+        or details.st_uid != os.geteuid()
+        or details.st_mode & 0o022
+    ):
         raise InstallerError("uninstall_path_unsafe", f"managed directory is unsafe: {path}")
     return _DirectoryStage(path, path.parent / f".{path.name}.uninstall-{uuid.uuid4().hex}")
 
@@ -129,6 +131,39 @@ def _restore_directory(stage: _DirectoryStage) -> None:
 def _discard_directory(stage: _DirectoryStage) -> None:
     if stage.staged.exists() and stage.staged.is_dir() and not stage.staged.is_symlink():
         shutil.rmtree(stage.staged)
+
+
+def _browser_installation_record_is_valid(layout: InstallLayout) -> bool:
+    try:
+        payload = read_json(layout.browser_installation_record, maximum=16 * 1024)
+    except InstallerError:
+        return False
+    expected = {
+        "schema_version",
+        "status",
+        "playwright_version",
+        "browser_family",
+        "chromium_revision",
+        "chromium_version",
+        "cache",
+        "contains_secrets",
+    }
+    return (
+        set(payload) == expected
+        and payload.get("schema_version") == 1
+        and payload.get("status") == "active"
+        and isinstance(payload.get("playwright_version"), str)
+        and bool(payload.get("playwright_version"))
+        and payload.get("browser_family") == "chromium"
+        and isinstance(payload.get("chromium_revision"), str)
+        and bool(payload.get("chromium_revision"))
+        and (
+            payload.get("chromium_version") is None
+            or (isinstance(payload.get("chromium_version"), str) and bool(payload.get("chromium_version")))
+        )
+        and payload.get("cache") == str(layout.browser_cache)
+        and payload.get("contains_secrets") is False
+    )
 
 
 def _uninstall_receipt_is_valid(layout: InstallLayout) -> bool:
@@ -230,8 +265,8 @@ def _uninstall_blockers(
             blockers.append(f"managed path is unsafe: {path}")
         elif path.exists():
             details = path.stat(follow_symlinks=False)
-            if details.st_uid != os.geteuid():
-                blockers.append(f"managed path is not user-owned: {path}")
+            if details.st_uid != os.geteuid() or details.st_mode & 0o022:
+                blockers.append(f"managed path is writable by group or other: {path}")
 
     if layout.dispatch_home.exists():
         details = layout.dispatch_home.stat(follow_symlinks=False)
@@ -250,11 +285,8 @@ def _uninstall_blockers(
         layout.browser_installation_record.exists() and not layout.browser_installation_record.is_file()
     ):
         blockers.append(f"browser installation record is unsafe: {layout.browser_installation_record}")
-    elif layout.browser_installation_record.exists():
-        try:
-            read_json(layout.browser_installation_record, maximum=16 * 1024)
-        except InstallerError as exc:
-            blockers.append(str(exc))
+    elif layout.browser_installation_record.exists() and not _browser_installation_record_is_valid(layout):
+        blockers.append(f"browser installation record is invalid: {layout.browser_installation_record}")
     if layout.lock_path.is_symlink() or (layout.lock_path.exists() and not layout.lock_path.is_file()):
         blockers.append(f"installation lock is unsafe: {layout.lock_path}")
 
@@ -298,46 +330,22 @@ def _uninstall_blockers(
 
 
 def _unlink_browser_installation_record(layout: InstallLayout) -> None:
-    canonical = layout.browser_installation_record
-    pinned_parent = open_pinned_installation_parent(canonical)
-    if pinned_parent is not None:
-        descriptor, name = pinned_parent
-        try:
-            try:
-                details = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
-            except FileNotFoundError:
-                return
-            if (
-                not stat.S_ISREG(details.st_mode)
-                or details.st_uid != os.geteuid()
-                or details.st_nlink != 1
-                or stat.S_IMODE(details.st_mode) != 0o600
-            ):
-                raise InstallerError("browser_record_unsafe", "browser installation record is unsafe")
-            os.unlink(name, dir_fd=descriptor)
-            return
-        finally:
-            os.close(descriptor)
-    path = canonical
+    path = layout.browser_installation_record
     if not path.exists() and not path.is_symlink():
         return
-    flags = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
-    descriptor = os.open(path.parent, flags)
-    try:
-        parent = os.fstat(descriptor)
-        if not stat.S_ISDIR(parent.st_mode) or parent.st_uid != os.geteuid() or parent.st_mode & 0o022:
-            raise InstallerError("browser_record_unsafe", "browser installation state is unsafe")
-        details = os.stat(path.name, dir_fd=descriptor, follow_symlinks=False)
-        if (
-            not stat.S_ISREG(details.st_mode)
-            or details.st_uid != os.geteuid()
-            or details.st_nlink != 1
-            or stat.S_IMODE(details.st_mode) != 0o600
-        ):
-            raise InstallerError("browser_record_unsafe", "browser installation record is unsafe")
-        os.unlink(path.name, dir_fd=descriptor)
-    finally:
-        os.close(descriptor)
+    if not _browser_installation_record_is_valid(layout):
+        raise InstallerError("browser_record_unsafe", "browser installation record is invalid")
+    assert_user_owned_directory(path.parent, "browser installation state")
+    details = path.lstat()
+    if (
+        path.is_symlink()
+        or not stat.S_ISREG(details.st_mode)
+        or details.st_uid != os.geteuid()
+        or details.st_nlink != 1
+        or stat.S_IMODE(details.st_mode) != 0o600
+    ):
+        raise InstallerError("browser_record_unsafe", "browser installation record is unsafe")
+    path.unlink()
 
 
 def _external_private_roots(layout: InstallLayout) -> list[Path]:
@@ -421,32 +429,6 @@ def uninstall(
             if service_present
             else {"active": False, "enabled": False}
         )
-        if service_present:
-            stopped = run(("systemctl", "--user", "stop", "dispatch.service"), None)
-            if stopped.returncode != 0:
-                raise InstallerError("service_stop_failed", "Dispatch service could not be stopped before uninstall")
-        generation_lock: int | None = None
-        try:
-            assert_installation_root_current(layout)
-            generation_lock = acquire_browser_generation_lock(layout)
-            assert_no_unresolved_browser_leases(layout)
-        except BaseException as exc:
-            release_browser_generation_lock(generation_lock)
-            generation_lock = None
-            if service_present:
-                try:
-                    restore_systemd_service_state(
-                        "dispatch.service",
-                        main_service_state,
-                        run=run,
-                    )
-                except BaseException as restart_exc:
-                    raise InstallerError(
-                        "service_rollback_failed",
-                        "uninstall was blocked and the Dispatch service could not be restored",
-                    ) from restart_exc
-
-            raise
         plugin_ids = _plugin_service_ids(layout)
         plugin_states: list[dict[str, object]] = []
         for plugin_id in plugin_ids:
@@ -458,13 +440,11 @@ def uninstall(
                     "plugin_id": plugin_id,
                     "active": status.get("active") is True,
                     "enabled": status.get("enabled") is True,
-                    "receipt_status": status.get("receipt_status"),
                 }
             )
         files = {
             layout.command_path: _snapshot_file(layout.command_path),
             layout.service_path: _snapshot_file(layout.service_path),
-            layout.state / "service.json": _snapshot_file(layout.state / "service.json"),
             layout.service_directory / "dispatch-core.service": _snapshot_file(
                 layout.service_directory / "dispatch-core.service"
             ),
@@ -483,6 +463,34 @@ def uninstall(
                 plugin_service_receipt_path(layout, plugin_id)
             )
         legacy_present = files[layout.service_directory / "dispatch-core.service"] is not None
+        generation_lock: int | None = None
+        service_stopped = False
+        try:
+            if service_present:
+                service_stopped = True
+                stopped = run(("systemctl", "--user", "stop", "dispatch.service"), None)
+                if stopped.returncode != 0:
+                    raise InstallerError("service_stop_failed", "Dispatch service could not be stopped before uninstall")
+            assert_installation_root_current(layout)
+            generation_lock = acquire_browser_generation_lock(layout)
+            assert_no_unresolved_browser_leases(layout)
+        except BaseException as exc:
+            release_browser_generation_lock(generation_lock)
+            generation_lock = None
+            if service_stopped:
+                try:
+                    restore_systemd_service_state(
+                        "dispatch.service",
+                        main_service_state,
+                        run=run,
+                    )
+                except BaseException as restart_exc:
+                    raise InstallerError(
+                        "service_rollback_failed",
+                        "uninstall was blocked and the Dispatch service could not be restored",
+                    ) from restart_exc
+
+            raise
         stages: list[_DirectoryStage] = []
         committed = False
         result: dict[str, object] | None = None
