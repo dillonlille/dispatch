@@ -106,6 +106,21 @@ def summary_divider() -> str:
     return dim("  " + "─" * min(46, terminal_width() - 4))
 
 
+def print_numbered_options(
+    options: list[tuple[str, str]],
+    *,
+    recommended: str | None = None,
+) -> None:
+    """Render the static numbered list used by every non-arrow path."""
+    for index, (value, description) in enumerate(options, start=1):
+        marker = ""
+        if recommended is not None and value == recommended:
+            marker = success("   Recommended")
+        print(f"    {accent(str(index))}. {bold(value)}{marker}")
+        if description:
+            print(f"       {dim(description)}")
+
+
 def select_menu(
     title: str,
     options: list[tuple[str, str]],
@@ -115,33 +130,51 @@ def select_menu(
     input_fn=input,
     interactive: bool | None = None,
 ) -> int | None:
-    """Present a numbered selection menu; return the chosen index.
+    """Present a single-choice menu; return the chosen index.
 
     ``options`` is a list of ``(value, description)`` pairs. The option whose
     value equals ``recommended`` is tagged. Returns ``None`` when stdin is
-    unavailable; raises nothing. Arrow-key navigation is intentionally not
-    used here: a numbered menu works identically piped, scripted, and over
-    every SSH client.
+    unavailable; raises nothing.
+
+    Single-render contract: each prompt draws exactly ONE representation of
+    the options. Interactive TTYs get the arrow-key ``❯`` menu; pipes, CI,
+    and restricted SSH get the numbered list with a ``Select [1-N]``
+    prompt. The two are never shown together.
     """
-    print(f"\n  {bold(title)}\n")
-    for index, (value, description) in enumerate(options, start=1):
-        marker = ""
-        if recommended is not None and value == recommended:
-            marker = success("   Recommended")
-        print(f"    {accent(str(index))}. {bold(value)}{marker}")
-        if description:
-            print(f"       {dim(description)}")
-    if hint:
-        print(f"\n  {dim(hint)}")
     if interactive is None:
         interactive = sys.stdin.isatty()
     if not interactive:
+        print_numbered_options(options, recommended=recommended)
+        if hint:
+            print(f"\n  {dim(hint)}")
         return None
+    if _arrow_single_select is None:
+        # The raw-mode hook is installed by dispatch_installer.interactive at
+        # import time; import it lazily so every entry point gets arrow-key
+        # menus regardless of which module loaded first.
+        try:
+            from . import interactive as _interactive  # noqa: F401
+
+            del _interactive
+        except Exception:
+            pass
     if _arrow_single_select is not None:
         # Raw-mode arrow navigation installed by dispatch_installer.interactive.
-        return _arrow_single_select(
-            title, options, recommended=recommended, input_fn=input_fn, interactive=interactive
+        chosen = _arrow_single_select(
+            title,
+            options,
+            recommended=recommended,
+            hint=hint,
+            input_fn=input_fn,
+            interactive=interactive,
         )
+        if chosen is not None:
+            return chosen
+        # Arrow keys unavailable: fall through to the numbered representation.
+    print(f"\n  {bold(title)}\n")
+    print_numbered_options(options, recommended=recommended)
+    if hint:
+        print(f"\n  {dim(hint)}")
     while True:
         try:
             raw = input_fn("  Select [1-" + str(len(options)) + "]: ").strip()
@@ -168,6 +201,7 @@ __all__ = [
     "bold",
     "dim",
     "error",
+    "print_numbered_options",
     "select_menu",
     "status_line",
     "step_header",
