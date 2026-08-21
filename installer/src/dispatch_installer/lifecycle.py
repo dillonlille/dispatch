@@ -76,8 +76,52 @@ class _SwapState:
 
 
 def _checked(run: RunCommand, command: Sequence[str], cwd: Path | None, code: str, message: str) -> None:
-    if run(command, cwd).returncode != 0:
-        raise InstallerError(code, message)
+    completed = run(command, cwd)
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()[:512]
+        raise InstallerError(code, f"{message}: {detail}" if detail else message)
+
+
+def assert_disk_space(layout: InstallLayout, *, minimum_bytes: int = 2 * 1024 * 1024 * 1024) -> None:
+    """Fail fast before staging when the destination filesystem lacks headroom."""
+
+    for label, target in (
+        ("DISPATCH_HOME", layout.dispatch_home),
+        ("temporary staging", Path(tempfile.gettempdir())),
+    ):
+        probe = target if target.exists() else target.parent
+        free = shutil.disk_usage(probe).free
+        if free < minimum_bytes:
+            raise InstallerError(
+                "disk_space_insufficient",
+                f"insufficient disk space on {label} filesystem: "
+                f"{free // (1024 * 1024)} MB free, at least "
+                f"{minimum_bytes // (1024 * 1024)} MB required",
+            )
+
+
+def sweep_stale_swap_directories(layout: InstallLayout) -> None:
+    """Best-effort removal of orphaned rollback directories from prior failed swaps."""
+
+    for parent in (layout.dispatch_home,):
+        try:
+            if not parent.is_dir() or parent.is_symlink():
+                return
+            entries = list(parent.iterdir())
+        except OSError:
+            return
+        now = datetime.now(UTC).timestamp()
+        for entry in entries:
+            name = entry.name
+            if not (name.startswith(".previous-") or ".previous-" in name or ".failed-" in name):
+                continue
+            try:
+                if entry.is_symlink() or not entry.is_dir():
+                    continue
+                if now - entry.stat(follow_symlinks=False).st_mtime > 86400:
+                    _safe_remove(entry)
+            except (OSError, InstallerError):
+                continue
 
 
 def _selected_plugins(layout: InstallLayout) -> list[str]:
@@ -899,6 +943,33 @@ def _stage_repository(layout: InstallLayout, *, channel: str, ref: str, run: Run
     return source, work
 
 
+def recover_incomplete_installation(
+    layout: InstallLayout,
+) -> dict[str, object]:
+    """Remove unrecorded managed paths left by a crashed first install.
+
+    Safe by construction: with no installation record, any clone/venv under
+    DISPATCH_HOME was created by a prior installer run and never activated.
+    """
+
+    if read_installation(layout) is not None:
+        raise InstallerError(
+            "recover_not_applicable",
+            "an installation record exists; use update or repair instead",
+        )
+    removed: list[str] = []
+    for managed in (layout.clone, layout.venv):
+        if managed.exists() or managed.is_symlink():
+            if managed.is_symlink() or not managed.is_dir():
+                raise InstallerError(
+                    "managed_directory_unsafe",
+                    f"unrecorded managed path is unsafe: {managed}",
+                )
+            _safe_remove(managed)
+            removed.append(managed.name)
+    return {"status": "recovered", "removed": removed}
+
+
 def install_or_update(
     layout: InstallLayout,
     *,
@@ -916,8 +987,11 @@ def install_or_update(
             if managed.exists() or managed.is_symlink():
                 raise InstallerError(
                     "incomplete_installation",
-                    f"unrecorded managed path blocks installation: {managed}",
+                    f"unrecorded managed path blocks installation: {managed}; "
+                    "run 'dispatch-installer recover' to remove it",
                 )
+    assert_disk_space(layout)
+    sweep_stale_swap_directories(layout)
 
     def result_status() -> str:
         if current is None:
@@ -994,6 +1068,7 @@ __all__ = [
     "ensure_venv",
     "install_from_clone",
     "install_or_update",
+    "recover_incomplete_installation",
     "repair_existing",
     "resolve_ref",
 ]
