@@ -381,7 +381,8 @@ class PaycomQuery:
             row["actualTime"] = None if row["actualTime"] is None else _stored_text(row["actualTime"], 32)
             row["provenanceAvailable"] = _bool(row["provenanceAvailable"])
             row["approved"] = _bool(row["approved"])
-            row["changeRequestStatus"] = row["changeRequestStatus"] if row["changeRequestStatus"] in (None, "pending", "approved") else None
+            if row["changeRequestStatus"] not in (None, "pending", "approved"):
+                raise QueryError("schema_invalid", "The timecard punch change request status is invalid.")
             row["comment"] = None if row["comment"] is None or row["comment"] == "" else _stored_text(row["comment"], 2_000)
             target["punches"].append(row)
         if date_start is not None and date_end is not None:
@@ -468,9 +469,9 @@ class PaycomQuery:
                           meal_end_time AS mealIn, meal_length_min AS flexMinutes,
                           parse_warning AS parseWarning
                      FROM meal_break_gap_rows WHERE report_date=?
-                     ORDER BY delivery_associate_name COLLATE NOCASE, transporter_id LIMIT ?""", (work_date, MAX_DRIVERS + 1)
+                     ORDER BY delivery_associate_name COLLATE NOCASE, transporter_id LIMIT ?""", (work_date, MAX_DRIVERS * MAX_REPORTS + 1)
             ).fetchall()],
-            MAX_DRIVERS,
+            MAX_DRIVERS * MAX_REPORTS,
             "Meal Break Gaps drivers",
         )
         expected_rows = sum(report["rowCount"] for report in reports)

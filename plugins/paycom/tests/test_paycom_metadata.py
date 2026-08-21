@@ -124,3 +124,10 @@ def test_license_and_operator_boundaries_are_documented() -> None:
         "live paycom extraction",
     ):
         assert marker in readme
+
+
+def test_version_is_consistent_across_metadata_and_package() -> None:
+    root = Path(__file__).resolve().parents[1]
+    yaml_version = re.search(r"^version:\s*(\S+)", (root / "dispatch-plugin.yaml").read_text(), re.M).group(1)
+    pyproject = tomllib.loads((root / "pyproject.toml").read_text())
+    assert yaml_version == pyproject["project"]["version"]
