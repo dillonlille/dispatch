@@ -113,7 +113,7 @@ def select_menu(
     recommended: str | None = None,
     hint: str = "",
     input_fn=input,
-    interactive: bool = True,
+    interactive: bool | None = None,
 ) -> int | None:
     """Present a numbered selection menu; return the chosen index.
 
@@ -133,7 +133,9 @@ def select_menu(
             print(f"       {dim(description)}")
     if hint:
         print(f"\n  {dim(hint)}")
-    if not interactive or not sys.stdin.isatty():
+    if interactive is None:
+        interactive = sys.stdin.isatty()
+    if not interactive:
         return None
     while True:
         try:
