@@ -509,19 +509,26 @@ class CollectionManager:
     def reconcile_tasks(self) -> list[TaskRecord]:
         store = self._require_store()
         now = self._clock()
-        for task_id in list(self._pending):
-            current = store.get(task_id)
-            if current.lease_expires_at is not None and current.lease_expires_at <= now:
-                result = self.cancel(task_id)
-                if result.status == "browser_cleanup_failed":
-                    store.finish(
-                        task_id,
-                        current.worker_id,
-                        TaskState.FAILED,
-                        now,
-                        error_code="browser_cleanup_failed",
-                    )
-        return store.reconcile(now)
+        try:
+            for task_id in list(self._pending):
+                try:
+                    current = store.get(task_id)
+                    if current.lease_expires_at is not None and current.lease_expires_at <= now:
+                        result = self.cancel(task_id)
+                        if result.status == "browser_cleanup_failed" and current.worker_id is not None:
+                            store.finish(
+                                task_id,
+                                current.worker_id,
+                                TaskState.FAILED,
+                                now,
+                                error_code="browser_cleanup_failed",
+                            )
+                except CollectionManagerError:
+                    # One stale/racing pending entry must not block
+                    # reconciliation of the remaining tasks.
+                    continue
+        finally:
+            return store.reconcile(self._clock())
 
     def create_schedule(
         self,

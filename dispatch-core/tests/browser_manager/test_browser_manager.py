@@ -9,6 +9,7 @@ import shlex
 import sqlite3
 import subprocess
 import sys
+import threading
 import time
 from types import SimpleNamespace
 from typing import Any
@@ -162,6 +163,7 @@ def browser_manager_for_testing(
     object.__setattr__(value, "_BrowserManager__clock", clock)
     object.__setattr__(value, "_BrowserManager__layout", layout)
     object.__setattr__(value, "_BrowserManager__store", LeaseStore(layout.database))
+    object.__setattr__(value, "_BrowserManager__leases_lock", threading.RLock())
     value._active = {}
     value._guarded = {}
     if reconcile_on_start:

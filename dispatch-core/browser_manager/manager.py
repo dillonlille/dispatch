@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 import secrets
+import threading
 
 
 from paths import DispatchPaths
@@ -87,6 +88,7 @@ class BrowserManager:
         "__clock",
         "__layout",
         "__store",
+        "__leases_lock",
         "_active",
         "_guarded",
     )
@@ -99,6 +101,10 @@ class BrowserManager:
         self.__layout = BrowserLayout.from_paths(paths)
         self.__layout.prepare()
         self.__store = LeaseStore(self.__layout.database)
+        # Guards the in-process lease maps; the store has its own SQLite-level
+        # serialization, but _active/_guarded are plain dicts that acquire(),
+        # _close_active(), maintain(), and reconcile() mutate concurrently.
+        self.__leases_lock = threading.RLock()
         self._active: dict[str, _ActiveLease] = {}
         self._guarded: dict[str, tuple[LeaseLocks, Path]] = {}
         if not reconciliation_only:
@@ -170,7 +176,8 @@ class BrowserManager:
                 at=self.__clock(),
             )
             row = self.store.transition(lease_id, LeaseState.READY, self.__clock())
-            self._active[lease_id] = _ActiveLease(handle=handle, locks=locks, profile=profile)
+            with self.__leases_lock:
+                self._active[lease_id] = _ActiveLease(handle=handle, locks=locks, profile=profile)
             return ManagedLease(self, lease_id)
         except BaseException as exc:
             cleanup_failed = self._error_code(exc) == "browser_cleanup_failed"
@@ -189,7 +196,8 @@ class BrowserManager:
                 except BaseException as persistence_exc:
                     state_error = persistence_exc
             if (cleanup_failed or state_error is not None) and row is not None:
-                self._guarded[row.lease_id] = (locks, profile)
+                with self.__leases_lock:
+                    self._guarded[row.lease_id] = (locks, profile)
             else:
                 locks.release()
             if state_error is not None:
@@ -208,17 +216,24 @@ class BrowserManager:
         return self.store.get(lease_id).lease()
 
     def session(self, lease_id: str) -> ManagedBrowserSession:
-        active = self._active.get(lease_id)
+        with self.__leases_lock:
+            active = self._active.get(lease_id)
         if active is None:
             raise BrowserManagerError("browser_lease_not_owned", "browser lease is not active in this manager")
         return active.handle.session
 
     def activate(self, lease_id: str) -> BrowserLease:
-        if lease_id not in self._active:
+        with self.__leases_lock:
+            owned = lease_id in self._active
+        if not owned:
             raise BrowserManagerError("browser_lease_not_owned", "browser lease is not active in this manager")
         row = self.store.get(lease_id)
         if row.state == LeaseState.ACTIVE:
             return row.lease()
+        if row.expires_at <= self.__clock():
+            # An expired READY lease must never grant a full session; let
+            # maintain() reconcile it instead.
+            raise BrowserManagerError("browser_lease_expired", "browser lease expired before activation")
         return self.store.transition(lease_id, LeaseState.ACTIVE, self.__clock()).lease()
 
     def release(self, lease_id: str) -> BrowserLease:
@@ -236,7 +251,8 @@ class BrowserManager:
         final_state: LeaseState,
         error_code: str | None,
     ) -> BrowserLease:
-        active = self._active.get(lease_id)
+        with self.__leases_lock:
+            active = self._active.get(lease_id)
         if active is None:
             row = self.store.get(lease_id)
             if row.state in TERMINAL_STATES:
@@ -261,8 +277,9 @@ class BrowserManager:
                     self.__clock(),
                     error_code=self._error_code(exc, "browser_cleanup_interrupted"),
                 )
-                self._active.pop(lease_id, None)
-                self._guarded[lease_id] = (active.locks, active.profile)
+                with self.__leases_lock:
+                    self._active.pop(lease_id, None)
+                    self._guarded[lease_id] = (active.locks, active.profile)
             else:
                 self.store.transition(
                     lease_id,
@@ -270,7 +287,8 @@ class BrowserManager:
                     self.__clock(),
                     error_code=error_code,
                 )
-                self._active.pop(lease_id, None)
+                with self.__leases_lock:
+                    self._active.pop(lease_id, None)
                 active.locks.release()
             raise
         except BaseException as exc:
@@ -280,8 +298,9 @@ class BrowserManager:
                 self.__clock(),
                 error_code=self._error_code(exc, "browser_cleanup_failed"),
             ).lease()
-            self._active.pop(lease_id, None)
-            self._guarded[lease_id] = (active.locks, active.profile)
+            with self.__leases_lock:
+                self._active.pop(lease_id, None)
+                self._guarded[lease_id] = (active.locks, active.profile)
             return quarantined
         completed = self.store.transition(
             lease_id,
@@ -289,7 +308,8 @@ class BrowserManager:
             self.__clock(),
             error_code=error_code,
         ).lease()
-        self._active.pop(lease_id, None)
+        with self.__leases_lock:
+            self._active.pop(lease_id, None)
         active.locks.release()
         return completed
 
@@ -298,7 +318,9 @@ class BrowserManager:
 
         now = self.__clock()
         outcomes: list[dict[str, str]] = []
-        for lease_id, active in list(self._active.items()):
+        with self.__leases_lock:
+            active_snapshot = list(self._active.items())
+        for lease_id, active in active_snapshot:
             row = self.store.get(lease_id)
             if active.requested_final_state is not None:
                 self._close_active(
@@ -317,11 +339,12 @@ class BrowserManager:
                 self._close_active(lease_id, LeaseState.FAILED, "browser_lease_expired")
                 outcomes.append({"lease_id": lease_id, "status": "browser_lease_expired"})
         for row in self.store.nonterminal():
-            if (
-                row.state != LeaseState.QUARANTINED
-                and row.lease_id not in self._guarded
-            ) or row.lease_id in self._active:
-                continue
+            with self.__leases_lock:
+                if (
+                    row.state != LeaseState.QUARANTINED
+                    and row.lease_id not in self._guarded
+                ) or row.lease_id in self._active:
+                    continue
             outcome = self._reconcile_row(row)
             if outcome is not None:
                 outcomes.append(outcome)
@@ -332,7 +355,9 @@ class BrowserManager:
 
         outcomes: list[dict[str, str]] = []
         for row in self.store.nonterminal():
-            if row.lease_id in self._active:
+            with self.__leases_lock:
+                owned = row.lease_id in self._active
+            if owned:
                 outcomes.append({"lease_id": row.lease_id, "status": "owned_locally"})
                 continue
             outcome = self._reconcile_row(row)
@@ -341,16 +366,23 @@ class BrowserManager:
         return outcomes
 
     def _reconcile_row(self, row: LeaseRow) -> dict[str, str] | None:
-        request = BrowserLeaseRequest(
-            plugin_id=row.plugin_id,
-            plugin_release=row.plugin_release,
-            realm=row.realm,
-            purpose=row.purpose,
-            account_alias=row.account_alias,
-            mode=row.mode,
-        )
-        profile = self.layout.profile(request.realm, request.plugin_id, request.account_alias)
-        guarded = self._guarded.get(row.lease_id)
+        try:
+            request = BrowserLeaseRequest(
+                plugin_id=row.plugin_id,
+                plugin_release=row.plugin_release,
+                realm=row.realm,
+                purpose=row.purpose,
+                account_alias=row.account_alias,
+                mode=row.mode,
+            )
+            profile = self.layout.profile(request.realm, request.plugin_id, request.account_alias)
+        except Exception as exc:
+            # A stored row that no longer validates must not abort
+            # reconciliation of the remaining leases.
+            self._quarantine_stored(row.lease_id, self._error_code(exc, "browser_lease_record_invalid"))
+            return {"lease_id": row.lease_id, "status": "browser_lease_record_invalid"}
+        with self.__leases_lock:
+            guarded = self._guarded.get(row.lease_id)
         reconcile_locks: LeaseLocks | None = None
         if guarded is None:
             try:
@@ -451,20 +483,27 @@ class BrowserManager:
             persisted = True
             return {"lease_id": row.lease_id, "status": status}
         finally:
-            if reconcile_locks is not None:
-                if not persisted or unsafe:
-                    self._guarded[row.lease_id] = (reconcile_locks, profile)
-                else:
-                    reconcile_locks.release()
-            if guarded is not None and persisted and not unsafe:
-                self._guarded.pop(row.lease_id, None)
+            keep_guarded = not persisted or unsafe
+            with self.__leases_lock:
+                if reconcile_locks is not None:
+                    if keep_guarded:
+                        self._guarded[row.lease_id] = (reconcile_locks, profile)
+                if guarded is not None and not keep_guarded:
+                    self._guarded.pop(row.lease_id, None)
+            if reconcile_locks is not None and not keep_guarded:
+                reconcile_locks.release()
+            if guarded is not None and not keep_guarded:
                 guarded[0].release()
 
     def shutdown(self) -> list[BrowserLease]:
         closed: list[BrowserLease] = []
-        for lease_id in list(self._active):
+        with self.__leases_lock:
+            active_ids = list(self._active)
+        for lease_id in active_ids:
             closed.append(self._close_active(lease_id, LeaseState.CANCELLED, "browser_manager_shutdown"))
-        if self._guarded:
+        with self.__leases_lock:
+            has_guarded = bool(self._guarded)
+        if has_guarded:
             self.reconcile()
         return closed
 
