@@ -168,7 +168,7 @@ def run_harness_setup(
             "Select harness",
             options,
             recommended=HARNESS_CATALOG["hermes"].id,
-            hint="↑↓ or number · enter to select",
+            hint="↑↓ move · enter select",
             input_fn=input_fn,
             interactive=True,
         )

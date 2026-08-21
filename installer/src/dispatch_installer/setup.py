@@ -1123,6 +1123,9 @@ def _run_setup(layout: InstallLayout, argv: list[str] | None, *, human: bool, ru
             if indices is None:
                 # Arrow keys unavailable (piped/CI/limited SSH): numbered fallback
                 print()
+                print(ui.bold("  Select plugins to enable"))
+                print(ui.dim("  (enter = Core only)"))
+                ui.print_numbered_options([(plugin_id, "") for plugin_id in plugins])
                 answer = input("  Select plugin numbers separated by commas, or press Enter for Core only: ").strip()
                 selected = interactive.parse_plugin_selection(answer, plugins)
             else:
