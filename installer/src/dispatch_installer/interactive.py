@@ -1,15 +1,17 @@
 """Arrow-key interactive menus: single-select and multi-select.
 
-Single-choice (``select_menu``) lives in ``ui``; this module adds raw-mode
-arrow navigation and the multiple-choice variant. All helpers degrade to
-numbered fallbacks when no TTY is available.
+Single-choice rendering lives in ``ui.select_menu``; this module adds
+raw-mode arrow navigation and the multiple-choice variant. Every menu
+follows a single-render contract: it draws exactly ONE representation of
+its options — the live ``❯`` / checkbox list on an interactive TTY, or a
+numbered fallback when raw mode is unavailable — never both at once.
 """
 from __future__ import annotations
 
 import sys
 
 from .layout import InstallerError
-from .ui import accent, bold, dim, error, success
+from .ui import accent, bold, dim, success
 
 
 class _RawKeys:
@@ -113,68 +115,14 @@ def _finalize_menu(options: list[tuple[str, str]], cursor: int, checked: list[bo
         print(f"  {dim('selected: ' + chosen)}")
 
 
-def select_menu(
-    title: str,
-    options: list[tuple[str, str]],
-    *,
-    recommended: str | None = None,
-    hint: str = "",
-    input_fn=input,
-    interactive: bool | None = None,
-) -> int | None:
-    """Single-choice menu.
-
-    Arrow keys + Enter on an interactive TTY; numbered-entry fallback when
-    raw mode is unavailable (pipes, CI, restricted SSH). Returns the chosen
-    index, or ``None`` when selection is unavailable.
-    """
+def _menu_title(title: str) -> None:
+    """Print the prompt heading shared by every live-menu variant."""
     print(f"\n  {bold(title)}\n")
-    for index, (value, description) in enumerate(options, start=1):
-        marker = ""
-        if recommended is not None and value == recommended:
-            marker = success("   Recommended")
-        print(f"    {accent(str(index))}. {bold(value)}{marker}")
-        if description:
-            print(f"       {dim(description)}")
-    if hint:
-        print(f"\n  {dim(hint)}")
-    if interactive is None:
-        interactive = sys.stdin.isatty()
-    if not interactive:
-        return None
-    if _arrow_keys_available():
-        keys = _RawKeys().__enter__()
-        if keys is not None:
-            try:
-                cursor = 0
-                total = len(options)
-                height = _option_height(options)
-                print(f"  {dim('↑↓ move · enter select')}")
-                drawn = _render_choice_list(options, cursor, None, recommended)
-                while True:
-                    key = keys.read_key()
-                    if key == "ctrl-c":
-                        raise KeyboardInterrupt
-                    if key == "up":
-                        cursor = max(0, cursor - 1)
-                    elif key == "down":
-                        cursor = min(total - 1, cursor + 1)
-                    elif key == "enter":
-                        print("\r\033[K", end="")
-                        _finalize_menu(options, cursor, None)
-                        return cursor
-                    print(f"\r\033[{drawn}A", end="")
-                    drawn = _render_choice_list(options, cursor, None, recommended)
-            finally:
-                keys.__exit__(None, None, None)
-    while True:
-        try:
-            raw = input_fn("  Select [1-" + str(len(options)) + "]: ").strip()
-        except EOFError:
-            return None
-        if raw.isdigit() and 1 <= int(raw) <= len(options):
-            return int(raw) - 1
-        print(f"  {error('Invalid selection.')}")
+
+
+def _controls_line(hint: str, default_controls: str) -> None:
+    """Print the controls line: the caller's hint when provided, else the default."""
+    print(f"  {dim(hint or default_controls)}")
 
 
 def multi_select_menu(
@@ -188,19 +136,15 @@ def multi_select_menu(
     """Multiple-choice menu: ↑↓ navigate, Space toggles, Enter confirms.
 
     Returns selected indices, or ``None`` when arrow-key selection is
-    unavailable — callers fall back to their numbered/flag paths.
+    unavailable — callers fall back to their numbered/flag paths. Draws only
+    the live checkbox list; the static numbered representation is reserved
+    for callers' non-TTY fallbacks, so the two never appear together.
     """
-    print(f"\n  {bold(title)}\n")
-    for index, (value, description) in enumerate(options, start=1):
-        print(f"    {accent(str(index))}. {bold(value)}")
-        if description:
-            print(f"       {dim(description)}")
-    if hint:
-        print(f"\n  {dim(hint)}")
     if interactive is None:
         interactive = sys.stdin.isatty()
     if not interactive or not _arrow_keys_available():
         return None
+    _menu_title(title)
     keys = _RawKeys().__enter__()
     if keys is None:
         return None
@@ -208,7 +152,7 @@ def multi_select_menu(
         checked = [value in set(preselected or []) for value, _d in options]
         cursor = 0
         total = len(options)
-        print(f"  {dim('↑↓ move · space select · enter confirm')}")
+        _controls_line(hint, "↑↓ move · space select · enter confirm")
         drawn = _render_choice_list(options, cursor, checked, None)
         while True:
             key = keys.read_key()
@@ -232,10 +176,11 @@ def multi_select_menu(
         keys.__exit__(None, None, None)
 
 
-def _single_select_arrow_path(title, options, *, recommended, input_fn, interactive):
+def _single_select_arrow_path(title, options, *, recommended, hint="", input_fn=input, interactive=None):
     """Arrow-key single-select used by ui.select_menu when raw mode works."""
-    if not _arrow_keys_available():
+    if not interactive or not _arrow_keys_available():
         return None
+    _menu_title(title)
     keys = _RawKeys().__enter__()
     if keys is None:
         return None
@@ -243,7 +188,7 @@ def _single_select_arrow_path(title, options, *, recommended, input_fn, interact
         cursor = 0
         total = len(options)
         height = _option_height(options)
-        print(f"  {dim('↑↓ move · enter select')}")
+        _controls_line(hint, "↑↓ move · enter select")
         drawn = _render_choice_list(options, cursor, checked=None, recommended=recommended)
         while True:
             key = keys.read_key()

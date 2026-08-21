@@ -98,7 +98,7 @@ def test_multi_select_ctrl_c_raises(fake_keys):
         interactive.multi_select_menu("Plugins", [("a", "")], interactive=True)
 
 
-def test_numbered_fallback_when_no_raw_mode(monkeypatch):
+def test_numbered_fallback_when_no_raw_mode(monkeypatch, capsys):
     monkeypatch.setattr(interactive, "_arrow_keys_available", lambda: False)
     monkeypatch.setattr(ui, "_arrow_single_select", None)
     prompts: list[str] = []
@@ -111,12 +111,79 @@ def test_numbered_fallback_when_no_raw_mode(monkeypatch):
     index = ui.select_menu("Pick", [("a", ""), ("b", "")], input_fn=fake_input, interactive=True)
     assert index == 1
     assert prompts and "Select [1-2]" in prompts[0]
+    # Single-render contract: fallback shows the numbered list, never the live menu.
+    out = capsys.readouterr().out
+    assert "❯" not in out
+    assert "2. b" in out
 
 
 def test_multi_select_returns_none_without_raw_mode(monkeypatch):
     monkeypatch.setattr(interactive, "_arrow_keys_available", lambda: False)
     result = interactive.multi_select_menu("Plugins", [("a", "")], interactive=True)
     assert result is None
+
+
+def test_arrow_path_never_shows_numbered_list(fake_keys, capsys):
+    fake_keys(["down", "enter"])
+    index = ui.select_menu("Pick", [("a", ""), ("b", "")], interactive=True)
+    assert index == 1
+    out = capsys.readouterr().out
+    # Regression: the static numbered list must not precede the live menu.
+    assert "Select [1-" not in out
+    assert "1. a" not in out
+    assert out.count("Pick") == 1
+
+
+def test_multi_select_renders_single_representation(fake_keys, capsys):
+    fake_keys(["space", "enter"])
+    picked = interactive.multi_select_menu(
+        "Plugins",
+        [("handbook", ""), ("paycom", "")],
+        interactive=True,
+    )
+    assert picked == [0]
+    out = capsys.readouterr().out
+    assert "Select plugin numbers" not in out
+    assert "1. handbook" not in out
+    assert out.count("Plugins") == 1
+
+
+def test_multi_select_custom_hint_replaces_default_controls(fake_keys, capsys):
+    fake_keys(["enter"])
+    picked = interactive.multi_select_menu(
+        "Plugins",
+        [("handbook", ""), ("paycom", "")],
+        hint="empty = Core only",
+        interactive=True,
+    )
+    assert picked == []
+    out = capsys.readouterr().out
+    assert "empty = Core only" in out
+    assert "space select" not in out
+
+
+def test_single_select_custom_hint_shown_once(fake_keys, capsys):
+    fake_keys(["enter"])
+    index = ui.select_menu(
+        "Model",
+        [("luna", ""), ("sol", "")],
+        hint="choose deliberately",
+        interactive=True,
+    )
+    assert index == 0
+    out = capsys.readouterr().out
+    assert out.count("choose deliberately") == 1
+
+
+def test_multi_select_none_without_tty_prints_nothing(monkeypatch, capsys):
+    monkeypatch.setattr(interactive, "_arrow_keys_available", lambda: True)
+    result = interactive.multi_select_menu(
+        "Plugins",
+        [("handbook", "")],
+        interactive=False,
+    )
+    assert result is None
+    assert capsys.readouterr().out == ""
 
 
 def test_option_height_depends_on_descriptions():
