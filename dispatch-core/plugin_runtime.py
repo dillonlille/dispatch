@@ -738,6 +738,10 @@ def invoke_configurator(
     try:
         with redirect_stdout(_BoundedPluginStdout()):
             result = configurator.handle(configurator_context)
+    except PluginRuntimeError as exc:
+        if exc.code in {"plugin_configuration_secret_exposure", "plugin_configuration_failed"}:
+            raise
+        raise PluginRuntimeError("plugin_configuration_failed", "plugin configuration failed") from exc
     except (KeyboardInterrupt, EOFError) as exc:
         raise PluginRuntimeError("plugin_configuration_cancelled", "plugin configuration was cancelled") from exc
     except BaseException as exc:

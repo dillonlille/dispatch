@@ -235,3 +235,41 @@ def test_paycom_rejects_an_ambiguous_security_challenge(tmp_path: Path) -> None:
 
     assert result.status == "manual_verification_required"
     assert page.challenge_payload is None
+
+
+def test_approved_urls_reject_ports_userinfo_and_plain_http() -> None:
+    from authentication.workflow import _approved
+
+    # Ports are never allowed on approved realms.
+    assert _approved("amazon-operations", "https://logistics.amazon.com:8443/dspconsolev2") is False
+    assert _approved("paycom-client", "https://www.paycomonline.net:443/v4/cl/app.php") is False
+    # Embedded userinfo is rejected.
+    assert _approved("amazon-operations", "https://[userinfo]@logistics.amazon.com/dspconsolev2") is False
+    assert _approved("amazon-operations", "https://[userinfo]:[synthetic]@www.amazon.com/ap/signin") is False
+    # Plain http is rejected even for the exact landing path.
+    assert _approved("amazon-operations", "http://logistics.amazon.com/dspconsolev2") is False
+    # Unparseable port fails closed.
+    assert _approved("paycom-client", "https://www.paycomonline.net:notaport/v4/cl/x.php") is False
+
+
+def test_approved_urls_match_only_exact_host_and_expected_paths() -> None:
+    from authentication.workflow import _approved
+
+    # Exact approvals.
+    assert _approved("amazon-operations", "https://logistics.amazon.com/dspconsolev2") is True
+    assert _approved("amazon-operations", "https://logistics.amazon.com/dspconsolev2/deep/path") is True
+    assert _approved("amazon-operations", "https://www.amazon.com/ap/signin?openid=x") is True
+    assert _approved("paycom-client", "https://www.paycomonline.net/v4/cl/cl-login.php") is True
+
+    # Lookalike hostnames and schemes do not pass.
+    assert _approved("amazon-operations", "https://logistics.amazon.com.evil.test/dspconsolev2") is False
+    assert _approved("amazon-operations", "https://evil-logistics.amazon.com/dspconsolev2") is False
+    # The signin path must match exactly — no prefix drift.
+    assert _approved("amazon-operations", "https://www.amazon.com/ap/signin/extra") is False
+    assert _approved("amazon-operations", "https://www.amazon.com/ap/mfa") is False
+    # Paycom requires the /v4/cl/ prefix.
+    assert _approved("paycom-client", "https://www.paycomonline.net/v4/other/x") is False
+    # Cross-realm confusion fails closed.
+    assert _approved("paycom-client", "https://logistics.amazon.com/dspconsolev2") is False
+    # Unknown realm has no approvals at all.
+    assert _approved("unknown-realm", "https://logistics.amazon.com/dspconsolev2") is False
