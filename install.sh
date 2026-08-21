@@ -7,6 +7,7 @@ DISPATCH_HOME="${DISPATCH_HOME:-$HOME/.dispatch}"
 CHANNEL=''
 VERSION=''
 SETUP_MODE=''   # '', yes, no
+FORCE=0
 
 fail() {
     printf '%s\n' "Dispatch installation failed: $*" >&2
@@ -68,18 +69,117 @@ retry() {
     done
 }
 
+record_field() {
+    # record_field <key>: print a string field from installation.json.
+    # Empty output means: no record, unreadable record, or missing key —
+    # callers treat that as "not installed" and fall through to fresh install.
+    [ -f "$DISPATCH_HOME/installation.json" ] || return 0
+    RECORD_FILE="$DISPATCH_HOME/installation.json" RECORD_KEY="$1" python3 - <<'PY'
+import json
+import os
+
+try:
+    with open(os.environ["RECORD_FILE"], encoding="utf-8") as handle:
+        value = json.load(handle).get(os.environ["RECORD_KEY"])
+    if isinstance(value, str):
+        print(value)
+except (OSError, ValueError):
+    pass
+PY
+}
+
+fetch_latest_release_tag() {
+    # fetch_latest_release_tag: resolve the newest published stable tag.
+    # Single best-effort attempt: empty output means "unknown", and callers
+    # fall back instead of failing the run.
+    releases="$(mktemp 2>/dev/null)" || return 0
+    if ! curl -fsSL --proto '=https' --tlsv1.2 --max-redirs 3 \
+        -H 'Accept: application/vnd.github+json' \
+        -H 'User-Agent: dispatch-installer' \
+        "$RELEASES_URL" -o "$releases"; then
+        rm -f "$releases"
+        return 0
+    fi
+    if ! RELEASES="$releases" python3 - <<'PY'
+import json
+import os
+import re
+
+try:
+    with open(os.environ["RELEASES"], encoding="utf-8") as handle:
+        items = json.load(handle)
+    pattern = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._/-]{0,127}$")
+    valid = [
+        item
+        for item in items
+        if isinstance(item, dict)
+        and item.get("draft") is False
+        and item.get("prerelease") is False
+        and isinstance(item.get("tag_name"), str)
+        and pattern.fullmatch(item["tag_name"])
+    ]
+    valid.sort(key=lambda item: str(item.get("published_at") or item.get("created_at") or ""), reverse=True)
+    if not valid:
+        raise SystemExit(1)
+    print(valid[0]["tag_name"])
+except (OSError, ValueError):
+    raise SystemExit(1)
+PY
+    then
+        rm -f "$releases"
+        return 0
+    fi
+    rm -f "$releases"
+}
+
 usage() {
     cat <<'EOF'
-Usage: install.sh [--channel stable|dev] [--version TAG] [--setup|--no-setup]
+Usage: install.sh [--channel stable|dev] [--version TAG] [--setup|--no-setup] [--force]
 
 Without --channel, choose:
   1. Latest Stable
   2. Development (main)
 
+If Dispatch is already installed, install.sh acts as the updater:
+  - already current  -> reports and exits without reinstalling
+  - outdated         -> delegates to the installed CLI (update / channel)
+  - --force          -> ignores the existing installation and reinstalls
+
 --version is an explicit stable GitHub Release tag. The dev channel always
 tracks the main branch. --setup or --no-setup pre-selects the post-install
 setup prompt for non-interactive use.
 EOF
+}
+
+offer_setup() {
+    # Shared post-install tail: offer plugin/harness setup unless pre-answered.
+    case "$SETUP_MODE" in
+        yes)
+            "$HOME/.local/bin/dispatch" setup
+            ;;
+        no)
+            say_dim "Setup skipped. Run: $HOME/.local/bin/dispatch setup"
+            ;;
+        *)
+            if ( : </dev/tty ) 2>/dev/null; then
+                exec 3<>/dev/tty
+                printf '  %sNext step:%s configure plugins and your agent\n' "$C_BOLD" "$C_RESET" >&3
+                printf '\n    %s1.%s Start Setup          %s\n' "$C_ACCENT" "$C_RESET" "${C_WARN}Recommended${C_RESET}" >&3
+                printf '    %s2.%s Skip for Now\n' "$C_ACCENT" "$C_RESET" >&3
+                printf '\n  Select [1-2]: ' >&3
+                IFS= read -r setup_choice <&3 || setup_choice=2
+                case "$setup_choice" in
+                    1) "$HOME/.local/bin/dispatch" setup <&3 ;;
+                    2) say_dim "Setup skipped. Run: $HOME/.local/bin/dispatch setup" ;;
+                    *) exec 3>&-; fail 'invalid setup choice' ;;
+                esac
+                exec 3>&-
+            else
+                say_dim "No controlling terminal; setup skipped."
+                say_dim "Run later: $HOME/.local/bin/dispatch setup"
+            fi
+            ;;
+    esac
 }
 
 while [ "$#" -gt 0 ]; do
@@ -100,6 +200,10 @@ while [ "$#" -gt 0 ]; do
             ;;
         --no-setup)
             SETUP_MODE=no
+            shift
+            ;;
+        --force)
+            FORCE=1
             shift
             ;;
         --help|-h)
@@ -124,6 +228,60 @@ command -v git >/dev/null 2>&1 || fail 'git is required'
 command -v python3 >/dev/null 2>&1 || fail 'Python 3.11 through 3.13 is required'
 python3 -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < (3, 14) else 1)' \
     || fail 'Python 3.11 through 3.13 is required'
+
+# --- Smart update gate -------------------------------------------------------
+# If Dispatch is already installed here, install.sh acts as the updater:
+#   already current -> report and exit 0
+#   outdated        -> delegate to the installed CLI's update/channel actions
+#   --force         -> ignore all of this and reinstall from scratch
+LAUNCHER="$HOME/.local/bin/dispatch"
+if [ "$FORCE" -eq 0 ]; then
+    INSTALLED_COMMIT="$(record_field commit)"
+    INSTALLED_CHANNEL="$(record_field channel)"
+    if [ -n "$INSTALLED_COMMIT" ]; then
+        if [ ! -x "$LAUNCHER" ] || [ ! -f "$DISPATCH_HOME/installation.json" ]; then
+            say_warn "Existing installation is incomplete; running a fresh install"
+            # Fall through to the normal install path below.
+        else
+            TARGET_CHANNEL="$CHANNEL"
+            if [ -z "$TARGET_CHANNEL" ]; then
+                DEFAULT_CHANNEL="$(record_field default_channel)"
+                [ -n "$DEFAULT_CHANNEL" ] || DEFAULT_CHANNEL=stable
+                TARGET_CHANNEL="$DEFAULT_CHANNEL"
+            fi
+            CURRENT_REF=""
+            if [ "$TARGET_CHANNEL" = dev ]; then
+                # Compare against the live branch head; empty means unknown,
+                # which falls through to delegation (always safe for dev).
+                CURRENT_REF="$(git ls-remote "$REPOSITORY_URL" refs/heads/main 2>/dev/null | cut -f1)"
+                INSTALLED_VERSION="$INSTALLED_COMMIT"
+            else
+                CURRENT_REF="$(fetch_latest_release_tag)"
+                INSTALLED_VERSION="$(record_field ref)"
+                [ -n "$INSTALLED_VERSION" ] || INSTALLED_VERSION="$(commit12 "$INSTALLED_COMMIT")"
+            fi
+            # Only declare "up to date" for the already-installed channel;
+            # an explicit different --channel means "switch", which delegates.
+            if [ -n "$CURRENT_REF" ] && [ "$TARGET_CHANNEL" = "${INSTALLED_CHANNEL:-}" ] && [ "$CURRENT_REF" = "$INSTALLED_VERSION" ]; then
+                show_banner
+                say_ok "Dispatch $TARGET_CHANNEL is up to date ($INSTALLED_VERSION)"
+                say_dim "Reinstall anyway: install.sh --force"
+                exit 0
+            fi
+            printf 'Dispatch %s is installed (%s); updating to %s (%s) ...\n' \
+                "${INSTALLED_CHANNEL:-unknown}" "$INSTALLED_VERSION" "$TARGET_CHANNEL" "${CURRENT_REF:-latest}"
+            if [ "$TARGET_CHANNEL" = "$INSTALLED_CHANNEL" ]; then
+                "$LAUNCHER" update --channel "$TARGET_CHANNEL" || fail 'Dispatch update failed'
+            else
+                "$LAUNCHER" channel "$TARGET_CHANNEL" || fail 'Dispatch channel switch failed'
+            fi
+            show_banner
+            say_ok "Dispatch is ready → $DISPATCH_HOME ($(commit12 "$(record_field commit)"))"
+            offer_setup
+            exit 0
+        fi
+    fi
+fi
 
 if [ -z "$CHANNEL" ]; then
     if ( : </dev/tty ) 2>/dev/null; then
@@ -358,30 +516,4 @@ say_dim "───────────────────────�
 say_ok "${C_BOLD}Dispatch is ready${C_RESET} → $DISPATCH_HOME"
 printf '\n'
 
-case "$SETUP_MODE" in
-    yes)
-        "$HOME/.local/bin/dispatch" setup
-        ;;
-    no)
-        say_dim "Setup skipped. Run: $HOME/.local/bin/dispatch setup"
-        ;;
-    *)
-        if ( : </dev/tty ) 2>/dev/null; then
-            exec 3<>/dev/tty
-            printf '  %sNext step:%s configure plugins and your agent\n' "$C_BOLD" "$C_RESET" >&3
-            printf '\n    %s1.%s Start Setup          %s\n' "$C_ACCENT" "$C_RESET" "${C_WARN}Recommended${C_RESET}" >&3
-            printf '    %s2.%s Skip for Now\n' "$C_ACCENT" "$C_RESET" >&3
-            printf '\n  Select [1-2]: ' >&3
-            IFS= read -r setup_choice <&3 || setup_choice=2
-            case "$setup_choice" in
-                1) "$HOME/.local/bin/dispatch" setup <&3 ;;
-                2) say_dim "Setup skipped. Run: $HOME/.local/bin/dispatch setup" ;;
-                *) exec 3>&-; fail 'invalid setup choice' ;;
-            esac
-            exec 3>&-
-        else
-            say_dim "No controlling terminal; setup skipped."
-            say_dim "Run later: $HOME/.local/bin/dispatch setup"
-        fi
-        ;;
-esac
+offer_setup
