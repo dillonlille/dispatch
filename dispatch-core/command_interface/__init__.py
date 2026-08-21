@@ -144,7 +144,7 @@ def _auth_result(args: argparse.Namespace, *, interactive: bool) -> dict[str, An
             if profile is not None:
                 try:
                     data = authentication.profile_status(profile)
-                except AuthenticationError as exc:
+                except AuthenticationError:
                     if profile not in {item.id for item in DEFAULT_AUTH_REALMS}:
                         raise
                     data = authentication.status(profile, args.account)
@@ -182,7 +182,10 @@ def _auth_result(args: argparse.Namespace, *, interactive: bool) -> dict[str, An
                     print(f"  {index}. {item.display_name}", file=sys.stderr)
                 answer = input("Select profile type: ").strip()
                 try:
-                    policy = providers[int(answer) - 1]
+                    selection = int(answer)
+                    if not 1 <= selection <= len(providers):
+                        raise IndexError(selection)
+                    policy = providers[selection - 1]
                 except (ValueError, IndexError) as exc:
                     raise AuthenticationError("provider_selection_invalid", "profile type selection is invalid") from exc
             else:
@@ -329,6 +332,8 @@ def _plugin_result(args: argparse.Namespace) -> dict[str, Any]:
     if args.plugin_action == "health":
         request = {"action": "health"}
     elif args.plugin_action == "invoke":
+        if not isinstance(args.request, str) or len(args.request.encode("utf-8")) > 64 * 1024:
+            raise CommandInterfaceError("plugin_request_invalid", "plugin request is too large")
         try:
             request = json.loads(args.request)
         except (json.JSONDecodeError, RecursionError) as exc:
