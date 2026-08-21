@@ -24,6 +24,7 @@ from .layout import (
     atomic_json,
     read_json,
 )
+from .stage_rail import StageRail
 from .service import (
     disable_plugin_service,
     enable_plugin_service,
@@ -1107,6 +1108,15 @@ def _run_setup(layout: InstallLayout, argv: list[str] | None, *, human: bool, ru
         print(json.dumps(payload, sort_keys=True))
         return 0
     selected = list(args.plugin)
+    # Wizard surface: pin the stage rail only for interactive selection runs.
+    # StageRail self-degrades (returns False / no-ops) on non-TTY, NO_COLOR,
+    # dumb TERM, or short terminals, leaving output byte-identical.
+    rail = StageRail()
+    rail_active = False
+    if not args.yes and human and plugins:
+        rail_active = rail.begin(("Plugins", "Credentials", "Done"), current=0)
+        if rail_active:
+            rail.enter("Built-in plugins", "Choose which Dispatch plugins to enable.")
     if not args.yes:
         if not human:
             print(json.dumps({"ok": False, "action": "setup", "status": "error", "error": {"code": "confirmation_required"}}))
@@ -1132,13 +1142,25 @@ def _run_setup(layout: InstallLayout, argv: list[str] | None, *, human: bool, ru
                 selected = [plugins[index] for index in indices]
         else:
             print(ui.status_line("warn", "No built-in plugins available; continuing Core-only"))
-    result = configure_plugins(layout, selected, run=run)
-    configured, pending = _setup_auth_profiles(layout, selected, human=human)
+    try:
+        result = configure_plugins(layout, selected, run=run)
+        if rail_active:
+            rail.advance(1)
+            rail.enter("Authentication profiles", "Bind encrypted credential profiles to each plugin.")
+        configured, pending = _setup_auth_profiles(layout, selected, human=human)
+    except BaseException:
+        # Freeze, never wipe: release the region and leave every completed
+        # line visible for debugging.
+        if rail_active:
+            rail.fail()
+        raise
     if pending:
         if human:
             print("Plugin setup completed, but authentication profiles are still required:")
             for item in pending:
                 print(f"  - {item['plugin']}: {item['action']}")
+            if rail_active:
+                rail.fail()
             return 1
         print(
             json.dumps(
@@ -1163,22 +1185,29 @@ def _run_setup(layout: InstallLayout, argv: list[str] | None, *, human: bool, ru
         )
         return 1
     if human:
-        print()
-        print(ui.summary_divider())
-        print(ui.status_line("ok", "Dispatch setup complete"))
+        summary: list[str] = []
+        summary.append("")
+        summary.append(ui.summary_divider())
+        summary.append(ui.status_line("ok", "Dispatch setup complete"))
         if selected:
-            print(ui.status_line("ok", "Selected plugins", ", ".join(selected)))
+            summary.append(ui.status_line("ok", "Selected plugins", ", ".join(selected)))
         else:
-            print(ui.status_line("ok", "Selected plugins", "Core only"))
+            summary.append(ui.status_line("ok", "Selected plugins", "Core only"))
         for item in configured:
-            print(
+            summary.append(
                 ui.status_line(
                     "warn" if item.get("status") != "enrolled" else "run",
                     f"Authentication profile for {item['plugin']}",
                     f"{item['profile']} (enrolled, not yet verified)",
                 )
             )
-        print(ui.summary_divider())
+        summary.append(ui.summary_divider())
+        if rail_active:
+            rail.advance(len(("Plugins", "Credentials", "Done")) - 1)
+            rail.end(summary)
+        else:
+            for line in summary:
+                print(line)
         return 0
     print(json.dumps({"ok": True, "action": "setup", **result, "profiles": configured}, sort_keys=True))
     return 0
