@@ -13,6 +13,43 @@ fail() {
     exit 1
 }
 
+# --- Presentation helpers (degrade to plain text without a TTY / under NO_COLOR)
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ] && [ "${TERM:-}" != "dumb" ]; then
+    C_ACCENT=$(printf '\033[36m'); C_OK=$(printf '\033[32m'); C_WARN=$(printf '\033[33m'); C_DIM=$(printf '\033[2m'); C_BOLD=$(printf '\033[1m'); C_RESET=$(printf '\033[0m')
+else
+    C_ACCENT=''; C_OK=''; C_WARN=''; C_DIM=''; C_BOLD=''; C_RESET=''
+fi
+
+commit12() {
+    # first 12 characters of the resolved commit (portable, no string slicing)
+    printf '%s' "$1" | cut -c1-12
+}
+
+say_ok()   { printf '  %s✓%s %s\n' "$C_OK" "$C_RESET" "$*"; }
+say_run()  { printf '  %s●%s %s\n' "$C_ACCENT" "$C_RESET" "$*"; }
+say_warn() { printf '  %s⚠%s %s\n' "$C_WARN" "$C_RESET" "$*"; }
+say_dim()  { printf '  %s%s%s\n' "$C_DIM" "$*" "$C_RESET"; }
+
+show_banner() {
+    printf '\n'
+    printf '  %s╭────────────────────────────────╮%s\n' "$C_ACCENT" "$C_RESET"
+    printf '  %s│%s                                %s│%s\n' "$C_ACCENT" "$C_RESET" "" "$C_RESET"
+    printf '  %s│%s      %s◆  D I S P A T C H%s        %s│%s\n' "$C_ACCENT" "$C_RESET" "$C_BOLD" "$C_RESET" "" "$C_RESET"
+    printf '  %s│%s   Your operations platform     %s│%s\n' "$C_ACCENT" "$C_RESET" "" "$C_RESET"
+    printf '  %s│%s                                %s│%s\n' "$C_ACCENT" "$C_RESET" "" "$C_RESET"
+    printf '  %s╰────────────────────────────────╯%s\n' "$C_ACCENT" "$C_RESET"
+    printf '\n'
+}
+
+show_channel_menu() {
+    printf '\n  %sSelect installation channel%s\n\n' "$C_BOLD" "$C_RESET"
+    printf '    %s1.%s Latest Stable          %s\n' "$C_ACCENT" "$C_RESET" "${C_WARN}Recommended${C_RESET}"
+    say_dim "       Newest published release. Most reliable."
+    printf '    %s2.%s Development (main)\n' "$C_ACCENT" "$C_RESET"
+    say_dim "       Current main branch. Freshest, less tested."
+    printf '\n'
+}
+
 retry() {
     # retry <description> <command...>: run command with bounded retries
     description="$1"; shift
@@ -91,7 +128,8 @@ python3 -c 'import sys; raise SystemExit(0 if (3, 11) <= sys.version_info[:2] < 
 if [ -z "$CHANNEL" ]; then
     if ( : </dev/tty ) 2>/dev/null; then
         exec 3<>/dev/tty
-        printf '\nDispatch installation channel:\n1. Latest Stable\n2. Development (main)\nSelect [1-2]: ' >&3
+        show_channel_menu >&3
+        printf '  Select [1-2]: ' >&3
         IFS= read -r choice <&3 || choice=1
         exec 3>&-
         case "$choice" in
@@ -278,6 +316,9 @@ else
     ref=main
 fi
 
+show_banner
+say_ok "System requirements met"
+say_run "Verifying installation paths ..."
 printf 'Cloning Dispatch %s (%s) ...\n' "$CHANNEL" "$ref"
 if [ "$CHANNEL" = stable ]; then
     retry 'could not clone the Dispatch repository' \
@@ -291,44 +332,56 @@ else
         git clone --single-branch --branch main "$REPOSITORY_URL" "$clone"
 fi
 resolved_commit="$(git -C "$clone" rev-parse HEAD)"
-printf 'Resolved commit: %s\n' "$resolved_commit"
+say_ok "Fetched ${CHANNEL} at commit $(commit12 "$resolved_commit")"
 
 printf '%s\n' 'Installing Dispatch dependencies and activating the user service ...'
+say_run "Installing dependencies and browser (this can take a few minutes) ..."
 if [ "$CHANNEL" = stable ]; then
     python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from dispatch_installer.cli import main; raise SystemExit(main())' \
         "$clone/installer/src" \
         --dispatch-home "$DISPATCH_HOME" \
-        install --clone "$clone" --channel stable --version "$ref" --yes \
+        install --clone "$clone" --channel stable --version "$ref" --yes >/dev/null \
         || fail 'Dispatch installation failed'
 else
     python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from dispatch_installer.cli import main; raise SystemExit(main())' \
         "$clone/installer/src" \
         --dispatch-home "$DISPATCH_HOME" \
-        install --clone "$clone" --channel dev --yes \
+        install --clone "$clone" --channel dev --yes >/dev/null \
         || fail 'Dispatch installation failed'
 fi
+say_ok "Installed ${CHANNEL} ($(commit12 "$resolved_commit"))"
+say_ok "Launcher ready at ~/.local/bin/dispatch"
+say_ok "User service active"
 
-printf '\nDispatch %s is installed in %s.\n' "$CHANNEL" "$DISPATCH_HOME"
+printf '\n'
+say_dim "──────────────────────────────────────────────"
+say_ok "${C_BOLD}Dispatch is ready${C_RESET} → $DISPATCH_HOME"
+printf '\n'
+
 case "$SETUP_MODE" in
     yes)
         "$HOME/.local/bin/dispatch" setup
         ;;
     no)
-        printf '%s\n' "Setup skipped. Run $HOME/.local/bin/dispatch setup when ready."
+        say_dim "Setup skipped. Run: $HOME/.local/bin/dispatch setup"
         ;;
     *)
         if ( : </dev/tty ) 2>/dev/null; then
             exec 3<>/dev/tty
-            printf '1. Start Setup\n2. Skip for Now\nSelect [1-2]: ' >&3
+            printf '  %sNext step:%s configure plugins and your agent\n' "$C_BOLD" "$C_RESET" >&3
+            printf '\n    %s1.%s Start Setup          %s\n' "$C_ACCENT" "$C_RESET" "${C_WARN}Recommended${C_RESET}" >&3
+            printf '    %s2.%s Skip for Now\n' "$C_ACCENT" "$C_RESET" >&3
+            printf '\n  Select [1-2]: ' >&3
             IFS= read -r setup_choice <&3 || setup_choice=2
             case "$setup_choice" in
                 1) "$HOME/.local/bin/dispatch" setup <&3 ;;
-                2) printf '%s\n' "Setup skipped. Run $HOME/.local/bin/dispatch setup when ready." ;;
+                2) say_dim "Setup skipped. Run: $HOME/.local/bin/dispatch setup" ;;
                 *) exec 3>&-; fail 'invalid setup choice' ;;
             esac
             exec 3>&-
         else
-            printf '%s\n' "No controlling terminal; setup skipped. Run $HOME/.local/bin/dispatch setup when ready."
+            say_dim "No controlling terminal; setup skipped."
+            say_dim "Run later: $HOME/.local/bin/dispatch setup"
         fi
         ;;
 esac

@@ -218,7 +218,7 @@ def test_interactive_setup_renders_a_profile_only_summary(monkeypatch, capsys) -
         human=True,
     ) == 0
     output = capsys.readouterr().out
-    assert "Dispatch setup is complete." in output
+    assert "Dispatch setup complete" in output
     assert "amazon-main (enrolled, not yet verified)" in output
     assert "amazon-operations" not in output
     assert "site_packages" not in output
