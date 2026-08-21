@@ -221,6 +221,11 @@ class EncryptedCredentialStore:
     def _key(self, *, create: bool) -> bytes | None:
         key_present = self.key_file.exists() or self.key_file.is_symlink()
         vault_present = self.vault_file.exists() or self.vault_file.is_symlink()
+        if vault_present and not key_present:
+            # The key may live in the OS keyring instead of on disk.
+            ring_key = self._key_from_ring()
+            if ring_key is not None:
+                return ring_key
         if key_present:
             key = _safe_private_file(self.key_file, maximum_size=128)
             try:
@@ -233,8 +238,43 @@ class EncryptedCredentialStore:
         if not create:
             return None
         key = Fernet.generate_key()
-        _atomic_private_file(self.key_file, key)
+        if not self._key_to_ring(key):
+            _atomic_private_file(self.key_file, key)
         return key
+
+    @staticmethod
+    def _key_from_ring() -> bytes | None:
+        """Best-effort read of the vault key from the OS keyring."""
+
+        try:
+            import importlib
+
+            keyring_store = importlib.import_module("authentication.keyring")
+            if not keyring_store.available():
+                return None
+            return keyring_store.load()
+        except Exception:
+            return None
+
+    def _key_to_ring(self, key: bytes) -> bool:
+        """Move the key into the OS keyring when one is available.
+
+        Returns True when the keyring now holds the key; any pre-existing
+        on-disk ``vault.key`` is removed so exactly one copy remains. Falls
+        back to False (file storage) when no usable keyring exists.
+        """
+
+        try:
+            import importlib
+
+            keyring_store = importlib.import_module("authentication.keyring")
+            if not keyring_store.available():
+                return False
+            keyring_store.store(key)
+        except Exception:
+            return False
+        self.key_file.unlink(missing_ok=True)
+        return True
 
     def _load(self) -> dict[str, Any]:
         if not self.root.exists() and not self.root.is_symlink():

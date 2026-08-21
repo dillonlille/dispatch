@@ -3,12 +3,38 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import stat
+import types
 
 import pytest
 
 from authentication import AuthenticationError, AuthenticationManager
 from browser_manager import ManagedBrowserSession
 from paths import DispatchPaths
+
+
+class FakeKeyring:
+    """In-memory stand-in for the OS Secret Service."""
+
+    def __init__(self) -> None:
+        self.items: dict[str, bytes] = {}
+        self.available = True
+        self.fail_store = False
+
+    def install(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        module = types.ModuleType("authentication.keyring")
+        module.available = lambda: self.available
+        module.load = lambda: next(iter(self.items.values()), None)
+        module.store = self._store
+        module.delete = self._delete
+        monkeypatch.setitem(__import__("sys").modules, "authentication.keyring", module)
+
+    def _store(self, key: bytes) -> None:
+        if self.fail_store:
+            raise RuntimeError("synthetic keyring failure")
+        self.items["vault-key"] = key
+
+    def _delete(self) -> None:
+        self.items.clear()
 
 
 def manager(tmp_path: Path) -> AuthenticationManager:
@@ -76,6 +102,73 @@ def test_invalid_fields_fail_closed_and_remove_is_idempotent(tmp_path: Path) -> 
             {"username": "replacement-user", "password": "replacement-password"},
         )
     assert duplicate.value.code == "profile_exists"
+
+
+def test_vault_key_prefers_keyring_and_removes_disk_copy(monkeypatch, tmp_path: Path) -> None:
+    ring = FakeKeyring()
+    ring.install(monkeypatch)
+    authentication = manager(tmp_path)
+
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll("amazon-operations", "default", values)
+
+    assert len(ring.items) == 1
+    assert not (authentication.store_root / "vault.key").exists()
+    assert authentication.credentials("amazon-operations").values == values
+
+
+def test_vault_falls_back_to_disk_without_a_keyring(monkeypatch, tmp_path: Path) -> None:
+    ring = FakeKeyring()
+    ring.available = False
+    ring.install(monkeypatch)
+    authentication = manager(tmp_path)
+
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll("amazon-operations", "default", values)
+
+    assert not ring.items
+    key_file = authentication.store_root / "vault.key"
+    assert stat.S_IMODE(key_file.stat().st_mode) == 0o600
+    assert authentication.credentials("amazon-operations").values == values
+
+
+def test_keyring_failure_during_creation_falls_back_to_disk(monkeypatch, tmp_path: Path) -> None:
+    ring = FakeKeyring()
+    ring.fail_store = True
+    ring.install(monkeypatch)
+    authentication = manager(tmp_path)
+
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll("amazon-operations", "default", values)
+
+    assert not ring.items
+    assert (authentication.store_root / "vault.key").exists()
+    assert authentication.credentials("amazon-operations").values == values
+
+
+def test_existing_disk_key_is_used_when_no_keyring_holds_it(monkeypatch, tmp_path: Path) -> None:
+    ring = FakeKeyring()
+    ring.install(monkeypatch)
+    authentication = manager(tmp_path)
+    # Enroll with no keyring available so the key lands on disk...
+    ring.available = False
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll("amazon-operations", "default", values)
+    # ...then make the keyring appear and verify the disk key still decrypts.
+    ring.available = True
+
+    assert authentication.credentials("amazon-operations").values == values
+
+
+def test_disk_key_still_works_end_to_end_after_keyring_appears(monkeypatch, tmp_path: Path) -> None:
+    ring = FakeKeyring()
+    ring.install(monkeypatch)
+    authentication = manager(tmp_path)
+    ring.available = False
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll("amazon-operations", "default", values)
+    ring.available = True
+
     assert authentication.credentials("amazon-operations").values["username"] == "synthetic-user"
     assert authentication.remove("amazon-operations")["status"] == "removed"
     assert authentication.remove("amazon-operations")["status"] == "not_enrolled"
