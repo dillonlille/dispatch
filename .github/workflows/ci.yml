@@ -58,5 +58,17 @@ jobs:
           shellcheck install.sh
           sh -n install.sh
 
+      - name: Shell-check plugin lifecycle scripts
+        run: |
+          for script in plugins/paycom/scripts/*; do
+            shellcheck "$script"
+            sh -n "$script"
+          done
+
+      - name: Run Paycom plugin tests through its lifecycle scripts
+        run: |
+          plugins/paycom/scripts/test
+          plugins/paycom/scripts/verify
+
       - name: Smoke-run the source Core command
         run: python dispatch-core --help
