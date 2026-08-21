@@ -15,6 +15,7 @@ import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+from . import ui
 from .layout import (
     InstallLayout,
     InstallerError,
@@ -1110,10 +1111,13 @@ def _run_setup(layout: InstallLayout, argv: list[str] | None, *, human: bool, ru
         if not human:
             print(json.dumps({"ok": False, "action": "setup", "status": "error", "error": {"code": "confirmation_required"}}))
             return 1
-        print("Available built-in plugins:")
+        print()
+        print(ui.bold("  Built-in plugins"))
+        print()
         for index, plugin_id in enumerate(plugins, start=1):
-            print(f"  {index}. {plugin_id}")
-        answer = input("Select plugin numbers separated by commas, or press Enter for Core only: ").strip()
+            print(f"    {ui.accent(str(index))}. {ui.bold(plugin_id)}")
+        print()
+        answer = input("  Select plugin numbers separated by commas, or press Enter for Core only: ").strip()
         if answer:
             try:
                 indexes = [int(value.strip()) for value in answer.split(",")]
@@ -1153,16 +1157,22 @@ def _run_setup(layout: InstallLayout, argv: list[str] | None, *, human: bool, ru
         )
         return 1
     if human:
-        print("Dispatch setup is complete.")
+        print()
+        print(ui.summary_divider())
+        print(ui.status_line("ok", "Dispatch setup complete"))
         if selected:
-            print(f"Selected plugins: {', '.join(selected)}")
+            print(ui.status_line("ok", "Selected plugins", ", ".join(selected)))
         else:
-            print("Selected plugins: Core only")
+            print(ui.status_line("ok", "Selected plugins", "Core only"))
         for item in configured:
             print(
-                f"Authentication profile for {item['plugin']}: "
-                f"{item['profile']} (enrolled, not yet verified)"
+                ui.status_line(
+                    "warn" if item.get("status") != "enrolled" else "run",
+                    f"Authentication profile for {item['plugin']}",
+                    f"{item['profile']} (enrolled, not yet verified)",
+                )
             )
+        print(ui.summary_divider())
         return 0
     print(json.dumps({"ok": True, "action": "setup", **result, "profiles": configured}, sort_keys=True))
     return 0
