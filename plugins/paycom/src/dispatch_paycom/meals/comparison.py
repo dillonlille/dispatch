@@ -29,7 +29,7 @@ def parse_clock(value: object) -> int | None:
     if not 1 <= hour <= 12 or minute > 59:
         return None
     if match.group(3).upper() == "PM":
-        hour = 0 if hour == 12 else hour + 12
+        hour = 12 if hour == 12 else hour + 12
     elif hour == 12:
         hour = 0
     return hour * 60 + minute

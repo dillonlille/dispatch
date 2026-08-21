@@ -1,7 +1,7 @@
 schema_version: 1
 id: paycom
 display_name: Dispatch Paycom
-version: 0.1.0
+version: 0.1.1
 summary: Read-only Paycom meal comparison and audit actions plus two Core-managed authenticated collectors.
 owner:
   data: paycom
