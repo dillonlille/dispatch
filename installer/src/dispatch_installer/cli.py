@@ -50,6 +50,15 @@ def _parser() -> argparse.ArgumentParser:
     setup.add_argument("--plugin", action="append", default=[])
     setup.add_argument("--list", action="store_true")
     setup.add_argument("--yes", action="store_true")
+    harness_setup = actions.add_parser(
+        "harness-setup",
+        help="select, install, and configure an agent harness profile",
+    )
+    harness_setup.add_argument(
+        "--install-harness",
+        action="store_true",
+        help="authorize installing the harness if it is absent (supply-chain action)",
+    )
     plugin_service = actions.add_parser("plugin-service", help="operate an exactly generated plugin service")
     plugin_service.add_argument("operation", choices=("status", "enable", "disable"))
     plugin_service.add_argument("plugin_id")
@@ -145,6 +154,24 @@ def main(argv: list[str] | None = None) -> int:
                     [*(f"--plugin={plugin}" for plugin in args.plugin), *( ["--list"] if args.list else []), *( ["--yes"] if args.yes or args.json else [])],
                     human=not args.json and not args.yes,
                 )
+        if args.action == "harness-setup":
+            from .harness_setup import run_harness_setup
+
+            with installation_lock(layout):
+                result = run_harness_setup(
+                    layout,
+                    human=not args.json and not args.yes,
+                    allow_install=args.install_harness,
+                )
+            pending = result.pending
+            _emit(
+                not pending,
+                "harness-setup",
+                "pending_requirements" if pending else str(result.as_dict().get("profile") and "ready" or "skipped"),
+                result.as_dict(),
+                {"code": "harness_pending", "message": "harness setup has pending requirements"} if pending else None,
+            )
+            return 0 if not pending else 1
         if args.action == "plugin-service":
             if read_installation(layout) is None:
                 raise InstallerError("installation_missing", "Dispatch is not installed")
