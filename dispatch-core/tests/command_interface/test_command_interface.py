@@ -78,6 +78,54 @@ def test_profile_cli_uses_public_type_names_and_hidden_credentials(monkeypatch, 
     assert duplicate["error"]["code"] == "profile_exists"
 
     assert main(["auth", "list"]) == 0
+
+
+def test_interactive_provider_selection_rejects_out_of_range_indices(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+    prompted = iter(["0", "-3", "99", "not-a-number"])
+
+    def fake_input(_prompt: str) -> str:
+        return next(prompted)
+
+    monkeypatch.setattr("builtins.input", fake_input)
+    monkeypatch.setattr(
+        command_interface.getpass,
+        "getpass",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("secret prompt must not run for invalid selection")),
+    )
+
+    assert main(["auth", "add", "amazon-main"]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "provider_selection_invalid"
+
+
+def test_plugin_invoke_request_is_size_bounded(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+
+    oversized = json.dumps({"action": "lookup", "question": "x" * (70 * 1024)})
+    assert main(["plugin", "invoke", "example", "--request", oversized]) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "plugin_request_invalid"
+
+
+def test_profile_cli_lists_enrolled_profiles_with_public_type_names(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+    secrets = iter(["synthetic-user", "synthetic-password"])
+    monkeypatch.setattr(command_interface.getpass, "getpass", lambda _prompt: next(secrets))
+
+    assert main(["auth", "add", "amazon-main", "--provider", "amazon"]) == 0
+    capsys.readouterr()
+
+    assert main(["auth", "list"]) == 0
     listed = json.loads(capsys.readouterr().out)
     assert listed["data"]["profiles"][0]["profile"] == "amazon-main"
     assert listed["data"]["profiles"][0]["type_name"] == "Amazon Operations"

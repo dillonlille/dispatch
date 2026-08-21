@@ -24,6 +24,7 @@ from .models import (
 from .runtime_authority import (
     BrowserRuntimeAuthority,
     BrowserRuntimeIdentity,
+    VerifiedBrowserInstallation,
 )
 
 

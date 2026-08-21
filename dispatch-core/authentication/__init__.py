@@ -688,7 +688,7 @@ class AuthenticationManager:
             raise AuthenticationError("profile_provider_mismatch", "profile is enrolled for another provider")
         if existing is not None:
             raise AuthenticationError("profile_exists", "authentication profile already exists")
-        account_alias = profile if existing is None else str(existing["account_alias"])
+        account_alias = profile
         self._store.put_profile(profile, provider, account_alias, normalized)
         if plugin_id is not None:
             self.bind_profile(profile, plugin_id, provider)

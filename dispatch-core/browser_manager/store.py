@@ -198,8 +198,9 @@ class LeaseStore:
                     )
             connection.executescript(_SCHEMA)
             connection.execute(
-                "INSERT INTO metadata(key, value) VALUES('schema_version', '4') "
-                "ON CONFLICT(key) DO NOTHING"
+                "INSERT INTO metadata(key, value) VALUES('schema_version', ?) "
+                "ON CONFLICT(key) DO NOTHING",
+                (_SCHEMA_VERSION,),
             )
             columns = {
                 str(row[1])

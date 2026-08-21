@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import timedelta
 from pathlib import Path
 import secrets
 
@@ -13,7 +13,6 @@ from .models import (
     BrowserLease,
     BrowserLeaseRequest,
     BrowserManagerError,
-    BrowserMode,
     LeaseState,
     ManagedBrowserSession,
     TERMINAL_STATES,
@@ -23,7 +22,6 @@ from .policy import RealmRegistry
 from .runtime import (
     BrowserLayout,
     BrowserRuntime,
-    FileLock,
     LeaseLocks,
     PlaywrightRuntime,
     RuntimeHandle,
