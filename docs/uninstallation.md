@@ -1,6 +1,6 @@
 # Dispatch uninstallation
 
-Dispatch uninstallation removes application code and disposable runtime material while preserving durable private data by default. It never removes Hermes, unrelated files, another user's installation, or shared operating-system packages.
+Dispatch uninstallation removes application code and disposable runtime material while preserving durable private data by default. It never removes Hermes, unrelated files, another user's installation, or shared operating-system packages. When a harness was explicitly selected, uninstall additionally offers removal of exactly the Dispatch-created harness profile and recorded artifacts (see `harness-integration.md`); the harness installation itself always remains.
 
 ## Commands
 
