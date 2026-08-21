@@ -137,6 +137,11 @@ def select_menu(
         interactive = sys.stdin.isatty()
     if not interactive:
         return None
+    if _arrow_single_select is not None:
+        # Raw-mode arrow navigation installed by dispatch_installer.interactive.
+        return _arrow_single_select(
+            title, options, recommended=recommended, input_fn=input_fn, interactive=interactive
+        )
     while True:
         try:
             raw = input_fn("  Select [1-" + str(len(options)) + "]: ").strip()
@@ -145,6 +150,9 @@ def select_menu(
         if raw.isdigit() and 1 <= int(raw) <= len(options):
             return int(raw) - 1
         print(f"  {error('Invalid selection.')}")
+
+
+_arrow_single_select = None  # installed by dispatch_installer.interactive
 
 
 @dataclass(slots=True)

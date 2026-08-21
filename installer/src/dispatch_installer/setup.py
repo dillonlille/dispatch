@@ -15,7 +15,7 @@ import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
-from . import ui
+from . import interactive, ui
 from .layout import (
     InstallLayout,
     InstallerError,
@@ -1111,21 +1111,24 @@ def _run_setup(layout: InstallLayout, argv: list[str] | None, *, human: bool, ru
         if not human:
             print(json.dumps({"ok": False, "action": "setup", "status": "error", "error": {"code": "confirmation_required"}}))
             return 1
-        print()
-        print(ui.bold("  Built-in plugins"))
-        print()
-        for index, plugin_id in enumerate(plugins, start=1):
-            print(f"    {ui.accent(str(index))}. {ui.bold(plugin_id)}")
-        print()
-        answer = input("  Select plugin numbers separated by commas, or press Enter for Core only: ").strip()
-        if answer:
-            try:
-                indexes = [int(value.strip()) for value in answer.split(",")]
-                if any(index < 1 or index > len(plugins) for index in indexes):
-                    raise ValueError
-                selected = [plugins[index - 1] for index in indexes]
-            except ValueError as exc:
-                raise InstallerError("plugin_selection_invalid", "plugin selection is invalid") from exc
+        if plugins:
+            print()
+            print(ui.bold("  Built-in plugins"))
+            indices = interactive.multi_select_menu(
+                "Select plugins to enable",
+                [(plugin_id, "") for plugin_id in plugins],
+                hint="↑↓ move · space select · enter confirm · empty = Core only",
+                interactive=True,
+            )
+            if indices is None:
+                # Arrow keys unavailable (piped/CI/limited SSH): numbered fallback
+                print()
+                answer = input("  Select plugin numbers separated by commas, or press Enter for Core only: ").strip()
+                selected = interactive.parse_plugin_selection(answer, plugins)
+            else:
+                selected = [plugins[index] for index in indices]
+        else:
+            print(ui.status_line("warn", "No built-in plugins available; continuing Core-only"))
     result = configure_plugins(layout, selected, run=run)
     configured, pending = _setup_auth_profiles(layout, selected, human=human)
     if pending:
