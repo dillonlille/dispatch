@@ -43,8 +43,37 @@ def _physical_file(path: Path, *, must_exist: bool) -> None:
         raise IndexError("index path must be a regular file")
 
 
+def _reject_live_wal(path: Path) -> None:
+    """Refuse to read an index with a live write-ahead-log sidecar.
+
+    Indexes are built in journal_mode=DELETE. A -wal/-shm sibling means the
+    database is being written concurrently, and immutable read-only
+    connections could observe a torn snapshot.
+    """
+    for suffix in ("-wal", "-shm"):
+        sidecar = path.with_name(path.name + suffix)
+        if sidecar.is_symlink() or sidecar.exists():
+            raise IndexError("index has a live write-ahead log; refusing to read")
+
+
+def _reject_parent_symlink(path: Path) -> None:
+    """Reject symlinked ancestor directories (mirrors build_index's parent check)."""
+    parent = path.parent
+    if parent.is_symlink() or parent.resolve(strict=False) != parent:
+        raise IndexError("index parent must be a physical directory")
+
+
+def _unchanged_during(stat_before: os.stat_result, stat_after: os.stat_result) -> bool:
+    return (stat_before.st_ino, stat_before.st_dev, stat_before.st_size) == (
+        stat_after.st_ino,
+        stat_after.st_dev,
+        stat_after.st_size,
+    )
+
+
 def _connect(path: Path, *, readonly: bool = False) -> sqlite3.Connection:
     if readonly:
+        _reject_live_wal(path)
         uri = f"file:{path.as_posix()}?mode=ro&immutable=1"
         connection = sqlite3.connect(uri, uri=True)
         connection.execute("PRAGMA query_only=ON")
@@ -204,6 +233,7 @@ def _read_metadata(connection: sqlite3.Connection) -> dict[str, Any]:
 
 def verify_index(path: Path) -> dict[str, Any]:
     _physical_file(path, must_exist=True)
+    _reject_parent_symlink(path)
     if stat.S_IMODE(path.stat().st_mode) & 0o077:
         raise IndexError("index permissions are not owner-only")
     try:
@@ -250,19 +280,29 @@ def _fts_expression(question: str) -> str:
     return " OR ".join(f'"{token}"' for token in tokens[:32])
 
 
+def has_searchable_terms(question: str) -> bool:
+    """True when the question yields at least one searchable FTS token."""
+    return any(len(token) >= 2 for token in _QUERY_TOKEN.findall(question.casefold()))
+
+
 def search_fts(path: Path, question: str, *, limit: int = 20) -> list[dict[str, Any]]:
     _physical_file(path, must_exist=True)
+    _reject_parent_symlink(path)
+    verify_index(path)
     if not isinstance(limit, int) or not 1 <= limit <= 50:
         raise IndexError("FTS result limit is invalid")
     expression = _fts_expression(question)
     try:
         with closing(_connect(path, readonly=True)) as connection:
+            stat_before = path.stat()
             rows = connection.execute(
                 """SELECT c.*, bm25(chunks_fts, 0.0, 3.0, 1.0) AS rank
                    FROM chunks_fts JOIN chunks c ON c.chunk_id=chunks_fts.chunk_id
                    WHERE chunks_fts MATCH ? ORDER BY rank, c.chunk_id LIMIT ?""",
                 (expression, limit),
             ).fetchall()
+            if not _unchanged_during(stat_before, path.stat()):
+                raise IndexError("index changed during query; retry the request")
     except sqlite3.Error as exc:
         raise IndexError("keyword search failed") from exc
     result = []
@@ -277,13 +317,17 @@ def search_fts(path: Path, question: str, *, limit: int = 20) -> list[dict[str, 
 
 def list_sections(path: Path) -> dict[str, Any]:
     """Return the verified section inventory without mutating the index."""
+    _reject_parent_symlink(path)
     verified = verify_index(path)
     try:
         with closing(_connect(path, readonly=True)) as connection:
+            stat_before = path.stat()
             rows = connection.execute(
                 """SELECT section_id, section_title, MIN(physical_pages_json) AS first_pages
                    FROM chunks GROUP BY section_id, section_title ORDER BY MIN(rowid)"""
             ).fetchall()
+            if not _unchanged_during(stat_before, path.stat()):
+                raise IndexError("index changed during query; retry the request")
     except sqlite3.Error as exc:
         raise IndexError("section inventory read failed") from exc
     return {
