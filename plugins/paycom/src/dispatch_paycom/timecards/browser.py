@@ -12,6 +12,11 @@ class TimecardBrowserError(RuntimeError):
     pass
 
 
+def _looks_like_login_redirect(url: str) -> bool:
+    lowered = url.lower()
+    return "login" in lowered or "signin" in lowered or "sso" in lowered or "auth" in lowered
+
+
 @dataclass(frozen=True, slots=True)
 class TimecardCapture:
     employee_code: str
@@ -75,8 +80,14 @@ def capture_timecard(page: Any, *, employee_code: str, period: Period, variant: 
     except Exception as exc:
         raise TimecardBrowserError("timecard_navigation_failed") from exc
     current_url = getattr(page, "url", None)
-    if isinstance(current_url, str) and current_url and current_url != target:
+    if not isinstance(current_url, str) or not current_url:
         raise TimecardBrowserError("timecard_navigation_policy_violation")
+    if current_url != target:
+        # A session-expiry redirect lands on the login page rather than the
+        # requested timecard URL; surface that as an actionable signal.
+        raise TimecardBrowserError(
+            "timecard_authentication_required" if _looks_like_login_redirect(current_url) else "timecard_navigation_policy_violation"
+        )
     response_html = None
     if response is not None:
         response_url = getattr(response, "url", target)

@@ -133,6 +133,7 @@ def collect_roster(
     collected_at = (now or datetime.now(timezone.utc)).astimezone(timezone.utc).isoformat()
     with _collector_lock(artifact_root):
         artifact = None
+        retained = False
         try:
             source = capture(page, period=period, target=target)
             if not isinstance(source, bytes):
@@ -147,13 +148,17 @@ def collect_roster(
                     raise RosterCollectorError("post_verification_failed")
             finally:
                 store.close()
+            retained = True
             if publication.disposition == "already_current":
                 return CollectionReceipt(CollectionDisposition.SKIPPED_EXISTING, publication.run_id, 0, True)
             return CollectionReceipt(CollectionDisposition.PUBLISHED, publication.run_id, 1, True)
         except (RosterBrowserError, RosterStorageError, ValueError) as exc:
             raise RosterCollectorError(str(exc)) from exc
         finally:
-            if artifact is not None and artifact.directory.exists():
+            # Retain the staged artifact once the run is published: storage
+            # persists artifact_path/manifest_sha256 referencing it, so the
+            # raw source must survive for post-hoc verification/audit.
+            if not retained and artifact is not None and artifact.directory.exists():
                 discard_roster_artifact(artifact)
 
 

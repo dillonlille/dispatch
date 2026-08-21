@@ -294,7 +294,11 @@ def test_timecard_runner_publishes_all_fourteen_days(tmp_path):
     with sqlite3.connect(tmp_path / "timecards.sqlite3") as connection:
         assert connection.execute("SELECT COUNT(*) FROM days").fetchone()[0] == 14
     assert page.gotos == [build_timecard_url("A001", period_from_end("2026-08-22"), 1)]
-    assert not [path for path in (tmp_path / "timecard-data").rglob("*") if path.is_file() and path.name != ".collector.lock"]
+    # Published runs retain their sealed artifact: runs/employee_timecards
+    # persist artifact_directory/html_path/json_path for post-hoc audit.
+    retained = [path for path in (tmp_path / "timecard-data" / "artifacts").rglob("*") if path.is_file()]
+    assert retained and any(path.name == "A001.html" for path in retained)
+    assert not list((tmp_path / "timecard-data").rglob(".staging-*"))
 
 
 def test_timecard_rejects_unknown_parameter_and_non_boolean_replace_before_capture(tmp_path):
