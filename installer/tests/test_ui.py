@@ -108,7 +108,14 @@ def test_select_menu_eof_returns_none(no_color, monkeypatch):
         def isatty(self) -> bool:
             return True
 
+        def fileno(self) -> int:
+            return 0
+
     monkeypatch.setattr(ui.sys, "stdin", FakeStdin())
+    # Force the numbered-fallback path: raw arrow mode cannot initialize on a
+    # fake stdin, and the interactive-module hook (if installed by a prior
+    # import in the same session) must not intercept this EOF contract.
+    monkeypatch.setattr(ui, "_arrow_single_select", None)
     assert ui.select_menu("Pick", [("a", "")], input_fn=raise_eof, interactive=True) is None
 
 

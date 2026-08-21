@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from dispatch_installer import harness_setup
+from dispatch_installer import harness_setup, interactive, ui
 from dispatch_installer.harness import HARNESS_CATALOG, DetectionResult, write_selection
 from dispatch_installer.layout import InstallerError
 
@@ -108,6 +108,9 @@ def test_interactive_absent_harness_declined_stays_pending(layout, monkeypatch):
         "detect_harness",
         lambda spec: DetectionResult("absent"),
     )
+    # Numbered fallback path (no raw-mode arrows under pytest capture)
+    monkeypatch.setattr(interactive, "_arrow_keys_available", lambda: False)
+    monkeypatch.setattr(ui, "_arrow_single_select", None)
     answers = iter(["1", "2"])  # select hermes, decline install
     result = harness_setup.run_harness_setup(layout, human=True, input_fn=lambda _p: next(answers))
     assert result.selected is True
