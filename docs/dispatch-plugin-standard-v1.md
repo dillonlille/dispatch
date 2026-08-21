@@ -79,6 +79,21 @@ capabilities = ["read_local_data"]
 
 The `dispatch.plugins` group contains exactly one entry named by the ID. The target is a callable accepting one bounded JSON object and returning the exact response envelope. The plugin retains control of its normal `[project.dependencies]`.
 
+Authenticated plugins must add one install-validated required profile in
+`[tool.dispatch.authentication]` for this v1 iteration:
+
+```toml
+[tool.dispatch.authentication]
+required_profiles = [{ provider = "amazon-operations" }]
+```
+
+The list has at most one item. Its only field is a Core provider identifier;
+plugin metadata must not provide URLs, selectors, credential fields, or other
+authentication policy. The closed Core catalog currently supports
+`amazon-operations` and `paycom-client`. Query-only plugins declare an empty
+list. Installer validation and the source policy audit reject unknown
+providers or extra metadata.
+
 A plugin declaring the `collect` capability additionally publishes exactly one
 same-ID collector provider:
 
@@ -159,11 +174,24 @@ approved coordinator concern. Slack/Discord credentials belong to a reviewed
 delivery boundary. Long-running services and auth providers document privilege
 and private data boundaries explicitly.
 
+Core's profile registry is a non-secret projection over the encrypted vault.
+Existing legacy provider/account records remain readable and are reconciled
+without re-entering credentials. A named profile may be reused by compatible
+plugins, while browser state remains isolated by the existing provider/plugin
+/internal-alias layout. Credentials never cross a CollectionContext or JSON
+boundary; service plugins should use Core's plugin-scoped authentication broker.
+
 Selection does not implicitly enable a long-running service. Setup installs the
 approved dependency closure and standard source package, then publishes a disabled,
 exactly generated service projection. Configuration and service enablement remain
 explicit operations. Update, repair, channel switching, deselection, uninstall,
 and rollback must account for every enabled plugin service.
+
+Interactive setup performs profile selection only after exact plugin selection
+and installation succeed. It reuses a compatible named profile or creates one
+with hidden Core-owned provider prompts. `--yes`, JSON, and other noninteractive
+setup paths never prompt for secrets and return actionable pending requirements
+when an authenticated selection lacks an enrolled profile.
 
 ## 6. Hermes contract
 

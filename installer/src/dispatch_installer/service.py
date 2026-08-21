@@ -180,6 +180,66 @@ def prepare_plugin_service(layout: InstallLayout, plugin_id: str) -> dict[str, o
     return _write_plugin_service(layout, plugin_id)
 
 
+def _require_selected_auth_profile(manager: object, plugin_id: str, provider: str) -> None:
+    try:
+        manager.profile_for_plugin(plugin_id, provider)  # type: ignore[attr-defined]
+    except Exception:
+        compatible = manager.compatible_profiles(provider)  # type: ignore[attr-defined]
+        if len(compatible) != 1 or not isinstance(compatible[0].get("profile"), str):
+            raise
+        manager.bind_profile(str(compatible[0]["profile"]), plugin_id, provider)  # type: ignore[attr-defined]
+
+
+def _require_plugin_auth_profile(layout: InstallLayout, plugin_id: str) -> None:
+    """Require each install-validated profile before a service may start."""
+    from .setup import load_plugin_config
+
+    config = load_plugin_config(layout)
+    required: list[dict[str, object]] = []
+    for plugin in config.get("plugins", []):
+        if isinstance(plugin, dict) and plugin.get("id") == plugin_id and isinstance(plugin.get("required_profiles"), list):
+            required = [item for item in plugin["required_profiles"] if isinstance(item, dict)]
+            break
+    if not required:
+        return
+    try:
+        from .setup import assert_source_project_safe
+
+        core_root = assert_source_project_safe(layout.clone / "dispatch-core")
+        import sys
+
+        if str(core_root) not in sys.path:
+            sys.path.insert(0, str(core_root))
+        from authentication import AuthenticationManager
+        from paths import DispatchPaths
+
+        environment = {
+            **os.environ,
+            "DISPATCH_HOME": str(layout.dispatch_home),
+            "DISPATCH_CODE_ROOT": str(layout.clone),
+            "DISPATCH_CONFIG_ROOT": str(layout.config),
+            "DISPATCH_SECRETS_ROOT": str(layout.secrets),
+            "DISPATCH_DATA_ROOT": str(layout.data),
+            "DISPATCH_STATE_ROOT": str(layout.state),
+            "DISPATCH_CACHE_ROOT": str(layout.cache),
+            "DISPATCH_LOGS_ROOT": str(layout.logs),
+            "DISPATCH_RUNTIME_ROOT": str(layout.run),
+        }
+        manager = AuthenticationManager(DispatchPaths.from_environment(environment, code_root=layout.clone))
+        for item in required:
+            provider = item.get("provider")
+            if not isinstance(provider, str):
+                raise InstallerError("plugin_authentication_invalid", "plugin required profile metadata is invalid")
+            _require_selected_auth_profile(manager, plugin_id, provider)
+    except InstallerError:
+        raise
+    except Exception as exc:
+        raise InstallerError(
+            "plugin_auth_profile_required",
+            "an enrolled authentication profile is required before the plugin service can be enabled",
+        ) from exc
+
+
 def enable_plugin_service(
     layout: InstallLayout,
     plugin_id: str,
@@ -198,6 +258,7 @@ def enable_plugin_service(
     systemd_touched = False
     try:
         prepared = _write_plugin_service(layout, plugin_id)
+        _require_plugin_auth_profile(layout, plugin_id)
         service = plugin_service_name(plugin_id)
         if run((str(layout.command_path), "plugin", "health", plugin_id), None).returncode != 0:
             raise InstallerError(

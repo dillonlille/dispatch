@@ -231,7 +231,7 @@ def run(
     """Foreground Slack Socket Mode service entry point."""
     if service_context is not None and not all(
         hasattr(service_context, name)
-        for name in ("should_stop", "acquire_browser_manager", "acquire_authentication_manager")
+        for name in ("should_stop", "acquire_browser_manager", "acquire_authentication_broker")
     ):
         raise ValueError("service context is invalid")
     if service_context is not None:
@@ -262,10 +262,14 @@ def run(
     if service_context is not None:
         from .managed_session import ManagedCompanionSessionProvider
 
+        authentication = service_context.acquire_authentication_broker(
+            "amazon-operations",
+            "default",
+        )
         provider = ManagedCompanionSessionProvider(
             settings.config.amazon,
             browser_manager=service_context.acquire_browser_manager(),
-            authentication_manager=service_context.acquire_authentication_manager(),
+            authentication_manager=authentication,
         )
     runtime = BridgeRuntime(
         settings=settings,

@@ -147,17 +147,15 @@ def _bounded_stop_callback(callback: Callable[[], bool]) -> Callable[[], bool]:
 class PluginServiceContext:
     """Core-owned capabilities passed to a long-running service entry point.
 
-    ``acquire_browser_manager`` and ``acquire_authentication_manager`` are the
-    only Core factories a service needs.  They lazily create the managers in
-    the Core process using the validated ``DispatchPaths``; browser sessions
-    and credentials therefore never cross a process or JSON boundary.
+    Browser Manager and the plugin-scoped authentication broker are the only
+    privileged Core factories exposed to a service. Raw vault access remains
+    internal to Core; browser sessions and credentials never cross JSON.
     """
 
     paths: DispatchPaths
     stop_requested: Callable[[], bool]
     plugin_id: str = ""
     _browser_manager: Any = field(default=None, init=False, repr=False)
-    _authentication_manager: Any = field(default=None, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if not isinstance(self.paths, DispatchPaths):
@@ -184,24 +182,32 @@ class PluginServiceContext:
         """Compatibility property for service callables preferring attribute access."""
         return self.acquire_browser_manager()
 
-    def acquire_authentication_manager(self) -> Any:
-        """Lazily create and return the Core-owned AuthenticationManager."""
-        if self._authentication_manager is None:
-            if AuthenticationManager is None:
-                raise PluginRuntimeError("authentication_dependency_missing", "Authentication Manager is not installed")
-            try:
-                self._authentication_manager = AuthenticationManager(self.paths)
-            except Exception as exc:
-                raise PluginRuntimeError(
-                    "authentication_manager_unavailable",
-                    "Authentication Manager could not be acquired",
-                ) from exc
-        return self._authentication_manager
+    def acquire_authentication_broker(self, provider: str, profile: str) -> Any:
+        """Return a plugin-scoped broker instead of exposing the vault manager."""
+        if AuthenticationManager is None:
+            raise PluginRuntimeError("authentication_dependency_missing", "Authentication Manager is not installed")
+        try:
+            manager = AuthenticationManager(self.paths)
+        except Exception as exc:
+            raise PluginRuntimeError(
+                "authentication_manager_unavailable",
+                "Authentication Manager could not be acquired",
+            ) from exc
+        scoped = getattr(manager, "for_plugin", None)
+        if not callable(scoped):
+            raise PluginRuntimeError("authentication_broker_unavailable", "plugin-scoped authentication is unavailable")
+        try:
+            selected = profile
+            if profile == "default" and hasattr(manager, "profile_for_plugin"):
+                try:
+                    selected = manager.profile_for_plugin(self.plugin_id, provider)
+                except Exception:
+                    selected = profile
+            return scoped(self.plugin_id, provider, selected)
+        except Exception as exc:
+            code = getattr(exc, "code", "authentication_profile_required")
+            raise PluginRuntimeError(str(code), "selected authentication profile is not enrolled") from exc
 
-    @property
-    def authentication_manager(self) -> Any:
-        """Compatibility property for service callables preferring attribute access."""
-        return self.acquire_authentication_manager()
 
     def close(self) -> None:
         """Release any browser manager acquired by the service."""

@@ -36,7 +36,8 @@ dispatch browser providers
 dispatch setup --plugin handbook --yes
 dispatch setup --plugin companion-bridge --yes
 dispatch plugin configure companion-bridge
-dispatch auth enroll amazon-operations
+dispatch auth add amazon-work --provider amazon
+dispatch auth list
 dispatch collection submit <collector-id> --parameters '{"target":"..."}'
 dispatch plugin-service status companion-bridge
 dispatch plugin-service enable companion-bridge

@@ -521,10 +521,23 @@ def test_service_context_factories_keep_managers_in_process(monkeypatch, tmp_pat
         def __init__(self, received):
             self.paths = received
 
+        def profile_for_plugin(self, plugin_id, provider):
+            assert (plugin_id, provider) == ("companion", "amazon-operations")
+            return "amazon-main"
+
+        def for_plugin(self, plugin_id, provider, profile):
+            return type(
+                "Broker",
+                (),
+                {"plugin_id": plugin_id, "provider": provider, "profile": profile, "paths": self.paths},
+            )()
+
     monkeypatch.setattr(plugin_runtime, "BrowserManager", Browser)
     monkeypatch.setattr(plugin_runtime, "AuthenticationManager", Authentication)
     _install_metadata(monkeypatch, _GroupedEntryPoint("companion", SERVICE_ENTRY_POINT_GROUP, lambda context: (
-        context.acquire_browser_manager(), context.acquire_authentication_manager()
+        context.acquire_browser_manager(),
+        context.acquire_authentication_broker("amazon-operations", "default"),
+        hasattr(context, "_authentication"),
     )))
     monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "companion")
 
@@ -532,4 +545,7 @@ def test_service_context_factories_keep_managers_in_process(monkeypatch, tmp_pat
 
     assert result[0].paths is paths
     assert result[1].paths is paths
+    assert not hasattr(result[1], "credentials")
+    assert not hasattr(result[1], "_manager")
+    assert result[2] is False
     assert managers == ["browser-shutdown"]

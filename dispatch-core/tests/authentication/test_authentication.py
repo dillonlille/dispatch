@@ -69,6 +69,14 @@ def test_invalid_fields_fail_closed_and_remove_is_idempotent(tmp_path: Path) -> 
         "default",
         {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"},
     )
+    with pytest.raises(AuthenticationError) as duplicate:
+        authentication.enroll(
+            "amazon-operations",
+            "default",
+            {"username": "replacement-user", "password": "replacement-password"},
+        )
+    assert duplicate.value.code == "profile_exists"
+    assert authentication.credentials("amazon-operations").values["username"] == "synthetic-user"
     assert authentication.remove("amazon-operations")["status"] == "removed"
     assert authentication.remove("amazon-operations")["status"] == "not_enrolled"
     with pytest.raises(AuthenticationError) as missing:

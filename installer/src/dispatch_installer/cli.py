@@ -90,8 +90,19 @@ def _lifecycle(layout: InstallLayout, args: argparse.Namespace) -> dict[str, obj
 
 def main(argv: list[str] | None = None) -> int:
     parser = _parser()
+    arguments = None if argv is None else list(argv)
+    if arguments is not None and "--json" in arguments and any(
+        value in {"-h", "--help"} for value in arguments
+    ):
+        _emit(
+            True,
+            "help",
+            "ready",
+            {"usage": parser.format_usage().strip(), "contains_secrets": False},
+        )
+        return 0
     try:
-        args = parser.parse_args(argv)
+        args = parser.parse_args(arguments)
         layout = InstallLayout.from_environment(dispatch_home=args.dispatch_home)
         if args.action == "layout":
             _emit(True, "layout", "ready", {"layout": layout.as_dict()})
@@ -121,8 +132,8 @@ def main(argv: list[str] | None = None) -> int:
             with installation_lock(layout):
                 return run_setup(
                     layout,
-                    [*(f"--plugin={plugin}" for plugin in args.plugin), *( ["--list"] if args.list else []), *( ["--yes"] if args.yes else [])],
-                    human=not args.json,
+                    [*(f"--plugin={plugin}" for plugin in args.plugin), *( ["--list"] if args.list else []), *( ["--yes"] if args.yes or args.json else [])],
+                    human=not args.json and not args.yes,
                 )
         if args.action == "plugin-service":
             if read_installation(layout) is None:

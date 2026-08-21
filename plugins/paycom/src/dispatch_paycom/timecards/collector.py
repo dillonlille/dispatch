@@ -18,7 +18,7 @@ from ..filesystem import exclusive_private_lock
 
 PLUGIN_ID = "paycom"
 COLLECTOR_ID = "paycom-timecards"
-PLUGIN_RELEASE = "0.1.0"
+PLUGIN_RELEASE = "0.1.1"
 BROWSER_REALM = "paycom-client"
 LANDING_URL = "https://www.paycomonline.net/v4/cl/web.php/client-landing/arc"
 

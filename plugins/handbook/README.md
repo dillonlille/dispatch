@@ -13,6 +13,9 @@ export DISPATCH_ACTIVE_PLUGINS=handbook
 
 Core discovers the installed `dispatch.plugins` entry point named `handbook`. It does not scan plugin directories and does not use `DISPATCH_PLUGIN_PATHS`.
 
+Handbook declares no authentication profile requirement. Selecting it never
+prompts for credentials, opens a browser, authenticates, or schedules work.
+
 ## Capability boundary
 
 - `query` reads an explicitly configured local SQLite FTS index;

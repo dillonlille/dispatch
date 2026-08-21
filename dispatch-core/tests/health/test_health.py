@@ -145,6 +145,79 @@ def test_authentication_capability_requires_configured_authentication_status(mon
     assert configured["data"]["planes"]["authentication"] == "ready"
 
 
+def test_service_authentication_requires_its_selected_named_profile(monkeypatch, tmp_path: Path) -> None:
+    configure(monkeypatch, tmp_path)
+    home = tmp_path / "installed-home"
+    home.mkdir(mode=0o700)
+    dispatch_home = home / ".dispatch"
+    dispatch_home.mkdir(mode=0o700)
+    setup_directory = dispatch_home / "config"
+    setup_directory.mkdir(mode=0o700)
+    setup = setup_directory / "plugins.json"
+    setup.write_text(
+        json.dumps(
+            {
+                "schema_version": 1,
+                "status": "complete",
+                "selected_plugins": ["companion-bridge"],
+                "plugins": [
+                    {
+                        "id": "companion-bridge",
+                        "capabilities": ["authentication"],
+                        "required_profiles": [{"provider": "amazon-operations"}],
+                    }
+                ],
+                "contains_secrets": False,
+            }
+        ),
+        encoding="utf-8",
+    )
+    setup.chmod(0o600)
+    monkeypatch.setattr(
+        health_runtime,
+        "plugin_health",
+        lambda selected: {"ready": True, "plugins": {}, "error": None},
+    )
+
+    from authentication import AuthenticationManager
+    from paths import DispatchPaths
+
+    authentication = AuthenticationManager(DispatchPaths.from_environment())
+    authentication.enroll_profile(
+        "payroll",
+        "paycom-client",
+        {
+            "client_code": "client",
+            "username": "username",
+            "password": "password",
+            **{f"security_pin_{index}": str(index) for index in range(1, 6)},
+        },
+    )
+
+    wrong_profile = resolved("health")
+
+    assert wrong_profile["data"]["planes"]["authentication"] == "unavailable"
+    assert wrong_profile["data"]["authentication"]["requirements"] == [
+        {
+            "plugin": "companion-bridge",
+            "profile": None,
+            "type": None,
+            "status": "not_enrolled",
+        }
+    ]
+
+    authentication.enroll_profile(
+        "amazon-main",
+        "amazon-operations",
+        {"username": "username", "password": "password"},
+        plugin_id="companion-bridge",
+    )
+    ready = resolved("health")
+
+    assert ready["data"]["planes"]["authentication"] == "ready"
+    assert ready["data"]["authentication"]["requirements"][0]["profile"] == "amazon-main"
+
+
 def test_authenticated_collector_requires_its_exact_realm(monkeypatch, tmp_path: Path) -> None:
     _health_setup(monkeypatch, tmp_path)
     setup = tmp_path / "installed-home" / ".dispatch" / "config" / "plugins.json"

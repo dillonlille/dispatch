@@ -39,6 +39,14 @@ python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin_policy.py \
    capabilities = ["read_local_data"]
    ```
 
+   A plugin with the `authentication` capability declares exactly one Core-owned
+   profile type; plugins never declare login URLs, selectors, or credential fields:
+
+   ```toml
+   [tool.dispatch.authentication]
+   required_profiles = [{ provider = "amazon-operations" }]
+   ```
+
 3. Publish exactly one `[project.entry-points."dispatch.plugins"]` entry whose name equals that ID. Its callable accepts one bounded JSON object and returns the exact seven-field response envelope.
    A plugin declaring `collect` also publishes exactly one matching
    `[project.entry-points."dispatch.collectors"]` zero-argument provider that
@@ -59,6 +67,9 @@ python3 ${DISPATCH_CODE_ROOT}/dispatch-core/plugin_policy.py \
 6. Keep query, collection, authentication, browser, mutation, service, and delivery capabilities separate. A read action never collects implicitly.
    Plugin selection installs source but does not by itself authorize service
    enablement; configuration and enablement remain explicit operator steps.
+   Interactive setup creates or reuses a named profile through hidden Core prompts.
+   Services receive only a plugin-scoped authentication broker; collectors receive
+   only Core's managed session, never raw credentials or the global vault manager.
 7. Use bounded schemas: required `action`, a closed action enum, `additionalProperties: false`, exact action fields, and bounded strings/rows/ranges/timeouts.
 8. Provide executable `scripts/test`, `scripts/build`, `scripts/verify`, and `scripts/health` commands. They operate on source and local configuration; they do not build, publish, activate, or verify generated plugin artifacts.
 9. Keep the Hermes adapter narrow. Its tool name, toolset, action schema, availability check, and response envelopes must agree with the source entry point and optional `dispatch-plugin.yaml`.
@@ -105,6 +116,8 @@ Do not create `runtime/`, `current` pointers, generation directories, release ma
 - the entry-point group has exactly one matching plugin ID and a loadable source callable;
 - `collect` capability and `dispatch.collectors` metadata agree exactly;
 - long-running capability and `dispatch.services` metadata agree exactly;
+- authentication capability and the single install-validated Core profile type agree exactly;
+- non-authenticated plugins omit authentication metadata;
 - any `dispatch.configurators` entry point is operator-only and never accepts secret JSON fields;
 - an optional root manifest has the same ID as pyproject metadata;
 - lifecycle scripts are regular owner-executable files and not group/world writable;

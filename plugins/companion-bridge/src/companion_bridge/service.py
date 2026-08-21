@@ -30,11 +30,22 @@ def health() -> dict[str, Any]:
         from authentication import AuthenticationManager
         from paths import DispatchPaths
 
-        status = AuthenticationManager(DispatchPaths.from_environment()).status(
-            "amazon-operations",
-            settings.config.amazon.auth_account_alias,
-        )
-        authentication = "configured" if status.get("configured") is True else "not_configured"
+        manager = AuthenticationManager(DispatchPaths.from_environment())
+        if hasattr(manager, "profile_for_plugin"):
+            try:
+                profile = manager.profile_for_plugin("companion-bridge", "amazon-operations")
+            except Exception:
+                profile = ""
+        else:
+            profile = getattr(settings.config.amazon, "auth_account_alias", "default")
+        if hasattr(manager, "profile_status"):
+            authentication = "not_configured"
+            if profile:
+                status = manager.profile_status(profile)
+                authentication = "configured" if status.get("status") == "enrolled" else "not_configured"
+        else:
+            status = manager.status("amazon-operations", profile)
+            authentication = "configured" if status.get("configured") is True else "not_configured"
     except Exception:
         authentication = "unavailable"
     overall = "configured" if delivery == "configured" and authentication == "configured" and not integrity_errors else "degraded"

@@ -42,7 +42,8 @@ class ServiceContext:
     def acquire_browser_manager(self):
         return self.browser
 
-    def acquire_authentication_manager(self):
+    def acquire_authentication_broker(self, provider, profile):
+        assert (provider, profile) == ("amazon-operations", "default")
         return self.authentication
 
 

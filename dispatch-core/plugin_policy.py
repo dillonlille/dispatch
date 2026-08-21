@@ -21,6 +21,9 @@ import yaml
 
 CORE_ROOT = Path(__file__).resolve().parent
 WORKSPACE = CORE_ROOT.parent
+if str(CORE_ROOT) not in sys.path:
+    sys.path.insert(0, str(CORE_ROOT))
+from provider_catalog import BUILTIN_PLUGIN_PROVIDERS, PROVIDERS_BY_ID
 PLUGIN_ID = re.compile(r"^[a-z][a-z0-9-]{0,63}$")
 ACTION_ID = re.compile(r"^[a-z][a-z0-9_]*$")
 ERROR_CODE = re.compile(r"^[a-z][a-z0-9_]{0,63}$")
@@ -497,6 +500,36 @@ def audit_owner(root: Path) -> Audit:
             "tool.dispatch.capabilities contains invalid or duplicate values",
         )
     audit.require(root.name == plugin_id, f"tool.dispatch.id {plugin_id} does not match the source directory {root.name}")
+
+    authentication = dispatch.get("authentication")
+    if authentication is None:
+        authentication = {"required_profiles": []}
+    if audit.require(
+        isinstance(authentication, dict) and set(authentication) == {"required_profiles"},
+        "tool.dispatch.authentication must contain only required_profiles",
+    ):
+        required_profiles = authentication["required_profiles"]
+        capabilities_valid = isinstance(capabilities, list) and all(
+            isinstance(value, str) for value in capabilities
+        )
+        valid_profiles = (
+            isinstance(required_profiles, list)
+            and len(required_profiles) <= 1
+            and all(
+                isinstance(item, dict)
+                and set(item) == {"provider"}
+                and isinstance(item.get("provider"), str)
+                and item["provider"] in PROVIDERS_BY_ID
+                for item in required_profiles
+            )
+            and capabilities_valid
+            and (("authentication" in capabilities) == (len(required_profiles) == 1))
+            and (
+                plugin_id not in BUILTIN_PLUGIN_PROVIDERS
+                or required_profiles == [{"provider": BUILTIN_PLUGIN_PROVIDERS[plugin_id]}]
+            )
+        )
+        audit.require(valid_profiles, "authentication capability must declare exactly one Core provider profile")
 
     manifest_path = root / "dispatch-plugin.yaml"
     manifest: dict[str, Any] | None = None
