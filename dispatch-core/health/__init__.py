@@ -52,7 +52,12 @@ def _json_depth_exceeds_limit(value: Any, *, max_depth: int = _MAX_JSON_DEPTH) -
 
 
 def _load_json_bounded(payload: str) -> Any:
-    parsed = json.loads(payload)
+    try:
+        parsed = json.loads(payload)
+    except RecursionError:
+        # Some CPython versions fail during decoding before the explicit
+        # depth check can run; treat it the same as exceeding the limit.
+        raise ValueError("json nesting depth exceeds limit") from None
     if _json_depth_exceeds_limit(parsed):
         raise ValueError("json nesting depth exceeds limit")
     return parsed
