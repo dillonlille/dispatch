@@ -335,18 +335,20 @@ def test_installed_health_rejects_invalid_private_root(monkeypatch, tmp_path: Pa
     assert health["data"]["configured"] is False
 
 
-def test_health_verify_and_browser_doctor_agree_when_installer_runtime_is_absent(monkeypatch, tmp_path: Path) -> None:
+def test_verify_fails_closed_when_installation_record_is_absent(monkeypatch, tmp_path: Path) -> None:
     configure(monkeypatch, tmp_path)
 
     health = resolved("health")
     verification = resolved("verify")
-    doctor = resolved("browser-doctor")
 
-    assert health["ok"] is verification["ok"] is True
-    assert doctor["ok"] is False
-    assert health["status"] == verification["status"] == "setup_incomplete"
-    assert health["error"] is verification["error"] is None
-    assert doctor["error"]["code"] == doctor["data"]["browser_manager"]["error_code"]
+    # Health stays lenient for development checkouts (no installation record),
+    # but verify is the strict gate and must fail closed without one.
+    assert health["ok"] is True
+    assert health["status"] == "setup_incomplete"
+    assert health["error"] is None
+    assert verification["ok"] is False
+    assert verification["status"] == "degraded"
+    assert verification["error"]["code"] == "installation_record_invalid"
     assert verification["data"]["application"] == "dispatch-core"
     assert verification["data"]["version"] == "development"
 

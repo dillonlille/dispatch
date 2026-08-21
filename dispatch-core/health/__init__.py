@@ -385,7 +385,10 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             try:
                 installed = _load_json_bounded(identity.read_text(encoding="utf-8"))
             except FileNotFoundError:
+                # Verify is the strict gate: an installation without its
+                # identity record must not pass as "development".
                 installed = {}
+                installation_invalid = True
             except (OSError, UnicodeError, ValueError):
                 installed = {}
                 installation_invalid = True
