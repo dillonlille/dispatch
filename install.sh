@@ -6,22 +6,42 @@ RELEASES_URL='https://api.github.com/repos/dillonlille/dispatch/releases?per_pag
 DISPATCH_HOME="${DISPATCH_HOME:-$HOME/.dispatch}"
 CHANNEL=''
 VERSION=''
+SETUP_MODE=''   # '', yes, no
 
 fail() {
     printf '%s\n' "Dispatch installation failed: $*" >&2
     exit 1
 }
 
+retry() {
+    # retry <description> <command...>: run command with bounded retries
+    description="$1"; shift
+    attempt=1
+    max_attempts=3
+    while :; do
+        if "$@"; then
+            return 0
+        fi
+        if [ "$attempt" -ge "$max_attempts" ]; then
+            fail "$description failed after $max_attempts attempts"
+        fi
+        printf '%s\n' "$description failed (attempt $attempt/$max_attempts); retrying..." >&2
+        attempt=$((attempt + 1))
+        sleep 2
+    done
+}
+
 usage() {
     cat <<'EOF'
-Usage: install.sh [--channel stable|dev] [--version TAG]
+Usage: install.sh [--channel stable|dev] [--version TAG] [--setup|--no-setup]
 
 Without --channel, choose:
   1. Latest Stable
   2. Development (main)
 
 --version is an explicit stable GitHub Release tag. The dev channel always
-tracks the main branch.
+tracks the main branch. --setup or --no-setup pre-selects the post-install
+setup prompt for non-interactive use.
 EOF
 }
 
@@ -36,6 +56,14 @@ while [ "$#" -gt 0 ]; do
             [ "$#" -ge 2 ] || fail '--version requires a release tag'
             VERSION="$2"
             shift 2
+            ;;
+        --setup)
+            SETUP_MODE=yes
+            shift
+            ;;
+        --no-setup)
+            SETUP_MODE=no
+            shift
             ;;
         --help|-h)
             usage
@@ -84,6 +112,7 @@ esac
 python3 - "$DISPATCH_HOME" <<'PY'
 import os
 import pathlib
+import shutil
 import stat
 import sys
 raw_path = pathlib.Path(sys.argv[1])
@@ -186,6 +215,16 @@ for index, (left_name, left) in enumerate(private_roots):
             raise SystemExit(f"unsafe private roots: {left_name} and {right_name} overlap")
 if not path.exists():
     path.mkdir(mode=0o700)
+required_bytes = int(os.environ.get("DISPATCH_MIN_FREE_BYTES", "2147483648"))
+for label, target in (("DISPATCH_HOME", path), ("temporary staging", path / ".install-tmp")):
+    probe = target if target.exists() else target.parent
+    free = shutil.disk_usage(probe).free
+    if free < required_bytes:
+        raise SystemExit(
+            f"insufficient disk space on {label} filesystem: "
+            f"{free // (1024 * 1024)} MB free, at least "
+            f"{required_bytes // (1024 * 1024)} MB required"
+        )
 PY
 temporary_root="$DISPATCH_HOME/.install-tmp"
 [ ! -L "$temporary_root" ] || fail 'temporary installation directory must not be a symlink'
@@ -211,14 +250,16 @@ cleanup() {
     rm -rf "$staging"
 }
 trap cleanup EXIT HUP INT TERM
+# Sweep stale staging dirs from previously crashed installs (older than 1 day).
+find "$temporary_root" -maxdepth 1 -name 'bootstrap.*' -type d -mtime +1 -exec rm -rf {} + 2>/dev/null || true
 mkdir "$staging"
 
 if [ "$CHANNEL" = stable ]; then
-    curl -fsSL --proto '=https' --tlsv1.2 --max-redirs 3 \
+    retry 'could not retrieve GitHub releases' \
+        curl -fsSL --proto '=https' --tlsv1.2 --max-redirs 3 \
         -H 'Accept: application/vnd.github+json' \
         -H 'User-Agent: dispatch-installer' \
-        "$RELEASES_URL" -o "$releases" \
-        || fail 'could not retrieve GitHub releases'
+        "$RELEASES_URL" -o "$releases"
     VERSION="$(RELEASES="$releases" REQUESTED="$VERSION" python3 -c '
 import json, os, re
 items = json.load(open(os.environ["RELEASES"], encoding="utf-8"))
@@ -239,16 +280,18 @@ fi
 
 printf 'Cloning Dispatch %s (%s) ...\n' "$CHANNEL" "$ref"
 if [ "$CHANNEL" = stable ]; then
-    git clone --quiet --no-checkout --depth 1 "$REPOSITORY_URL" "$clone" \
-        || fail 'could not clone the Dispatch repository'
-    git -C "$clone" fetch --quiet --depth 1 origin tag "$ref" \
-        || fail 'could not fetch the selected published release tag'
+    retry 'could not clone the Dispatch repository' \
+        git clone --quiet --no-checkout --depth 1 "$REPOSITORY_URL" "$clone"
+    retry 'could not fetch the selected published release tag' \
+        git -C "$clone" fetch --quiet --depth 1 origin tag "$ref"
     git -C "$clone" checkout --quiet --detach "refs/tags/$ref" \
         || fail 'could not detach at the selected published release tag'
 else
-    git clone --single-branch --branch main "$REPOSITORY_URL" "$clone" \
-        || fail 'could not clone the complete main branch'
+    retry 'could not clone the complete main branch' \
+        git clone --single-branch --branch main "$REPOSITORY_URL" "$clone"
 fi
+resolved_commit="$(git -C "$clone" rev-parse HEAD)"
+printf 'Resolved commit: %s\n' "$resolved_commit"
 
 printf '%s\n' 'Installing Dispatch dependencies and activating the user service ...'
 if [ "$CHANNEL" = stable ]; then
@@ -266,16 +309,26 @@ else
 fi
 
 printf '\nDispatch %s is installed in %s.\n' "$CHANNEL" "$DISPATCH_HOME"
-if ( : </dev/tty ) 2>/dev/null; then
-    exec 3<>/dev/tty
-    printf '1. Start Setup\n2. Skip for Now\nSelect [1-2]: ' >&3
-    IFS= read -r setup_choice <&3 || setup_choice=2
-    case "$setup_choice" in
-        1) "$HOME/.local/bin/dispatch" setup <&3 ;;
-        2) printf '%s\n' "Setup skipped. Run $HOME/.local/bin/dispatch setup when ready." ;;
-        *) exec 3>&-; fail 'invalid setup choice' ;;
-    esac
-    exec 3>&-
-else
-    printf '%s\n' "No controlling terminal; setup skipped. Run $HOME/.local/bin/dispatch setup when ready."
-fi
+case "$SETUP_MODE" in
+    yes)
+        "$HOME/.local/bin/dispatch" setup
+        ;;
+    no)
+        printf '%s\n' "Setup skipped. Run $HOME/.local/bin/dispatch setup when ready."
+        ;;
+    *)
+        if ( : </dev/tty ) 2>/dev/null; then
+            exec 3<>/dev/tty
+            printf '1. Start Setup\n2. Skip for Now\nSelect [1-2]: ' >&3
+            IFS= read -r setup_choice <&3 || setup_choice=2
+            case "$setup_choice" in
+                1) "$HOME/.local/bin/dispatch" setup <&3 ;;
+                2) printf '%s\n' "Setup skipped. Run $HOME/.local/bin/dispatch setup when ready." ;;
+                *) exec 3>&-; fail 'invalid setup choice' ;;
+            esac
+            exec 3>&-
+        else
+            printf '%s\n' "No controlling terminal; setup skipped. Run $HOME/.local/bin/dispatch setup when ready."
+        fi
+        ;;
+esac

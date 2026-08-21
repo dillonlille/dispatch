@@ -7,12 +7,15 @@ import os
 import re
 import stat
 import tempfile
+import time
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Mapping
+
+_LOCK_TIMEOUT_SECONDS = 600
 
 
 class InstallerError(RuntimeError):
@@ -394,7 +397,25 @@ def installation_lock(layout: InstallLayout, *, prepare: bool = True):
         if not stat.S_ISREG(details.st_mode) or details.st_uid != os.geteuid() or details.st_nlink != 1:
             raise InstallerError("lock_unsafe", "installation lock is not a private regular file")
         os.fchmod(descriptor, 0o600)
-        fcntl.flock(descriptor, fcntl.LOCK_EX)
+        deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+        announced = False
+        while True:
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                break
+            except OSError:
+                if not announced:
+                    print(
+                        f"waiting for installation lock (timeout {_LOCK_TIMEOUT_SECONDS}s)...",
+                        flush=True,
+                    )
+                    announced = True
+                if time.monotonic() >= deadline:
+                    raise InstallerError(
+                        "lock_timeout",
+                        f"installation lock is held by another process (waited {_LOCK_TIMEOUT_SECONDS}s)",
+                    )
+                time.sleep(0.5)
         assert_user_owned_directory(layout.dispatch_home, "DISPATCH_HOME")
         token = _ACTIVE_INSTALLATION_ROOT.set(layout.dispatch_home)
         yield

@@ -8,7 +8,7 @@ from typing import NoReturn
 
 from .doctor import inspect_installation
 from .layout import InstallLayout, InstallerError, installation_lock, read_installation
-from .lifecycle import install_or_update, repair_existing
+from .lifecycle import install_or_update, recover_incomplete_installation, repair_existing
 from .setup import run_setup, selected_long_running_plugins
 from .service import disable_plugin_service, enable_plugin_service, status_plugin_service
 from .uninstall import plan_uninstall, uninstall
@@ -42,6 +42,10 @@ def _parser() -> argparse.ArgumentParser:
     channel.add_argument("--version", help="stable release tag")
     actions.add_parser("doctor", help="inspect installation without changing it")
     actions.add_parser("verify", help="verify a complete installation")
+    actions.add_parser(
+        "recover",
+        help="remove unrecorded managed paths left by a crashed first install",
+    )
     setup = actions.add_parser("setup", help="install selected built-in plugins")
     setup.add_argument("--plugin", action="append", default=[])
     setup.add_argument("--list", action="store_true")
@@ -101,6 +105,7 @@ def main(argv: list[str] | None = None) -> int:
             {"usage": parser.format_usage().strip(), "contains_secrets": False},
         )
         return 0
+    args = None
     try:
         args = parser.parse_args(arguments)
         layout = InstallLayout.from_environment(dispatch_home=args.dispatch_home)
@@ -128,6 +133,11 @@ def main(argv: list[str] | None = None) -> int:
             result = inspect_installation(layout)
             _emit(bool(result["ok"]), args.action, str(result["status"]), result)
             return 0 if result["ok"] else 1
+        if args.action == "recover":
+            with installation_lock(layout):
+                result = recover_incomplete_installation(layout)
+            _emit(True, "recover", str(result.get("status", "recovered")), result)
+            return 0
         if args.action == "setup":
             with installation_lock(layout):
                 return run_setup(
@@ -168,12 +178,16 @@ def main(argv: list[str] | None = None) -> int:
             _emit(True, "uninstall", str(result["status"]), result)
             return 0
         raise InstallerError("action_unknown", "unknown installer action")
+    except EOFError:
+        action = args.action if args is not None else "unknown"
+        _emit(False, str(action), "error", {}, {"code": "input_unavailable", "message": "interactive input is unavailable"})
+        return 1
     except InstallerError as exc:
-        action = locals().get("args", argparse.Namespace(action="unknown")).action
+        action = args.action if args is not None else "unknown"
         _emit(False, str(action), "error", {}, {"code": exc.code, "message": str(exc)[:512]})
         return 1
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        action = locals().get("args", argparse.Namespace(action="unknown")).action
+        action = args.action if args is not None else "unknown"
         _emit(False, str(action), "error", {}, {"code": "installer_failed", "message": str(exc)[:512]})
         return 1
 

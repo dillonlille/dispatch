@@ -1014,7 +1014,9 @@ def _setup_auth_profiles(layout: InstallLayout, selected: Sequence[str], *, huma
     try:
         authentication = _auth_manager_for_layout(layout)
         authentication.retain_plugin_bindings(set(selected))
-    except Exception:
+    except (InstallerError, OSError, ValueError, RuntimeError) as exc:
+        if isinstance(exc, InstallerError):
+            raise
         return [], [
             {
                 "plugin": plugin_id,
@@ -1035,7 +1037,7 @@ def _setup_auth_profiles(layout: InstallLayout, selected: Sequence[str], *, huma
                 profile = authentication.profile_for_plugin(plugin_id, provider)
                 policy = authentication.provider(provider)
                 configured.append({"plugin": plugin_id, "profile": profile, "type": policy.public_id, "status": "enrolled"})
-            except Exception:
+            except (InstallerError, OSError, ValueError, RuntimeError):
                 pending.append(
                     {
                         "plugin": plugin_id,
@@ -1086,6 +1088,13 @@ def _setup_auth_profiles(layout: InstallLayout, selected: Sequence[str], *, huma
 
 
 def run_setup(layout: InstallLayout, argv: list[str] | None = None, *, human: bool = True, run: RunCommand = _run) -> int:
+    try:
+        return _run_setup(layout, argv, human=human, run=run)
+    except EOFError as exc:
+        raise InstallerError("input_unavailable", "interactive input is unavailable") from exc
+
+
+def _run_setup(layout: InstallLayout, argv: list[str] | None, *, human: bool, run: RunCommand) -> int:
     parser = argparse.ArgumentParser(prog="dispatch setup")
     parser.add_argument("--plugin", action="append", default=[], help="built-in plugin ID; may be repeated")
     parser.add_argument("--list", action="store_true", help="list built-in plugins")
