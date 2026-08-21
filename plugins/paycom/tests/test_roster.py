@@ -127,7 +127,11 @@ def test_roster_runner_uses_context_page_and_publishes_atomically(tmp_path):
     assert receipt.artifact_count == 1 and receipt.domain_complete is True
     assert page.gotos == [ROSTER_URL]
     assert (tmp_path / "roster.sqlite3").stat().st_mode & 0o077 == 0
-    assert not [path for path in (tmp_path / "roster-data").rglob("*") if path.is_file() and path.name != ".collector.lock"]
+    # Published runs retain their staged artifact: collection_runs persists
+    # artifact_path/manifest_sha256 referencing it for post-hoc audit.
+    retained = [path for path in (tmp_path / "roster-data" / "artifacts").rglob("*") if path.is_file()]
+    assert retained and any(path.name == "source.json" for path in retained)
+    assert not list((tmp_path / "roster-data").rglob(".staging-*"))
 
 
 def test_roster_rejects_unknown_parameter_and_non_boolean_replace_before_capture(tmp_path):

@@ -124,9 +124,17 @@ def capture_roster_export(page: Any, *, period: Period, target: str | None = Non
     except RosterBrowserError:
         raise
     except Exception as exc:
+        # A session-expiry redirect to the login page means the expected API
+        # response never fires and expect_response times out; surface that as
+        # an actionable re-authentication signal instead of a generic failure.
+        current_url = getattr(page, "url", None)
+        if isinstance(current_url, str) and current_url and not is_roster_url(current_url):
+            raise RosterBrowserError("roster_authentication_required") from exc
         raise RosterBrowserError("roster_response_unavailable") from exc
     current_url = getattr(page, "url", None)
-    if isinstance(current_url, str) and current_url and not is_roster_url(current_url):
+    if not isinstance(current_url, str) or not current_url:
+        raise RosterBrowserError("roster_navigation_policy_violation")
+    if not is_roster_url(current_url):
         raise RosterBrowserError("roster_navigation_policy_violation")
     if len(source) < 32 or len(source) > 2 * 1024 * 1024:
         raise RosterBrowserError("roster_export_invalid")

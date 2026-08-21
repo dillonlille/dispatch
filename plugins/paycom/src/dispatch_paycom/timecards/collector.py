@@ -132,6 +132,7 @@ def collect_timecards(
     collected_at = datetime.now(timezone.utc).isoformat()
     writer: TimecardArtifactWriter | None = None
     artifact: TimecardArtifact | None = None
+    retained = False
     with _lock(artifact_root):
         roster_revision = roster_binding.revision
         roster_sha = roster_binding.source_sha256
@@ -156,12 +157,16 @@ def collect_timecards(
                     raise TimecardCollectorError("post_verification_failed")
             finally:
                 store.close()
+            retained = True
             disposition = CollectionDisposition.SKIPPED_EXISTING if publication.disposition == "already_current" else CollectionDisposition.PUBLISHED
             return CollectionReceipt(disposition, publication.run_id, 0 if disposition == CollectionDisposition.SKIPPED_EXISTING else 1, True)
         except (TimecardBrowserError, TimecardStorageError, ValueError) as exc:
             raise TimecardCollectorError(str(exc)) from exc
         finally:
-            if artifact is not None and artifact.directory.exists():
+            # Retain the sealed artifact once the run is published: storage
+            # persists artifact_directory/html_path/json_path referencing it,
+            # so the raw source must survive for post-hoc verification/audit.
+            if not retained and artifact is not None and artifact.directory.exists():
                 discard_artifact_run(artifact, root=artifact_root, period=period)
             if writer is not None:
                 writer.cleanup()

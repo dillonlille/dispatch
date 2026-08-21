@@ -285,10 +285,14 @@ class RosterStore:
             return publication
         if current is not None and not replace:
             raise RosterStorageError("replacement_required")
-        existing = self.db.execute("SELECT run_id FROM collection_runs WHERE target=? AND source_sha256=?", (target, artifact.source_sha256)).fetchone()
-        run_id = str(existing["run_id"]) if existing is not None else uuid4().hex
+        run_id = uuid4().hex
         try:
             self.db.execute("BEGIN IMMEDIATE")
+            # Duplicate lookup must happen inside the write transaction so two
+            # concurrent publishers cannot both see existing=None and collide
+            # on the collection_runs primary key.
+            existing = self.db.execute("SELECT run_id FROM collection_runs WHERE target=? AND source_sha256=?", (target, artifact.source_sha256)).fetchone()
+            run_id = str(existing["run_id"]) if existing is not None else run_id
             if existing is None:
                 self.db.execute(
                     "INSERT INTO collection_runs(run_id,target,collected_at,source_sha256,artifact_path,manifest_sha256,row_count,employee_count,active_employee_count,active_driver_count) VALUES(?,?,?,?,?,?,?,?,?,?)",
