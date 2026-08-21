@@ -128,3 +128,38 @@ def test_identity_crosswalk_rejects_non_alphanumeric_employee_codes(tmp_path: Pa
     connection.commit(); connection.close()
     result = handle({"action": "meal_comparison", "work_date": "2026-07-26"}, paths=paths)
     assert result["ok"] is False and result["error"]["code"] == "schema_invalid"
+
+
+def test_parse_clock_handles_noon_and_midnight() -> None:
+    from dispatch_paycom.meals.comparison import parse_clock
+
+    assert parse_clock("12:00 PM") == 720
+    assert parse_clock("12:30 PM") == 750
+    assert parse_clock("12:00 AM") == 0
+    assert parse_clock("1:15 PM") == 795
+    assert parse_clock("11:59 AM") == 719
+
+
+def test_change_request_status_fails_closed(tmp_path: Path) -> None:
+    paths = _make_fixture(tmp_path)
+    connection = sqlite3.connect(paths["timecards"])
+    connection.execute("UPDATE punches SET change_request_status='bogus' WHERE ordinal=1")
+    connection.commit()
+    connection.close()
+    result = handle({"action": "meal_comparison", "work_date": "2026-07-26"}, paths=paths, clock=lambda: datetime(2026, 7, 27, 1, tzinfo=timezone.utc))
+    assert result["ok"] is False
+    assert result["error"]["code"] == "schema_invalid"
+    assert result["status"] == "error"
+
+
+def test_path_config_error_surfaces_distinctly(tmp_path: Path) -> None:
+    from dispatch_paycom.paths import PathConfigError
+
+    class ExplodingPaths:
+        def __getattr__(self, name: str):
+            raise PathConfigError("DispatchPaths is unavailable")
+
+    result = handle({"action": "audit", "period_end": "2026-08-08"}, paths=ExplodingPaths(), clock=lambda: datetime(2026, 8, 9, 1, tzinfo=timezone.utc))
+    assert result["ok"] is False
+    assert result["error"]["code"] == "path_config_invalid"
+    assert result["status"] == "error"

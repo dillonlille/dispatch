@@ -5,6 +5,7 @@ from typing import Any, Mapping
 
 from .contracts import ContractError, envelope, error_envelope, validate_request
 from .health import health
+from .paths import PathConfigError
 from .query import PaycomQuery, QueryError
 from .storage import StorageError
 
@@ -33,8 +34,10 @@ def handle(request: Any, *, paths: Any = None, clock: Any | None = None) -> dict
     except (ContractError, QueryError, StorageError) as exc:
         code = getattr(exc, "code", "internal_error")
         message = getattr(exc, "message", str(exc))
-        status = "error" if code == "invalid_input" else "unavailable"
+        status = "error" if code in {"invalid_input", "result_too_large", "schema_invalid"} else "unavailable"
         return error_envelope(code, message[:256], action, status=status)
+    except PathConfigError as exc:
+        return error_envelope("path_config_invalid", str(exc)[:256], action, status="error")
     except Exception:
         return error_envelope("internal_error", "The Paycom service could not complete the operation.", action, status="unavailable")
 
