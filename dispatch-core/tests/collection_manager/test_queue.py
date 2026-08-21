@@ -214,7 +214,7 @@ def test_read_only_inspection_reports_overdue_worker_without_exposing_identity(t
 def test_manual_resume_request_is_durable_and_consumed_by_owner(store: CollectionTaskStore) -> None:
     task = enqueue(store)
     store.claim("worker-one", NOW, 30)
-    waiting = store.wait_for_user(task.task_id, "worker-one", "mfa_required", NOW)
+    store.wait_for_user(task.task_id, "worker-one", "mfa_required", NOW)
 
     requested = store.request_resume(task.task_id, NOW + timedelta(seconds=1))
     assert requested.resume_requested is True

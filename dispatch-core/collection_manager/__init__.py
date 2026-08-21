@@ -9,7 +9,7 @@ import hashlib
 import math
 import re
 import secrets
-from typing import TYPE_CHECKING, Any, Callable, Mapping
+from typing import TYPE_CHECKING, Callable, Mapping
 
 from browser_manager import (
     BrowserLeaseRequest,

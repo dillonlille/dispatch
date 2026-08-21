@@ -28,6 +28,35 @@ PLANES = (
     "overall",
 )
 
+_MAX_JSON_DEPTH = 64
+
+
+def _json_depth_exceeds_limit(value: Any, *, max_depth: int = _MAX_JSON_DEPTH) -> bool:
+    """Iteratively check JSON nesting depth.
+
+    ``json.loads`` only raises ``RecursionError`` for deeply nested input on
+    some CPython versions, so the depth bound must not rely on interpreter
+    behavior. Returns True when the structure nests deeper than ``max_depth``.
+    """
+
+    stack: list[tuple[Any, int]] = [(value, 1)]
+    while stack:
+        current, depth = stack.pop()
+        if depth > max_depth:
+            return True
+        if isinstance(current, dict):
+            stack.extend((item, depth + 1) for item in current.values())
+        elif isinstance(current, list):
+            stack.extend((item, depth + 1) for item in current)
+    return False
+
+
+def _load_json_bounded(payload: str) -> Any:
+    parsed = json.loads(payload)
+    if _json_depth_exceeds_limit(parsed):
+        raise ValueError("json nesting depth exceeds limit")
+    return parsed
+
 
 def _setup_state(paths: DispatchPaths) -> dict[str, Any]:
     path = paths.config / "plugins.json"
@@ -49,8 +78,8 @@ def _setup_state(paths: DispatchPaths) -> dict[str, Any]:
             return {"complete": False, "selected_plugins": [], "capabilities": [], "invalid": True}
         with os.fdopen(descriptor, "r", encoding="utf-8") as stream:
             descriptor = -1
-            payload = json.load(stream)
-    except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
+            payload = _load_json_bounded(stream.read())
+    except (OSError, UnicodeError, ValueError):
         return {"complete": False, "selected_plugins": [], "capabilities": [], "invalid": True}
     finally:
         if descriptor >= 0:
@@ -349,10 +378,10 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             data["application"] = "dispatch-core"
             identity = paths.dispatch_home / "installation.json"
             try:
-                installed = json.loads(identity.read_text(encoding="utf-8"))
+                installed = _load_json_bounded(identity.read_text(encoding="utf-8"))
             except FileNotFoundError:
                 installed = {}
-            except (OSError, UnicodeError, json.JSONDecodeError, RecursionError):
+            except (OSError, UnicodeError, ValueError):
                 installed = {}
                 installation_invalid = True
             if not isinstance(installed, dict):
