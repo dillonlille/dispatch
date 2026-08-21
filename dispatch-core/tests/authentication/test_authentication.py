@@ -177,6 +177,63 @@ def test_disk_key_still_works_end_to_end_after_keyring_appears(monkeypatch, tmp_
     assert missing.value.code == "credentials_not_enrolled"
 
 
+def test_symlinked_vault_files_fail_closed(monkeypatch, tmp_path: Path) -> None:
+    ring = FakeKeyring()
+    ring.available = False
+    ring.install(monkeypatch)
+    authentication = manager(tmp_path)
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll("amazon-operations", "default", values)
+
+    outside = tmp_path / "outside-target"
+    outside.write_bytes(b"synthetic")
+    key_path = authentication.store_root / "vault.key"
+    key_path.unlink()
+    key_path.symlink_to(outside)
+
+    with pytest.raises(AuthenticationError) as failure:
+        authentication.credentials("amazon-operations")
+    assert failure.value.code == "auth_store_unsafe"
+
+
+def test_world_readable_key_fails_closed(monkeypatch, tmp_path: Path) -> None:
+    import os
+
+    ring = FakeKeyring()
+    ring.available = False
+    ring.install(monkeypatch)
+    authentication = manager(tmp_path)
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll("amazon-operations", "default", values)
+
+    key_path = authentication.store_root / "vault.key"
+    os.chmod(key_path, 0o644)
+    with pytest.raises(AuthenticationError) as failure:
+        authentication.credentials("amazon-operations")
+    assert failure.value.code == "auth_store_unsafe"
+    os.chmod(key_path, 0o600)
+    # Restoring the mode recovers the store without re-enrolling.
+    assert authentication.credentials("amazon-operations").values == values
+
+
+def test_group_writable_store_directory_fails_closed(monkeypatch, tmp_path: Path) -> None:
+    import os
+
+    ring = FakeKeyring()
+    ring.available = False
+    ring.install(monkeypatch)
+    authentication = manager(tmp_path)
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll("amazon-operations", "default", values)
+
+    os.chmod(authentication.store_root, 0o750)
+    with pytest.raises(AuthenticationError) as failure:
+        authentication.credentials("amazon-operations")
+    assert failure.value.code == "auth_store_unsafe"
+    os.chmod(authentication.store_root, 0o700)
+    assert authentication.credentials("amazon-operations").values == values
+
+
 def test_browser_session_is_bound_to_the_canonical_realm_landing_page(tmp_path: Path) -> None:
     authentication = manager(tmp_path)
     authentication.enroll(

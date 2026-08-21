@@ -385,6 +385,102 @@ def test_configurator_rejects_prompted_secret_in_result(monkeypatch, tmp_path) -
     assert error.value.code == "plugin_configuration_secret_exposure"
 
 
+def test_configurator_secret_detection_covers_encodings_and_nesting(monkeypatch, tmp_path) -> None:
+    """Verbatim echo is the documented guarantee; these cases pin the actual
+    behavior for common trivial obfuscations so regressions are visible."""
+
+    import base64
+
+    paths = DispatchPaths.from_environment(
+        {"HOME": str(tmp_path / "home")},
+        code_root=Path(__file__).resolve().parents[2],
+    )
+
+    def make_entry_point(handler):
+        return _GroupedEntryPoint("companion", CONFIGURATOR_ENTRY_POINT_GROUP, handler)
+
+    secret = "super-secret-token-value"
+
+    # Nested inside a result structure: still rejected.
+    captured: dict = {}
+
+    def nested_handler(context):
+        token = context.prompt_secret("Token: ")
+        return {
+            **_envelope("configure"),
+            "data": {"wrapper": {"deep": [token]}},
+        }
+
+    _install_metadata(monkeypatch, make_entry_point(nested_handler))
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "companion")
+    with pytest.raises(PluginRuntimeError) as error:
+        invoke_configurator(
+            "companion",
+            paths=paths,
+            secret_prompt_fn=lambda message: secret,
+        )
+    assert error.value.code == "plugin_configuration_secret_exposure"
+    captured["nested"] = True
+
+    # Base64-encoded echo is NOT detected today — pinned so a future
+    # detector upgrade shows up as a deliberate change.
+    encoded = base64.b64encode(secret.encode()).decode()
+
+    def encoded_handler(context):
+        context.prompt_secret("Token: ")
+        return {**_envelope("configure"), "data": {"blob": encoded}}
+
+    _install_metadata(monkeypatch, make_entry_point(encoded_handler))
+    result = invoke_configurator(
+        "companion",
+        paths=paths,
+        secret_prompt_fn=lambda message: secret,
+    )
+    assert result["ok"] is True
+
+    # A prefix/suffix-trimmed echo IS caught (substring semantics).
+    def trimmed_handler(context):
+        token = context.prompt_secret("Token: ")
+        return {**_envelope("configure"), "data": {"note": f"prefix-{token}-suffix"}}
+
+    _install_metadata(monkeypatch, make_entry_point(trimmed_handler))
+    with pytest.raises(PluginRuntimeError) as error:
+        invoke_configurator(
+            "companion",
+            paths=paths,
+            secret_prompt_fn=lambda message: secret,
+        )
+    assert error.value.code == "plugin_configuration_secret_exposure"
+
+
+def test_configurator_output_secret_is_rejected_not_printed(monkeypatch, tmp_path, capsys) -> None:
+    paths = DispatchPaths.from_environment(
+        {"HOME": str(tmp_path / "home")},
+        code_root=Path(__file__).resolve().parents[2],
+    )
+
+    def output_leak(context):
+        token = context.prompt_secret("Token: ")
+        context.output(f"token is {token}")
+        return {**_envelope("configure"), "data": {}}
+
+    _install_metadata(
+        monkeypatch,
+        _GroupedEntryPoint("companion", CONFIGURATOR_ENTRY_POINT_GROUP, output_leak),
+    )
+    monkeypatch.setenv("DISPATCH_ACTIVE_PLUGINS", "companion")
+
+    with pytest.raises(PluginRuntimeError) as error:
+        invoke_configurator(
+            "companion",
+            paths=paths,
+            secret_prompt_fn=lambda message: "secret-value",
+        )
+    assert error.value.code == "plugin_configuration_secret_exposure"
+    # The leaked value must not have reached the real output channel.
+    assert "secret-value" not in capsys.readouterr().err
+
+
 def test_default_configurator_output_uses_stderr(monkeypatch, tmp_path, capsys) -> None:
     paths = DispatchPaths.from_environment(
         {"HOME": str(tmp_path / "home")},
