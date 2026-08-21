@@ -1352,7 +1352,10 @@ class CollectionTaskStore:
                     ),
                 )
                 if cursor.rowcount != 1:
-                    raise CollectionStoreError("collection_state_conflict", "collection task changed concurrently")
+                    # A row that changed concurrently is skipped so one racing
+                    # worker cannot block reconciliation of the remaining rows;
+                    # it is picked up again on the next pass.
+                    continue
                 changed.append(row.task_id)
             connection.commit()
         except Exception:
