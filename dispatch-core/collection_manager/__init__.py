@@ -299,6 +299,41 @@ class CollectionManager:
             "durable_queue": queue,
         }
 
+    def _resolve_auth_request(
+        self,
+        request: CollectionRequest,
+        registration: CollectorRegistration,
+    ) -> CollectionRequest:
+        if not registration.authentication_required or self._authentication is None or registration.browser_realm is None:
+            return request
+        if not hasattr(self._authentication, "profile_for_plugin"):
+            return request
+        try:
+            if request.account_alias != "default":
+                # Compatibility aliases are explicit durable task identity. Check
+                # enrollment now, then preserve the alias through queue execution.
+                self._authentication.credentials(registration.browser_realm, request.account_alias)
+                return request
+            profile = self._authentication.profile_for_plugin(
+                registration.plugin_id,
+                registration.browser_realm,
+            )
+            alias = self._authentication.account_alias_for_profile(profile, registration.browser_realm)
+        except Exception as exc:
+            from authentication import AuthenticationError
+
+            if isinstance(exc, AuthenticationError):
+                raise CollectionManagerError(
+                    "authentication_profile_required",
+                    "an enrolled authentication profile is required before collection",
+                ) from exc
+            raise
+        return CollectionRequest(
+            collector_id=request.collector_id,
+            account_alias=alias,
+            parameters=request.parameters,
+        )
+
     def enqueue(
         self,
         request: CollectionRequest,
@@ -307,7 +342,8 @@ class CollectionManager:
         not_before: datetime | None = None,
         idempotency_key: str | None = None,
     ) -> TaskRecord:
-        self._registration(request)
+        registration = self._registration(request)
+        request = self._resolve_auth_request(request, registration)
         return self._require_store().enqueue(
             collector_id=request.collector_id,
             account_alias=request.account_alias,
@@ -360,6 +396,7 @@ class CollectionManager:
                 request,
                 claimed.task_id,
                 mark_started,
+                resolve_profile=False,
             )
             return self._persist_result(claimed.task_id, worker_id, result)
         except BaseException as primary:
@@ -495,7 +532,8 @@ class CollectionManager:
         next_run_at: datetime,
         max_attempts: int = 3,
     ) -> ScheduleRecord:
-        self._registration(request)
+        registration = self._registration(request)
+        request = self._resolve_auth_request(request, registration)
         _slug(schedule_key, "schedule_key")
         schedule_id = hashlib.sha256(
             f"dispatch-collection-schedule-v1\0{request.collector_id}\0{request.account_alias}\0{schedule_key}".encode()
@@ -528,10 +566,14 @@ class CollectionManager:
         request: CollectionRequest,
         run_id: str,
         before_execute: Callable[[], None] | None,
+        *,
+        resolve_profile: bool = True,
     ) -> CollectionResult:
         if not isinstance(request, CollectionRequest):
             raise CollectionManagerError("invalid_collection_request", "collection request is invalid")
         registration = self._registration(request)
+        if resolve_profile:
+            request = self._resolve_auth_request(request, registration)
         if registration.browser_realm is None:
             return self._execute(run_id, registration, request, None, None, before_execute)
         if self._browser is None or (registration.authentication_required and self._authentication is None):
@@ -565,6 +607,7 @@ class CollectionManager:
 
         if not registration.authentication_required:
             return self._execute(run_id, registration, request, lease, lease.session, before_execute)
+        assert self._authentication is not None
         try:
             authentication = self._authentication.authenticate(lease.session, request.account_alias)
         except BaseException as exc:
@@ -591,6 +634,7 @@ class CollectionManager:
         pending = self._pending.get(run_id)
         if pending is None:
             raise CollectionManagerError("collection_not_pending", "collection is not waiting for manual action")
+        assert self._authentication is not None
         try:
             authentication = self._authentication.resume(
                 pending.lease.session,

@@ -59,9 +59,15 @@ dispatch setup
 dispatch setup --plugin handbook --yes
 dispatch setup --plugin companion-bridge --yes
 dispatch plugin configure companion-bridge
-dispatch auth enroll amazon-operations
+dispatch auth add amazon-work --provider amazon
+dispatch auth list
 dispatch plugin-service enable companion-bridge
 ```
+
+Interactive setup asks whether each authenticated plugin should reuse a
+compatible named profile or create one through hidden Core-owned prompts.
+`--yes` and JSON/noninteractive setup never prompt for secrets; when a
+required profile is missing they return actionable `pending_requirements`.
 
 Selecting a long-running plugin installs its approved dependency closure and
 publishes a disabled, exactly generated user-service projection. Companion Bridge

@@ -32,6 +32,18 @@ capabilities = ["read_local_data"]
 
 The entry-point group contains exactly one entry named `tool.dispatch.id`. The target is a callable accepting one bounded JSON object. The plugin keeps its own dependencies in `[project.dependencies]`; it does not need a `dispatch-core` distribution dependency merely to be discoverable.
 
+An authenticated plugin declares exactly one required Core profile type:
+
+```toml
+[tool.dispatch.authentication]
+required_profiles = [{ provider = "paycom-client" }]
+```
+
+The provider identifier is developer metadata and must match Core's closed catalog.
+It never supplies URLs, selectors, credential fields, or secrets. During interactive
+setup, users see only compatible named profiles and hidden credential prompts.
+Non-authenticated plugins omit this table.
+
 A root `dispatch-plugin.yaml` is optional for source metadata. When present, its `id` must exactly match `tool.dispatch.id`. It may describe owner data, components, Hermes projections, and commands, but it is not a generated runtime authority.
 
 ## Source layout and owner data
@@ -63,6 +75,10 @@ Declare only effective behavior. Supported capability labels are:
 - `long_running`
 
 Prefer a read-only query component for local data, a separately privileged collector for network/authenticated production, and a separate delivery or service boundary where needed.
+
+Named credentials are reusable across compatible plugins, but Browser Manager state
+remains isolated by plugin. Service plugins use Core's scoped authentication broker;
+collectors receive only an authenticated managed session in `CollectionContext`.
 
 ## Core and Hermes contracts
 

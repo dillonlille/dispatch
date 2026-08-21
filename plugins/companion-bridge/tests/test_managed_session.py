@@ -81,6 +81,45 @@ def test_provider_authenticates_snapshots_then_releases_lease(monkeypatch) -> No
     assert auth_calls and material.csrf_token == "fixture-csrf"
 
 
+def test_profile_aware_manager_ignores_stale_legacy_alias(monkeypatch) -> None:
+    lease, requests, auth_calls = Lease(), [], []
+    install_core_fixtures(monkeypatch, lease, requests, auth_calls)
+    observed = {}
+
+    class Broker:
+        profile = "new-profile"
+        account_alias = "new-profile"
+
+        def authenticate(self, session):
+            observed["authenticated_session"] = session
+            return AuthResult()
+
+    class Authentication:
+        def profile_for_plugin(self, plugin_id, provider):
+            observed["profile_for_plugin"] = (plugin_id, provider)
+            return "new-profile"
+
+        def for_plugin(self, plugin_id, provider, profile):
+            observed["for_plugin"] = (plugin_id, provider, profile)
+            return Broker()
+
+    provider = ManagedCompanionSessionProvider(
+        AmazonConfig(auth_account_alias="old-profile"),
+        browser_manager=sys.modules["browser_manager"].BrowserManager(object()),
+        authentication_manager=Authentication(),
+    )
+
+    provider.snapshot()
+
+    assert observed["profile_for_plugin"] == ("companion-bridge", "amazon-operations")
+    assert observed["for_plugin"] == (
+        "companion-bridge",
+        "amazon-operations",
+        "new-profile",
+    )
+    assert requests[0]["account_alias"] == "new-profile"
+
+
 def test_context_rejects_wrong_endpoint_without_page_evaluation() -> None:
     with pytest.raises(ManagedSessionError):
         probe_companion_context(Page(), "https://logistics.amazon.com/other")

@@ -7,7 +7,12 @@ from pathlib import Path
 import pytest
 
 import command_interface as command_interface
-from collection_manager import CollectionDisposition, CollectionReceipt, CollectorRegistration
+from collection_manager import (
+    CollectionDisposition,
+    CollectionReceipt,
+    CollectionTaskStore,
+    CollectorRegistration,
+)
 from command_interface import CommandInterfaceError, main
 
 ENVELOPE = {"ok", "action", "status", "data", "freshness", "delivery", "error"}
@@ -16,6 +21,121 @@ ENVELOPE = {"ok", "action", "status", "data", "freshness", "delivery", "error"}
 def test_parser_can_use_the_public_dispatch_program_name() -> None:
     assert command_interface.parser(prog="dispatch").prog == "dispatch"
     assert command_interface.parser().prog == "dispatch-core"
+
+
+def test_noninteractive_auth_profile_add_never_prompts(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+    monkeypatch.setattr(
+        command_interface.getpass,
+        "getpass",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("secret prompt must not run")),
+    )
+
+    assert main(
+        ["auth", "add", "amazon-main", "--provider", "amazon"],
+        interactive=False,
+    ) == 1
+    payload = json.loads(capsys.readouterr().out)
+    assert payload["error"]["code"] == "authentication_interactive_required"
+    assert main(
+        ["auth", "enroll", "amazon-operations"],
+        interactive=False,
+    ) == 1
+    legacy = json.loads(capsys.readouterr().out)
+    assert legacy["error"]["code"] == "authentication_interactive_required"
+    assert not (home / ".dispatch" / "secrets").exists()
+
+
+def test_profile_cli_uses_public_type_names_and_hidden_credentials(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+    secrets = iter(["synthetic-user", "synthetic-password"])
+    monkeypatch.setattr(command_interface.getpass, "getpass", lambda _prompt: next(secrets))
+
+    assert main(["auth", "add", "amazon-main", "--provider", "amazon"]) == 0
+    added = json.loads(capsys.readouterr().out)
+    assert added["data"] == {
+        "profile": "amazon-main",
+        "type": "amazon",
+        "type_name": "Amazon Operations",
+        "status": "enrolled",
+        "verification": "unverified",
+    }
+    assert "amazon-operations" not in json.dumps(added)
+
+    monkeypatch.setattr(
+        command_interface.getpass,
+        "getpass",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("existing profile must fail before prompting")),
+    )
+    assert main(["auth", "add", "amazon-main", "--provider", "amazon"]) == 1
+    duplicate = json.loads(capsys.readouterr().out)
+    assert duplicate["error"]["code"] == "profile_exists"
+
+    assert main(["auth", "list"]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["data"]["profiles"][0]["profile"] == "amazon-main"
+    assert listed["data"]["profiles"][0]["type_name"] == "Amazon Operations"
+
+
+def test_noninteractive_auth_help_is_one_json_document(capsys) -> None:
+    assert main(["auth", "list", "--help"], interactive=False) == 0
+    captured = capsys.readouterr()
+    payload = json.loads(captured.out)
+    assert captured.err == ""
+    assert payload["action"] == "help"
+    assert payload["data"]["command"] == ["auth", "list"]
+
+
+def test_public_collection_submission_resolves_selected_profile_before_enqueue(monkeypatch, tmp_path) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+    from authentication import AuthenticationManager
+    from paths import DispatchPaths
+
+    paths = DispatchPaths.from_environment()
+    authentication = AuthenticationManager(paths)
+    authentication.enroll_profile(
+        "payroll",
+        "paycom-client",
+        {
+            "client_code": "client",
+            "username": "username",
+            "password": "password",
+            **{f"security_pin_{index}": str(index) for index in range(1, 6)},
+        },
+        plugin_id="paycom",
+    )
+    registration = CollectorRegistration(
+        "paycom-roster",
+        "paycom",
+        "0.1.1",
+        lambda _context: CollectionReceipt(CollectionDisposition.NO_DATA, None, 0, True),
+        browser_realm="paycom-client",
+        authentication_required=True,
+    )
+    monkeypatch.setattr(command_interface, "discover_collector_registrations", lambda: (registration,))
+    store = CollectionTaskStore.from_paths(paths)
+    args = argparse.Namespace(
+        collector_id="paycom-roster",
+        account_alias="default",
+        parameters="{}",
+        max_attempts=3,
+        not_before=None,
+        idempotency_key=None,
+    )
+
+    data = command_interface._collection_submission(args, store)
+
+    assert data["collector_id"] == "paycom-roster"
+    assert store.recent(1)[0].account_alias == "payroll"
 
 
 def test_health_command_serializes_the_standard_envelope(monkeypatch, tmp_path, capsys) -> None:

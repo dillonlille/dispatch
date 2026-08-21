@@ -37,6 +37,7 @@ def test_metadata_declares_source_owned_paycom_contract() -> None:
     assert project["tool"]["dispatch"] == {
         "id": "paycom",
         "capabilities": EXPECTED_CAPABILITIES,
+        "authentication": {"required_profiles": [{"provider": "paycom-client"}]},
     }
     assert "dispatch.services" not in project["project"].get("entry-points", {})
     assert "dispatch.configurators" not in project["project"].get("entry-points", {})

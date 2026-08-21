@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dispatch-companion-bridge"
-version = "0.1.0"
+version = "0.1.1"
 description = "Source-owned Slack Socket Mode bridge for DSP Companion"
 requires-python = ">=3.11,<3.14"
 license = "Apache-2.0"
@@ -41,6 +41,9 @@ companion-bridge = "companion_bridge.configurator:configure"
 [tool.dispatch]
 id = "companion-bridge"
 capabilities = ["read_local_data", "mutate_data", "network", "authentication", "direct_delivery", "long_running"]
+
+[tool.dispatch.authentication]
+required_profiles = [{ provider = "amazon-operations" }]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

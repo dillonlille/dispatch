@@ -5,6 +5,7 @@ import argparse
 import getpass
 import json
 import signal
+import sys
 from datetime import datetime
 from typing import Any, NoReturn, Sequence
 
@@ -78,15 +79,21 @@ def parser(*, prog: str = "dispatch-core") -> argparse.ArgumentParser:
 
     auth = subcommands.add_parser("auth", help="manage private Core authentication credentials")
     auth_actions = auth.add_subparsers(dest="auth_action", required=True)
+    auth_actions.add_parser("list", help="list named authentication profiles")
     auth_status = auth_actions.add_parser("status", help="report bounded credential enrollment status")
+    auth_status.add_argument("profile", nargs="?")
     auth_status.add_argument("--realm")
     auth_status.add_argument("--account", default="default")
+    auth_add = auth_actions.add_parser("add", help="add a named authentication profile through hidden prompts")
+    auth_add.add_argument("profile")
+    auth_add.add_argument("--provider", help="profile type: amazon or paycom")
     auth_enroll = auth_actions.add_parser("enroll", help="enroll credentials through hidden prompts")
     auth_enroll.add_argument("realm")
     auth_enroll.add_argument("--account", default="default")
     auth_remove = auth_actions.add_parser("remove", help="remove enrolled credentials")
-    auth_remove.add_argument("realm")
+    auth_remove.add_argument("profile")
     auth_remove.add_argument("--account", default="default")
+    auth_remove.add_argument("--realm")
     auth_remove.add_argument("--yes", action="store_true", help="confirm credential removal")
 
     collection = subcommands.add_parser("collection", help="operate the durable Collection Manager worker")
@@ -108,9 +115,13 @@ def parser(*, prog: str = "dispatch-core") -> argparse.ArgumentParser:
     return value
 
 
-def _auth_result(args: argparse.Namespace) -> dict[str, Any]:
+def _auth_result(args: argparse.Namespace, *, interactive: bool) -> dict[str, Any]:
     try:
-        from authentication import AuthenticationError, AuthenticationManager, DEFAULT_AUTH_REALMS
+        from authentication import (
+            AuthenticationError,
+            AuthenticationManager,
+            DEFAULT_AUTH_REALMS,
+        )
     except ImportError as exc:
         raise CommandInterfaceError(
             "authentication_dependency_missing",
@@ -121,9 +132,71 @@ def _auth_result(args: argparse.Namespace) -> dict[str, Any]:
         paths = DispatchPaths.from_environment()
         authentication = AuthenticationManager(paths)
         action = f"auth-{args.auth_action}"
-        if args.auth_action == "status":
-            data = authentication.status(args.realm, args.account)
+        if args.auth_action == "list":
+            profiles = authentication.profiles()
+            data = {
+                "profiles": profiles,
+                "configured": any(item["status"] == "enrolled" for item in profiles),
+                "contains_secrets": False,
+            }
+        elif args.auth_action == "status":
+            profile = getattr(args, "profile", None)
+            if profile is not None:
+                try:
+                    data = authentication.profile_status(profile)
+                except AuthenticationError as exc:
+                    if profile not in {item.id for item in DEFAULT_AUTH_REALMS}:
+                        raise
+                    data = authentication.status(profile, args.account)
+            elif args.realm is not None:
+                data = authentication.status(args.realm, args.account)
+            else:
+                profiles = authentication.profiles()
+                data = {
+                    "profiles": profiles,
+                    "configured": any(item["status"] == "enrolled" for item in profiles),
+                    "contains_secrets": False,
+                }
+        elif args.auth_action == "add":
+            if not interactive:
+                raise AuthenticationError(
+                    "authentication_interactive_required",
+                    "profile credentials must be entered interactively",
+                )
+            profile = args.profile
+            try:
+                authentication.profile_status(profile)
+            except AuthenticationError as exc:
+                if exc.code != "profile_not_found":
+                    raise
+            else:
+                raise AuthenticationError(
+                    "profile_exists",
+                    "authentication profile already exists; create a new named profile",
+                )
+            provider = args.provider
+            if provider is None:
+                providers = authentication.providers()
+                print("Available profile types:", file=sys.stderr)
+                for index, item in enumerate(providers, start=1):
+                    print(f"  {index}. {item.display_name}", file=sys.stderr)
+                answer = input("Select profile type: ").strip()
+                try:
+                    policy = providers[int(answer) - 1]
+                except (ValueError, IndexError) as exc:
+                    raise AuthenticationError("provider_selection_invalid", "profile type selection is invalid") from exc
+            else:
+                policy = authentication.provider(provider)
+            values = {name: getpass.getpass(f"{name}: ") for name in policy.credential_fields}
+            data = authentication.enroll_profile(profile, policy.id, values)
+        elif args.auth_action == "status":  # pragma: no cover - handled above
+            raise AuthenticationError("invalid_auth_request", "unsupported authentication action")
         elif args.auth_action == "enroll":
+            if not interactive:
+                raise AuthenticationError(
+                    "authentication_interactive_required",
+                    "profile credentials must be entered interactively",
+                )
             policy = next((item for item in DEFAULT_AUTH_REALMS if item.id == args.realm), None)
             if policy is None:
                 raise AuthenticationError("authentication_realm_unknown", "authentication realm is not supported")
@@ -132,13 +205,30 @@ def _auth_result(args: argparse.Namespace) -> dict[str, Any]:
         elif args.auth_action == "remove":
             if not args.yes:
                 raise AuthenticationError("confirmation_required", "credential removal requires --yes")
-            data = authentication.remove(args.realm, args.account)
+            target = args.realm or args.profile
+            if args.realm is not None:
+                data = authentication.remove(args.realm, args.account)
+            else:
+                if target in {item.id for item in DEFAULT_AUTH_REALMS}:
+                    try:
+                        authentication.profile_status(target)
+                    except AuthenticationError:
+                        data = authentication.remove(target, args.account)
+                    else:
+                        data = authentication.remove_profile(target)
+                else:
+                    data = authentication.remove_profile(target)
         else:  # pragma: no cover - argparse owns this boundary
             raise AuthenticationError("invalid_auth_request", "unsupported authentication action")
     except (EOFError, KeyboardInterrupt) as exc:
         raise CommandInterfaceError("authentication_cancelled", "credential enrollment was cancelled") from exc
     except AuthenticationError as exc:
         raise CommandInterfaceError(exc.code, str(exc)) from exc
+    except OSError as exc:
+        raise CommandInterfaceError(
+            "authentication_store_unavailable",
+            "authentication profile storage could not be updated safely",
+        ) from exc
     return envelope(ok=True, action=action, status="ready", data=data)
 
 
@@ -165,12 +255,29 @@ def _collection_submission(args: argparse.Namespace, store: CollectionTaskStore)
         raise CommandInterfaceError("collection_request_invalid", "collection parameters must be valid JSON") from exc
     if type(parameters) is not dict:
         raise CommandInterfaceError("collection_request_invalid", "collection parameters must be a JSON object")
-    manager = CollectionManager(store=store)
-    for registration in discover_collector_registrations():
+    registrations = discover_collector_registrations()
+    registration = next(
+        (item for item in registrations if item.collector_id == args.collector_id),
+        None,
+    )
+    authentication = None
+    if registration is not None and registration.authentication_required:
+        try:
+            from authentication import AuthenticationManager
+
+            authentication = AuthenticationManager(DispatchPaths.from_environment())
+        except Exception as exc:
+            raise CommandInterfaceError(
+                "authentication_unavailable",
+                "authentication profiles could not be inspected before collection",
+            ) from exc
+    manager = CollectionManager(authentication=authentication, store=store)
+    for registration in registrations:
         manager.register(registration)
+    account_alias = args.account_alias
     request = CollectionRequest(
         args.collector_id,
-        account_alias=args.account_alias,
+        account_alias=account_alias,
         parameters=parameters,
     )
     return manager.enqueue(
@@ -351,11 +458,31 @@ def _service_result(args: argparse.Namespace) -> dict[str, Any]:
     )
 
 
-def main(argv: Sequence[str] | None = None, *, prog: str = "dispatch-core") -> int:
+def main(
+    argv: Sequence[str] | None = None,
+    *,
+    prog: str = "dispatch-core",
+    interactive: bool = True,
+) -> int:
+    arguments = None if argv is None else list(argv)
+    if not interactive and arguments is not None and any(value in {"-h", "--help"} for value in arguments):
+        command = [value for value in arguments if value not in {"-h", "--help"}]
+        result = envelope(
+            ok=True,
+            action="help",
+            status="ready",
+            data={
+                "command": command,
+                "usage": parser(prog=prog).format_usage().strip(),
+                "contains_secrets": False,
+            },
+        )
+        print(json.dumps(result, sort_keys=True))
+        return 0
     try:
-        args = parser(prog=prog).parse_args(argv)
+        args = parser(prog=prog).parse_args(arguments)
         if args.action == "auth":
-            result = _auth_result(args)
+            result = _auth_result(args, interactive=interactive)
         elif args.action == "collection":
             result = _collection_result(args)
         elif args.action == "plugin":

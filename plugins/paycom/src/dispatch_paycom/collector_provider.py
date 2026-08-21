@@ -7,7 +7,7 @@ from .roster.collector import collect_roster, verify_roster_publication
 from .timecards.collector import collect_timecards, verify_timecard_publication
 
 PLUGIN_ID = "paycom"
-PLUGIN_RELEASE = "0.1.0"
+PLUGIN_RELEASE = "0.1.1"
 
 
 def roster_registration() -> CollectorRegistration:

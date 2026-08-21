@@ -222,6 +222,35 @@ def test_collect_capability_requires_same_id_collector_provider(tmp_path: Path) 
     assert any("collect capability must match" in failure for failure in result.failures)
 
 
+def test_authentication_metadata_must_match_capability(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    project = root / "pyproject.toml"
+    text = project.read_text(encoding="utf-8")
+    text += (
+        "\n[tool.dispatch.authentication]\n"
+        'required_profiles = [{ provider = "amazon-operations" }]\n'
+    )
+    project.write_text(text, encoding="utf-8")
+
+    result = MODULE.audit_owner(root)
+
+    assert any("authentication capability must declare" in failure for failure in result.failures)
+
+
+def test_malformed_capabilities_fail_without_crashing_auth_policy(tmp_path: Path) -> None:
+    root = fixture(tmp_path)
+    project = root / "pyproject.toml"
+    text = project.read_text(encoding="utf-8").replace(
+        'capabilities = ["read_local_data"]',
+        'capabilities = "read_local_data"',
+    )
+    project.write_text(text, encoding="utf-8")
+
+    result = MODULE.audit_owner(root)
+
+    assert any("capabilities must be a non-empty list" in failure for failure in result.failures)
+
+
 def test_collector_provider_is_loadable_and_accepts_no_arguments(tmp_path: Path) -> None:
     root = fixture(tmp_path)
     service = root / "src/example_plugin/service.py"

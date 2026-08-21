@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "dispatch-paycom"
-version = "0.1.0"
+version = "0.1.1"
 description = "Source-owned Paycom meal comparison and authenticated collectors for Dispatch"
 requires-python = ">=3.11,<3.14"
 license = "Apache-2.0"
@@ -29,6 +29,9 @@ capabilities = [
   "network",
   "authentication",
 ]
+
+[tool.dispatch.authentication]
+required_profiles = [{ provider = "paycom-client" }]
 
 [tool.setuptools]
 package-dir = {"" = "src"}

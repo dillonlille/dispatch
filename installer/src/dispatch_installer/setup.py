@@ -53,6 +53,11 @@ _PLUGIN_CAPABILITIES = {
     "direct_delivery",
     "long_running",
 }
+_AUTH_PROVIDERS = {"amazon-operations", "paycom-client"}
+_BUILTIN_PLUGIN_PROVIDERS = {
+    "companion-bridge": "amazon-operations",
+    "paycom": "paycom-client",
+}
 
 
 def _run(command: Sequence[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -365,12 +370,37 @@ def _plugin_project(source: Path, *, expected_id: str | None = None) -> dict[str
         raise InstallerError("plugin_collector_unexpected", f"non-collecting plugin publishes a collector entry point: {plugin_id}")
     if set(configurator_points) not in (set(), {plugin_id}):
         raise InstallerError("plugin_configurator_invalid", f"plugin configurator entry point is invalid: {plugin_id}")
+    authentication = dispatch.get("authentication")
+    if authentication is None:
+        authentication = {"required_profiles": []}
+    if not isinstance(authentication, dict) or set(authentication) != {"required_profiles"}:
+        raise InstallerError("plugin_authentication_invalid", f"plugin authentication metadata is invalid: {plugin_id}")
+    required_profiles = authentication["required_profiles"]
+    if (
+        not isinstance(required_profiles, list)
+        or len(required_profiles) > 1
+        or any(
+            not isinstance(item, dict)
+            or set(item) != {"provider"}
+            or not isinstance(item.get("provider"), str)
+            or item["provider"] not in _AUTH_PROVIDERS
+            for item in required_profiles
+        )
+        or ("authentication" in capabilities and len(required_profiles) != 1)
+        or ("authentication" not in capabilities and required_profiles)
+        or (
+            plugin_id in _BUILTIN_PLUGIN_PROVIDERS
+            and required_profiles != [{"provider": _BUILTIN_PLUGIN_PROVIDERS[plugin_id]}]
+        )
+    ):
+        raise InstallerError("plugin_authentication_invalid", f"plugin required profile metadata is invalid: {plugin_id}")
     return {
         "id": plugin_id,
         "capabilities": list(capabilities),
         "dependencies": safe_dependencies,
         "long_running": long_running,
         "collects": collects,
+        "required_profiles": [dict(item) for item in required_profiles],
         "project": project,
         "configuration": configuration,
     }
@@ -562,10 +592,10 @@ def _plugin_config(layout: InstallLayout, selected: list[str]) -> dict[str, obje
     for plugin_id in selected:
         if plugin_id not in catalog:
             raise InstallerError("plugin_config_invalid", f"configured plugin is not present in the checkout: {plugin_id}")
-        project = tomllib.loads((catalog[plugin_id] / "pyproject.toml").read_text(encoding="utf-8"))
-        metadata = project.get("tool", {}).get("dispatch", {})
-        capabilities = metadata.get("capabilities") if isinstance(metadata, dict) else None
-        if not isinstance(capabilities, list) or any(not isinstance(value, str) for value in capabilities):
+        metadata = _plugin_project(catalog[plugin_id], expected_id=plugin_id)
+        capabilities = metadata.get("capabilities")
+        required_profiles = metadata.get("required_profiles", [])
+        if not isinstance(capabilities, list) or not isinstance(required_profiles, list):
             raise InstallerError("plugin_manifest_invalid", f"plugin capabilities are invalid: {plugin_id}")
         plugins.append(
             {
@@ -573,6 +603,7 @@ def _plugin_config(layout: InstallLayout, selected: list[str]) -> dict[str, obje
                 "source": str(catalog[plugin_id]),
                 "site_packages": str(site_packages),
                 "capabilities": capabilities,
+                "required_profiles": required_profiles,
             }
         )
     return {
@@ -860,7 +891,26 @@ def load_plugin_config(layout: InstallLayout) -> dict[str, object]:
     except (InstallerError, OSError, UnicodeError, tomllib.TOMLDecodeError) as exc:
         raise InstallerError("plugin_config_invalid", "plugin configuration authority is invalid") from exc
     if payload != expected:
-        raise InstallerError("plugin_config_invalid", "plugin configuration does not match the installed checkout")
+        # Configurations written before profile metadata gained its projection
+        # field remain valid. Normalize only that non-secret field; profile
+        # credentials live in the separate encrypted Core store.
+        legacy = dict(payload)
+        legacy_plugins: list[object] = []
+        expected_plugins = expected.get("plugins")
+        if not isinstance(expected_plugins, list) or len(plugins) != len(expected_plugins):
+            raise InstallerError("plugin_config_invalid", "plugin configuration does not match the installed checkout")
+        for actual, wanted in zip(plugins, expected_plugins, strict=True):
+            if not isinstance(actual, dict) or not isinstance(wanted, dict):
+                raise InstallerError("plugin_config_invalid", "plugin configuration does not match the installed checkout")
+            if set(actual) - {"required_profiles"} != set(wanted) - {"required_profiles"}:
+                raise InstallerError("plugin_config_invalid", "plugin configuration does not match the installed checkout")
+            normalized = dict(actual)
+            normalized.setdefault("required_profiles", wanted.get("required_profiles", []))
+            legacy_plugins.append(normalized)
+        legacy["plugins"] = legacy_plugins
+        if legacy != expected:
+            raise InstallerError("plugin_config_invalid", "plugin configuration does not match the installed checkout")
+        return expected
     return payload
 
 
@@ -925,6 +975,116 @@ def migrate_legacy_plugin_config(layout: InstallLayout) -> bool:
     return True
 
 
+def _auth_manager_for_layout(layout: InstallLayout):
+    core_root = assert_source_project_safe(layout.clone / "dispatch-core")
+    if str(core_root) not in sys.path:
+        sys.path.insert(0, str(core_root))
+    from authentication import AuthenticationManager
+    from paths import DispatchPaths
+
+    environment = {
+        **os.environ,
+        "DISPATCH_HOME": str(layout.dispatch_home),
+        "DISPATCH_CODE_ROOT": str(layout.clone),
+        "DISPATCH_CONFIG_ROOT": str(layout.config),
+        "DISPATCH_SECRETS_ROOT": str(layout.secrets),
+        "DISPATCH_DATA_ROOT": str(layout.data),
+        "DISPATCH_STATE_ROOT": str(layout.state),
+        "DISPATCH_CACHE_ROOT": str(layout.cache),
+        "DISPATCH_LOGS_ROOT": str(layout.logs),
+        "DISPATCH_RUNTIME_ROOT": str(layout.run),
+    }
+    return AuthenticationManager(DispatchPaths.from_environment(environment, code_root=layout.clone))
+
+
+def _setup_auth_profiles(layout: InstallLayout, selected: Sequence[str], *, human: bool) -> tuple[list[dict[str, object]], list[dict[str, str]]]:
+    config = load_plugin_config(layout)
+    requirements: list[tuple[str, str]] = []
+    configured_plugins = config.get("plugins", [])
+    if not isinstance(configured_plugins, list):
+        return [], [{"plugin": "unknown", "provider": "unknown", "action": "run dispatch setup again"}]
+    for plugin in configured_plugins:
+        if not isinstance(plugin, dict) or plugin.get("id") not in selected:
+            continue
+        required = plugin.get("required_profiles", [])
+        if isinstance(required, list):
+            for item in required:
+                if isinstance(item, dict) and isinstance(item.get("provider"), str):
+                    requirements.append((str(plugin["id"]), str(item["provider"])))
+    try:
+        authentication = _auth_manager_for_layout(layout)
+        authentication.retain_plugin_bindings(set(selected))
+    except Exception:
+        return [], [
+            {
+                "plugin": plugin_id,
+                "action": "run dispatch setup interactively to create or select a profile",
+            }
+            for plugin_id, provider in requirements
+        ]
+    if not requirements:
+        return [], []
+
+    configured: list[dict[str, object]] = []
+    pending: list[dict[str, str]] = []
+    from getpass import getpass
+
+    for plugin_id, provider in requirements:
+        if not human:
+            try:
+                profile = authentication.profile_for_plugin(plugin_id, provider)
+                policy = authentication.provider(provider)
+                configured.append({"plugin": plugin_id, "profile": profile, "type": policy.public_id, "status": "enrolled"})
+            except Exception:
+                pending.append(
+                    {
+                        "plugin": plugin_id,
+                        "action": "run dispatch setup interactively to create or select a profile",
+                    }
+                )
+            continue
+
+        policy = authentication.provider(provider)
+        compatible = authentication.compatible_profiles(provider)
+        profile: str | None = None
+        if compatible:
+            print(f"{policy.display_name} profile for {plugin_id}:")
+            for index, item in enumerate(compatible, start=1):
+                print(f"  {index}. {item['profile']} (reuse)")
+            print("  c. create a new profile")
+            answer = input("Select a profile: ").strip().lower()
+            if answer != "c":
+                try:
+                    profile = compatible[int(answer) - 1]["profile"]
+                except (ValueError, IndexError, KeyError) as exc:
+                    raise InstallerError("profile_selection_invalid", "authentication profile selection is invalid") from exc
+        if profile is None:
+            profile = input(f"New profile name for {plugin_id}: ").strip()
+            if any(item.get("profile") == profile for item in authentication.profiles()):
+                raise InstallerError(
+                    "profile_exists",
+                    "authentication profile already exists; select it instead",
+                )
+            values = {name: getpass(f"{name}: ") for name in policy.credential_fields}
+            try:
+                authentication.enroll_profile(profile, provider, values, plugin_id=plugin_id)
+            except Exception as exc:
+                raise InstallerError(
+                    str(getattr(exc, "code", "authentication_profile_failed")),
+                    "authentication profile could not be enrolled safely",
+                ) from exc
+        else:
+            try:
+                authentication.bind_profile(profile, plugin_id, provider)
+            except Exception as exc:
+                raise InstallerError(
+                    str(getattr(exc, "code", "authentication_profile_failed")),
+                    "authentication profile could not be selected safely",
+                ) from exc
+        configured.append({"plugin": plugin_id, "profile": profile, "type": policy.public_id, "status": "enrolled"})
+    return configured, pending
+
+
 def run_setup(layout: InstallLayout, argv: list[str] | None = None, *, human: bool = True, run: RunCommand = _run) -> int:
     parser = argparse.ArgumentParser(prog="dispatch setup")
     parser.add_argument("--plugin", action="append", default=[], help="built-in plugin ID; may be repeated")
@@ -954,7 +1114,48 @@ def run_setup(layout: InstallLayout, argv: list[str] | None = None, *, human: bo
             except ValueError as exc:
                 raise InstallerError("plugin_selection_invalid", "plugin selection is invalid") from exc
     result = configure_plugins(layout, selected, run=run)
-    print(json.dumps({"ok": True, "action": "setup", **result}, sort_keys=True))
+    configured, pending = _setup_auth_profiles(layout, selected, human=human)
+    if pending:
+        if human:
+            print("Plugin setup completed, but authentication profiles are still required:")
+            for item in pending:
+                print(f"  - {item['plugin']}: {item['action']}")
+            return 1
+        print(
+            json.dumps(
+                {
+                    "ok": False,
+                    "action": "setup",
+                    "status": "pending_requirements",
+                    "data": {
+                        "setup": result,
+                        "setup_committed": True,
+                        "configured_profiles": configured,
+                        "pending_requirements": pending,
+                        "contains_secrets": False,
+                    },
+                    "error": {
+                        "code": "authentication_profiles_required",
+                        "message": "selected authenticated plugins need an enrolled profile",
+                    },
+                },
+                sort_keys=True,
+            )
+        )
+        return 1
+    if human:
+        print("Dispatch setup is complete.")
+        if selected:
+            print(f"Selected plugins: {', '.join(selected)}")
+        else:
+            print("Selected plugins: Core only")
+        for item in configured:
+            print(
+                f"Authentication profile for {item['plugin']}: "
+                f"{item['profile']} (enrolled, not yet verified)"
+            )
+        return 0
+    print(json.dumps({"ok": True, "action": "setup", **result, "profiles": configured}, sort_keys=True))
     return 0
 
 

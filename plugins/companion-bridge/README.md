@@ -4,7 +4,7 @@ A source-owned Dispatch plugin that receives allowlisted Slack Socket Mode event
 
 ## Security boundary
 
-Each Companion request obtains a request-scoped Core `BrowserManager` lease and `AuthenticationManager` session in the fixed `amazon-operations` realm. The managed page is authenticated, the exact Companion context endpoint is probed, and cookies, user-agent, and CSRF metadata are snapshotted in memory. The lease is released in `finally` immediately after that proof. Only then does the bridge create a direct `httpx` SSE request. Session material is never logged, persisted, returned by health, or sent to Slack.
+Each Companion request obtains a request-scoped Core `BrowserManager` lease and plugin-scoped authentication broker for the selected named `amazon-operations` profile. The managed page is authenticated, the exact Companion context endpoint is probed, and cookies, user-agent, and CSRF metadata are snapshotted in memory. The lease is released in `finally` immediately after that proof. Only then does the bridge create a direct `httpx` SSE request. Session material is never logged, persisted, returned by health, or sent to Slack.
 
 The plugin does not own browser installation, browser profiles, credential storage, authentication recovery helpers, or browser transport control. Core owns those boundaries. Private configuration, Slack credentials, and the thread mapping database are derived from `DispatchPaths` and are separate from this source tree.
 
@@ -34,9 +34,14 @@ admin alert channel, then explicitly enable the exactly generated service:
 
 ```bash
 dispatch plugin configure companion-bridge
-dispatch auth enroll amazon-operations
+dispatch auth add amazon-work --provider amazon
 dispatch plugin-service enable companion-bridge
 ```
+
+`dispatch setup --plugin companion-bridge` chains the profile choice after
+plugin selection. Setup records an enrolled/unverified profile without making a
+live login. Service enablement requires that the selected profile is enrolled;
+health remains read-only and never browses or authenticates.
 
 The foreground service entry point is `companion_bridge.foreground_service:run`;
 it starts Slack Socket Mode on the foreground process and does not detach a

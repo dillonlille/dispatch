@@ -64,11 +64,16 @@ def _prepare_core_environment(layout: InstallLayout) -> list[Path]:
     return paths
 
 
-def _run_core(arguments: list[str], *, prog: str = "dispatch") -> int:
+def _run_core(
+    arguments: list[str],
+    *,
+    prog: str = "dispatch",
+    interactive: bool = True,
+) -> int:
     layout = InstallLayout.from_environment()
     _prepare_core_environment(layout)
     interface = importlib.import_module("command_interface")
-    return int(interface.main(arguments, prog=prog))
+    return int(interface.main(arguments, prog=prog, interactive=interactive))
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -76,13 +81,22 @@ def main(argv: list[str] | None = None) -> int:
     json_output = "--json" in arguments
     arguments = [argument for argument in arguments if argument != "--json"]
     if not arguments or arguments in (["--help"], ["-h"]):
+        if json_output:
+            print(json.dumps({
+                "ok": True,
+                "action": "help",
+                "status": "ready",
+                "data": {"usage": _HELP, "contains_secrets": False},
+                "error": None,
+            }, sort_keys=True))
+            return 0
         print(_HELP, end="")
         return 0
     if arguments[0] in _LIFECYCLE:
         cli_arguments = ["--json", *arguments] if json_output else arguments
         return installer_main(cli_arguments)
     try:
-        return _run_core(arguments)
+        return _run_core(arguments, interactive=not json_output)
     except (InstallerError, ImportError, OSError, ValueError) as exc:
         payload = {"ok": False, "action": arguments[0], "status": "error", "data": {}, "error": {"code": "launch_failed", "message": str(exc)[:256]}}
         print(json.dumps(payload, sort_keys=True))

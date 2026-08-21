@@ -62,7 +62,16 @@ def _setup_state(paths: DispatchPaths) -> dict[str, Any]:
         or not isinstance(payload.get("selected_plugins"), list)
         or not isinstance(payload.get("plugins"), list)
         or any(
-            not isinstance(plugin, dict) or not isinstance(plugin.get("capabilities"), list)
+            not isinstance(plugin, dict)
+            or not isinstance(plugin.get("id"), str)
+            or not isinstance(plugin.get("capabilities"), list)
+            or not isinstance(plugin.get("required_profiles", []), list)
+            or any(
+                not isinstance(item, dict)
+                or set(item) != {"provider"}
+                or not isinstance(item.get("provider"), str)
+                for item in plugin.get("required_profiles", [])
+            )
             for plugin in payload["plugins"]
         )
     ):
@@ -70,10 +79,16 @@ def _setup_state(paths: DispatchPaths) -> dict[str, Any]:
     capabilities = sorted(
         {value for plugin in payload["plugins"] for value in plugin["capabilities"] if isinstance(value, str)}
     )
+    authentication_requirements = [
+        {"plugin": plugin["id"], "provider": item["provider"]}
+        for plugin in payload["plugins"]
+        for item in plugin.get("required_profiles", [])
+    ]
     return {
         "complete": True,
         "selected_plugins": payload["selected_plugins"],
         "capabilities": capabilities,
+        "authentication_requirements": authentication_requirements,
     }
 
 
@@ -149,7 +164,9 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
         )
 
         inspection = BrowserRuntimeAuthority.production().inspect(full_tree=True)
+        setup = _setup_state(paths)
         authentication: dict[str, Any] | None = None
+        authentication_manager: Any | None = None
         authentication_error: Any | None = None
         authentication_dependency_installed = True
         collection_error: CollectionStoreError | None = None
@@ -171,7 +188,8 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
                 authentication = {"configured": False, "dependency": "not_installed"}
             else:
                 try:
-                    authentication = AuthenticationManager(paths).status()
+                    authentication_manager = AuthenticationManager(paths)
+                    authentication = authentication_manager.status()
                 except AuthenticationError as exc:
                     authentication_error = exc
         required_authentication_realms = {
@@ -187,16 +205,60 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             and isinstance(item, dict)
             and item.get("status") == "configured"
         } if isinstance(authentication, dict) else set()
-        authentication_ready = (
-            authentication_dependency_installed
-            and authentication_error is None
-            and isinstance(authentication, dict)
+        requirement_status: list[dict[str, Any]] = []
+        declared_requirements = setup.get("authentication_requirements", [])
+        if not isinstance(declared_requirements, list):
+            declared_requirements = []
+        if authentication_manager is not None:
+            for requirement in declared_requirements:
+                if not isinstance(requirement, dict):
+                    continue
+                plugin_id = requirement.get("plugin")
+                provider = requirement.get("provider")
+                if not isinstance(plugin_id, str) or not isinstance(provider, str):
+                    continue
+                try:
+                    profile = authentication_manager.profile_for_plugin(plugin_id, provider)
+                    profile_status = authentication_manager.profile_status(profile)
+                    requirement_status.append(
+                        {
+                            "plugin": plugin_id,
+                            "profile": profile,
+                            "type": profile_status.get("type"),
+                            "status": profile_status.get("status"),
+                            "verification": profile_status.get("verification"),
+                        }
+                    )
+                except Exception:
+                    requirement_status.append(
+                        {"plugin": plugin_id, "profile": None, "type": None, "status": "not_enrolled"}
+                    )
+        exact_requirements_ready = bool(declared_requirements) and len(requirement_status) == len(declared_requirements) and all(
+            item.get("status") == "enrolled" for item in requirement_status
+        )
+        legacy_requirements_ready = (
+            isinstance(authentication, dict)
             and authentication.get("configured") is True
             and (
                 not required_authentication_realms
                 or required_authentication_realms.issubset(configured_authentication_realms)
             )
         )
+        authentication_ready = (
+            authentication_dependency_installed
+            and authentication_error is None
+            and (
+                exact_requirements_ready
+                if declared_requirements
+                else legacy_requirements_ready
+            )
+        )
+        if isinstance(authentication, dict):
+            authentication["requirements"] = requirement_status
+            if declared_requirements:
+                authentication["configured"] = exact_requirements_ready
+            if authentication_manager is not None and hasattr(authentication_manager, "profiles"):
+                authentication["profiles"] = authentication_manager.profiles()
         collection = collection_manager.status()
         if action in {"health", "verify"}:
             try:
@@ -216,7 +278,6 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             action not in {"health", "verify"} or durable_queue.get("ready") is True
         )
         browser_ready = inspection["ready"] is True
-        setup = _setup_state(paths)
         setup_invalid = setup.get("invalid") is True
         plugins = (
             plugin_health(setup["selected_plugins"])

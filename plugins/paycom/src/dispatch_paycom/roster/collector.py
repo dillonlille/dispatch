@@ -19,7 +19,7 @@ from ..storage import StorageError, open_read_only
 
 PLUGIN_ID = "paycom"
 COLLECTOR_ID = "paycom-roster"
-PLUGIN_RELEASE = "0.1.0"
+PLUGIN_RELEASE = "0.1.1"
 BROWSER_REALM = "paycom-client"
 LANDING_URL = "https://www.paycomonline.net/v4/cl/web.php/client-landing/arc"
 

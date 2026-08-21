@@ -181,18 +181,42 @@ class ManagedCompanionSessionProvider:
         authentication = self.authentication_manager or (
             self.auth_factory(core_paths) if self.auth_factory else AuthenticationManager(core_paths)
         )
+        legacy_alias = getattr(self.config, "auth_account_alias", "default")
+        if hasattr(authentication, "profile_for_plugin"):
+            try:
+                profile = authentication.profile_for_plugin(PLUGIN_ID, "amazon-operations")
+            except Exception as exc:
+                raise ManagedSessionError("Companion authentication profile is not selected") from exc
+        else:
+            profile = legacy_alias
+        broker = None
+        if hasattr(authentication, "profile") and hasattr(authentication, "authenticate"):
+            broker = authentication
+            account_alias = broker.account_alias
+        elif hasattr(authentication, "for_plugin"):
+            try:
+                broker = authentication.for_plugin(PLUGIN_ID, "amazon-operations", profile)
+                account_alias = broker.account_alias
+            except Exception as exc:
+                raise ManagedSessionError("Companion authentication profile is not enrolled") from exc
+        else:
+            # Compatibility for older Core test doubles and pre-profile Core.
+            account_alias = profile
         request = BrowserLeaseRequest(
             plugin_id=PLUGIN_ID,
-            plugin_release="0.1.0",
+            plugin_release="0.1.1",
             realm="amazon-operations",
             purpose=BrowserPurpose.AUTHENTICATION,
-            account_alias=self.config.auth_account_alias,
+            account_alias=account_alias,
         )
         lease = browser.acquire(request)
         try:
             lease.activate()
             session = lease.session
-            result: AuthResultLike = authentication.authenticate(session, self.config.auth_account_alias)
+            if broker is not None:
+                result: AuthResultLike = broker.authenticate(session)
+            else:
+                result = authentication.authenticate(session, account_alias)
             if not result.authenticated:
                 status = str(result.status)
                 manual = str(result.manual_action or "")

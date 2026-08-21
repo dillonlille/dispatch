@@ -19,7 +19,7 @@ The same distribution publishes one `dispatch.collectors` provider with two non-
 - `paycom-roster`
 - `paycom-timecards`
 
-Core owns durable queueing, worker isolation, retries, execution deadlines, the `paycom-client` Browser Manager lease, and authentication. Paycom owns only site-specific navigation, strict extraction, artifact staging, domain validation, transactional SQLite publication, and publication receipts. Selecting the plugin does not schedule collection or run a collector.
+Core owns durable queueing, worker isolation, retries, execution deadlines, the `paycom-client` Browser Manager lease, and the selected named authentication profile. Paycom owns only site-specific navigation, strict extraction, artifact staging, domain validation, transactional SQLite publication, and publication receipts. Selecting the plugin does not schedule collection or run a collector.
 
 ## Private roots
 
@@ -45,6 +45,7 @@ Install/select from the cloned Dispatch environment:
 
 ```bash
 dispatch setup --plugin paycom --yes
+dispatch auth add payroll --provider paycom
 dispatch plugin health paycom
 dispatch plugin invoke paycom --request '{"action":"meal_comparison","relative_scope":"today"}'
 ```
@@ -58,6 +59,12 @@ dispatch collection submit paycom-roster \
 dispatch collection submit paycom-timecards \
   --parameters '{"period_end":"2026-08-22","replace":false}'
 ```
+
+The profile selected during `dispatch setup` is used automatically. `--account`
+remains a compatibility option for legacy callers. Profile resolution is
+Core-owned and happens before a browser lease or collector work;
+credentials never enter collector context or JSON output. Query and health
+actions remain read-only and do not authenticate.
 
 No recurring Paycom schedule is installed by this source migration. The current operational scheduler remains authoritative until a separately reviewed timezone-aware schedule migration and cutover.
 

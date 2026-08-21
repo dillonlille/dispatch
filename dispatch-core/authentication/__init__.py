@@ -5,6 +5,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import fcntl
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -18,10 +19,19 @@ from cryptography.fernet import Fernet, InvalidToken
 
 from browser_manager import ManagedBrowserSession
 from paths import DispatchPaths
+from provider_catalog import (
+    BUILTIN_PLUGIN_PROVIDERS,
+    PROVIDER_CATALOG,
+    ProviderPolicy,
+    provider_from_input,
+)
 
 
 _SLUG = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
 _MAX_VAULT_SIZE = 1024 * 1024
+_PROFILE_SCHEMA_VERSION = 1
+_PROFILE_STATUSES = {"enrolled", "orphaned"}
+_PROFILE_VERIFICATIONS = {"unverified", "verified"}
 
 
 class AuthenticationError(RuntimeError):
@@ -39,28 +49,15 @@ class AuthenticationRealm:
     credential_fields: tuple[str, ...]
 
 
-DEFAULT_AUTH_REALMS = (
-    AuthenticationRealm(
-        id="amazon-operations",
-        landing_url="https://logistics.amazon.com/dspconsolev2",
-        credential_fields=("username", "password"),
-    ),
-    AuthenticationRealm(
-        id="paycom-client",
-        landing_url="https://www.paycomonline.net/v4/cl/web.php/client-landing/arc",
-        credential_fields=(
-            "client_code",
-            "username",
-            "password",
-            "security_pin_1",
-            "security_pin_2",
-            "security_pin_3",
-            "security_pin_4",
-            "security_pin_5",
-        ),
-    ),
+DEFAULT_AUTH_REALMS = tuple(
+    AuthenticationRealm(item.id, item.landing_url, item.credential_fields)
+    for item in PROVIDER_CATALOG
 )
 _REALMS = {realm.id: realm for realm in DEFAULT_AUTH_REALMS}
+
+# Compatibility name for callers that are moving from realm terminology. The
+# public profile UX never serializes these policies or their URLs.
+DEFAULT_AUTH_PROVIDERS = PROVIDER_CATALOG
 
 
 @dataclass(frozen=True)
@@ -87,6 +84,13 @@ def _realm(realm_id: str) -> AuthenticationRealm:
     if value is None:
         raise AuthenticationError("unknown_auth_realm", "authentication realm is not installed")
     return value
+
+
+def _provider(provider_id: str) -> ProviderPolicy:
+    try:
+        return provider_from_input(provider_id)
+    except KeyError as exc:
+        raise AuthenticationError("unknown_auth_provider", "authentication provider is not installed") from exc
 
 
 def _safe_directory(path: Path, *, private: bool) -> os.stat_result:
@@ -123,7 +127,12 @@ def _prepare_private_tree(root: Path) -> None:
 
 
 def _safe_private_file(path: Path, *, maximum_size: int = _MAX_VAULT_SIZE) -> bytes:
-    flags = os.O_RDONLY | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+    flags = (
+        os.O_RDONLY
+        | getattr(os, "O_CLOEXEC", 0)
+        | getattr(os, "O_NOFOLLOW", 0)
+        | getattr(os, "O_NONBLOCK", 0)
+    )
     try:
         descriptor = os.open(path, flags)
     except OSError as exc:
@@ -146,6 +155,8 @@ def _safe_private_file(path: Path, *, maximum_size: int = _MAX_VAULT_SIZE) -> by
             data.extend(chunk)
         if len(data) > maximum_size:
             raise AuthenticationError("auth_store_unsafe", "authentication file exceeds size policy")
+        if len(data) != details.st_size:
+            raise AuthenticationError("auth_store_unsafe", "authentication file changed while it was read")
         return bytes(data)
     finally:
         os.close(descriptor)
@@ -183,6 +194,7 @@ class EncryptedCredentialStore:
         self.key_file = root / "vault.key"
         self.vault_file = root / "credentials.enc"
         self.lock_file = root / "credentials.lock"
+        self.profile_file = root / "profiles.json"
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
@@ -237,7 +249,7 @@ class EncryptedCredentialStore:
         try:
             cleartext = Fernet(key).decrypt(token)
             payload = json.loads(cleartext.decode("utf-8"))
-        except (InvalidToken, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        except (InvalidToken, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
             raise AuthenticationError("auth_store_invalid", "authentication vault cannot be decrypted") from exc
         self._validate_payload(payload)
         return payload
@@ -270,6 +282,218 @@ class EncryptedCredentialStore:
         assert key is not None
         cleartext = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
         _atomic_private_file(self.vault_file, Fernet(key).encrypt(cleartext))
+
+    @staticmethod
+    def _validate_profile_payload(payload: Any) -> None:
+        if not isinstance(payload, dict) or set(payload) != {"schema_version", "profiles"}:
+            raise AuthenticationError("auth_profile_store_invalid", "authentication profile registry shape is invalid")
+        if payload.get("schema_version") != _PROFILE_SCHEMA_VERSION or not isinstance(payload.get("profiles"), dict):
+            raise AuthenticationError("auth_profile_store_invalid", "authentication profile registry version is invalid")
+        for profile, record in payload["profiles"].items():
+            _require_slug(profile, "profile")
+            if (
+                not isinstance(record, dict)
+                or set(record) != {"provider", "account_alias", "status", "verification", "updated_at", "bindings"}
+                or not isinstance(record.get("provider"), str)
+                or not isinstance(record.get("account_alias"), str)
+                or not isinstance(record.get("status"), str)
+                or record["status"] not in _PROFILE_STATUSES
+                or not isinstance(record.get("verification"), str)
+                or record["verification"] not in _PROFILE_VERIFICATIONS
+                or not isinstance(record.get("updated_at"), str)
+                or not isinstance(record.get("bindings"), list)
+                or len(record["bindings"]) > 64
+                or any(not isinstance(binding, str) or _SLUG.fullmatch(binding) is None for binding in record["bindings"])
+                or len(set(record["bindings"])) != len(record["bindings"])
+                or _SLUG.fullmatch(record["account_alias"]) is None
+            ):
+                raise AuthenticationError("auth_profile_store_invalid", "authentication profile record is invalid")
+
+    def _load_profiles(self) -> dict[str, Any] | None:
+        if not self.profile_file.exists() and not self.profile_file.is_symlink():
+            return None
+        raw = _safe_private_file(self.profile_file, maximum_size=256 * 1024)
+        try:
+            payload = json.loads(raw.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise AuthenticationError("auth_profile_store_invalid", "authentication profile registry is invalid") from exc
+        self._validate_profile_payload(payload)
+        return payload
+
+    @staticmethod
+    def _profile_candidate(provider: str, alias: str, profiles: Mapping[str, Any]) -> str:
+        candidate = alias
+        if candidate not in profiles:
+            return candidate
+        record = profiles[candidate]
+        if record.get("provider") == provider and record.get("account_alias") == alias:
+            return candidate
+        prefix = _provider(provider).public_id
+        candidate = f"{prefix}-{alias}"
+        if len(candidate) > 63:
+            digest = hashlib.sha256(candidate.encode()).hexdigest()[:8]
+            candidate = f"{candidate[:54].rstrip('-')}-{digest}"
+        if candidate not in profiles:
+            return candidate
+        index = 2
+        base = candidate[:60].rstrip("-")
+        while f"{base}-{index}" in profiles:
+            index += 1
+        return f"{base}-{index}"
+
+    def _reconciled_profiles(self, vault: dict[str, Any], registry: dict[str, Any] | None) -> dict[str, Any]:
+        profiles = {} if registry is None else dict(registry["profiles"])
+        for provider, accounts in vault["accounts"].items():
+            for alias in accounts:
+                if any(
+                    record.get("provider") == provider and record.get("account_alias") == alias
+                    for record in profiles.values()
+                ):
+                    continue
+                profile = self._profile_candidate(provider, alias, profiles)
+                profiles[profile] = {
+                    "provider": provider,
+                    "account_alias": alias,
+                    "status": "enrolled",
+                    "verification": "unverified",
+                    "updated_at": _utc_now(),
+                    "bindings": [],
+                }
+        for record in profiles.values():
+            provider = record.get("provider")
+            alias = record.get("account_alias")
+            record["status"] = "enrolled" if vault["accounts"].get(provider, {}).get(alias) is not None else "orphaned"
+        return {"schema_version": _PROFILE_SCHEMA_VERSION, "profiles": profiles}
+
+    def profile_payload(self, *, persist: bool = False) -> dict[str, Any]:
+        if persist:
+            with self._locked():
+                vault = self._load()
+                registry = self._load_profiles()
+                payload = self._reconciled_profiles(vault, registry)
+                if registry != payload:
+                    self.write_profile_payload(payload)
+                return payload
+        vault = self._load()
+        registry = self._load_profiles()
+        return self._reconciled_profiles(vault, registry)
+
+    def write_profile_payload(self, payload: dict[str, Any]) -> None:
+        self._validate_profile_payload(payload)
+        data = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        if len(data) > 256 * 1024:
+            raise AuthenticationError(
+                "auth_profile_store_invalid",
+                "authentication profile registry exceeds size policy",
+            )
+        _atomic_private_file(
+            self.profile_file,
+            data,
+        )
+
+    def put_profile(
+        self,
+        profile: str,
+        provider: str,
+        account_alias: str,
+        values: Mapping[str, str],
+    ) -> None:
+        with self._locked():
+            vault = self._load()
+            registry = self._reconciled_profiles(vault, self._load_profiles())
+            existing = registry["profiles"].get(profile)
+            if existing is not None and existing["provider"] != provider:
+                raise AuthenticationError("profile_provider_mismatch", "profile is enrolled for another provider")
+            accounts = vault["accounts"].setdefault(provider, {})
+            accounts[account_alias] = {"updated_at": _utc_now(), "values": dict(values)}
+            self._write(vault)
+            prior_bindings = [] if existing is None else list(existing["bindings"])
+            registry["profiles"][profile] = {
+                "provider": provider,
+                "account_alias": account_alias,
+                "status": "enrolled",
+                "verification": "unverified",
+                "updated_at": _utc_now(),
+                "bindings": prior_bindings,
+            }
+            self.write_profile_payload(registry)
+
+    def select_profile_for_plugin(self, profile: str, plugin_id: str, provider: str) -> dict[str, Any]:
+        """Select exactly one compatible profile for a plugin in one projection write."""
+        with self._locked():
+            vault = self._load()
+            registry = self._reconciled_profiles(vault, self._load_profiles())
+            selected = registry["profiles"].get(profile)
+            if selected is None:
+                raise AuthenticationError("profile_not_found", "authentication profile is not enrolled")
+            if selected["status"] != "enrolled":
+                raise AuthenticationError("profile_orphaned", "authentication profile has no usable encrypted record")
+            if selected["provider"] != provider:
+                raise AuthenticationError("profile_provider_mismatch", "authentication profile is enrolled for another provider")
+            now = _utc_now()
+            for record in registry["profiles"].values():
+                bindings = [value for value in record["bindings"] if value != plugin_id]
+                if record is selected:
+                    bindings.append(plugin_id)
+                if bindings != record["bindings"]:
+                    record["bindings"] = bindings
+                    record["updated_at"] = now
+            self.write_profile_payload(registry)
+            return dict(selected)
+
+    def retain_plugin_bindings(self, selected_plugins: set[str]) -> None:
+        """Drop bindings for deselected plugins without deleting any profile."""
+        with self._locked():
+            vault = self._load()
+            registry = self._reconciled_profiles(vault, self._load_profiles())
+            changed = False
+            now = _utc_now()
+            for record in registry["profiles"].values():
+                bindings = [value for value in record["bindings"] if value in selected_plugins]
+                if bindings != record["bindings"]:
+                    record["bindings"] = bindings
+                    record["updated_at"] = now
+                    changed = True
+            if changed:
+                self.write_profile_payload(registry)
+
+    def remove_profile(self, profile: str) -> tuple[bool, dict[str, Any] | None]:
+        with self._locked():
+            vault = self._load()
+            registry = self._reconciled_profiles(vault, self._load_profiles())
+            record = registry["profiles"].get(profile)
+            if record is None:
+                return False, None
+            if record["bindings"]:
+                raise AuthenticationError(
+                    "profile_in_use",
+                    "authentication profile is still selected by a plugin",
+                )
+            if record["status"] == "orphaned":
+                # The registry may outlive a credential account when an earlier
+                # compound removal was interrupted. With no bindings and no
+                # matching vault record, retry safely removes only the stale
+                # non-secret projection.
+                provider, alias = record["provider"], record["account_alias"]
+                if vault["accounts"].get(provider, {}).get(alias) is not None:
+                    raise AuthenticationError(
+                        "profile_orphaned",
+                        "authentication profile cannot be removed because its provider is unavailable",
+                    )
+                del registry["profiles"][profile]
+                self.write_profile_payload(registry)
+                return True, record
+            provider, alias = record["provider"], record["account_alias"]
+            accounts = vault["accounts"].get(provider, {})
+            if alias not in accounts:
+                raise AuthenticationError("profile_orphaned", "authentication profile has no matching encrypted record")
+            del accounts[alias]
+            if not accounts:
+                vault["accounts"].pop(provider, None)
+            del registry["profiles"][profile]
+            self._write(vault)
+            self.write_profile_payload(registry)
+            return True, record
 
     def put(self, realm_id: str, account_alias: str, values: Mapping[str, str]) -> None:
         with self._locked():
@@ -311,6 +535,7 @@ class AuthenticationManager:
     """Core Authentication boundary; secret values remain trusted and in-process."""
 
     def __init__(self, paths: DispatchPaths) -> None:
+        self._paths = paths
         root = paths.owner_root("secrets", "dispatch-core") / "authentication"
         self._store = EncryptedCredentialStore(root)
 
@@ -320,7 +545,193 @@ class AuthenticationManager:
 
     @staticmethod
     def realms() -> tuple[AuthenticationRealm, ...]:
-        return DEFAULT_AUTH_REALMS
+        return tuple(DEFAULT_AUTH_REALMS)
+
+    @staticmethod
+    def providers() -> tuple[ProviderPolicy, ...]:
+        """Return the closed Core-owned provider menu without URLs or selectors."""
+        return tuple(PROVIDER_CATALOG)
+
+    @staticmethod
+    def provider(value: str) -> ProviderPolicy:
+        return _provider(value)
+
+    @staticmethod
+    def _public_profile(profile: str, record: Mapping[str, Any]) -> dict[str, Any]:
+        try:
+            policy = _provider(str(record.get("provider")))
+            profile_type = policy.public_id
+            type_name = policy.display_name
+        except AuthenticationError:
+            profile_type = "unavailable"
+            type_name = "Unavailable profile type"
+        return {
+            "profile": profile,
+            "type": profile_type,
+            "type_name": type_name,
+            "status": record.get("status"),
+            "verification": record.get("verification", "unverified"),
+        }
+
+    def profiles(self) -> list[dict[str, Any]]:
+        payload = self._store.profile_payload()
+        return [
+            self._public_profile(profile, payload["profiles"][profile])
+            for profile in sorted(payload["profiles"])
+        ]
+
+    def profile_status(self, profile: str) -> dict[str, Any]:
+        _require_slug(profile, "profile")
+        payload = self._store.profile_payload()
+        record = payload["profiles"].get(profile)
+        if record is None:
+            raise AuthenticationError("profile_not_found", "authentication profile is not enrolled")
+        return self._public_profile(profile, record)
+
+    def compatible_profiles(self, provider: str) -> list[dict[str, Any]]:
+        policy = _provider(provider)
+        payload = self._store.profile_payload()
+        return [
+            self._public_profile(profile, record)
+            for profile, record in sorted(payload["profiles"].items())
+            if record.get("provider") == policy.id and record.get("status") == "enrolled"
+        ]
+
+    def _profile_record(self, profile: str, *, persist: bool = True) -> dict[str, Any]:
+        _require_slug(profile, "profile")
+        payload = self._store.profile_payload(persist=persist)
+        record = payload["profiles"].get(profile)
+        if record is None:
+            raise AuthenticationError("profile_not_found", "authentication profile is not enrolled")
+        return record
+
+    def _require_plugin_provider(self, plugin_id: str, provider: str) -> None:
+        _require_slug(plugin_id, "plugin_id")
+        policy = _provider(provider)
+        expected = BUILTIN_PLUGIN_PROVIDERS.get(plugin_id)
+        if expected is not None and expected != policy.id:
+            raise AuthenticationError("profile_provider_mismatch", "plugin does not permit this authentication provider")
+
+    def bind_profile(self, profile: str, plugin_id: str, provider: str) -> dict[str, Any]:
+        self._require_plugin_provider(plugin_id, provider)
+        updated = self._store.select_profile_for_plugin(profile, plugin_id, _provider(provider).id)
+        return self._public_profile(profile, updated)
+
+    def retain_plugin_bindings(self, selected_plugins: set[str]) -> None:
+        for plugin_id in selected_plugins:
+            _require_slug(plugin_id, "plugin_id")
+        self._store.retain_plugin_bindings(selected_plugins)
+
+    def profile_for_plugin(self, plugin_id: str, provider: str) -> str:
+        self._require_plugin_provider(plugin_id, provider)
+        provider_id = _provider(provider).id
+        payload = self._store.profile_payload()
+        matches = [
+            profile
+            for profile, record in payload["profiles"].items()
+            if plugin_id in record.get("bindings", [])
+        ]
+        if len(matches) > 1:
+            raise AuthenticationError("profile_binding_ambiguous", "plugin has more than one selected authentication profile")
+        if not matches:
+            raise AuthenticationError(
+                "profile_required",
+                f"add or select an enrolled authentication profile for {plugin_id}",
+            )
+        record = payload["profiles"][matches[0]]
+        if record["provider"] != provider_id:
+            raise AuthenticationError("profile_provider_mismatch", "selected authentication profile uses another provider")
+        if record["status"] != "enrolled":
+            raise AuthenticationError("profile_orphaned", "selected authentication profile has no usable encrypted record")
+        return matches[0]
+
+    def account_alias_for_profile(self, profile: str, provider: str | None = None) -> str:
+        record = self._profile_record(profile)
+        if provider is not None and record["provider"] != _provider(provider).id:
+            raise AuthenticationError("profile_provider_mismatch", "authentication profile is enrolled for another provider")
+        if record["status"] != "enrolled":
+            raise AuthenticationError("profile_orphaned", "authentication profile has no usable encrypted record")
+        return str(record["account_alias"])
+
+    def profile_credentials(self, profile: str, provider: str | None = None) -> CredentialSet:
+        record = self._profile_record(profile)
+        actual_provider = str(record["provider"])
+        if provider is not None and actual_provider != _provider(provider).id:
+            raise AuthenticationError("profile_provider_mismatch", "authentication profile is enrolled for another provider")
+        if record["status"] != "enrolled":
+            raise AuthenticationError("profile_orphaned", "authentication profile has no usable encrypted record")
+        return self.credentials(actual_provider, str(record["account_alias"]))
+
+    def enroll_profile(
+        self,
+        profile: str,
+        provider: str,
+        values: Mapping[str, str],
+        *,
+        plugin_id: str | None = None,
+    ) -> dict[str, Any]:
+        _require_slug(profile, "profile")
+        policy = _provider(provider)
+        provider = policy.id
+        if plugin_id is not None:
+            self._require_plugin_provider(plugin_id, provider)
+        if set(values) != set(policy.credential_fields):
+            raise AuthenticationError("invalid_credentials", "credential fields do not match the provider policy")
+        normalized: dict[str, str] = {}
+        for name in policy.credential_fields:
+            value = values[name]
+            if not isinstance(value, str) or not value or len(value) > 4096 or "\x00" in value:
+                raise AuthenticationError("invalid_credentials", "a credential value is empty or invalid")
+            normalized[name] = value
+        existing = self._store.profile_payload().get("profiles", {}).get(profile)
+        if existing is not None and existing["provider"] != provider:
+            raise AuthenticationError("profile_provider_mismatch", "profile is enrolled for another provider")
+        if existing is not None:
+            raise AuthenticationError("profile_exists", "authentication profile already exists")
+        account_alias = profile if existing is None else str(existing["account_alias"])
+        self._store.put_profile(profile, provider, account_alias, normalized)
+        if plugin_id is not None:
+            self.bind_profile(profile, plugin_id, provider)
+        return {
+            "profile": profile,
+            "type": policy.public_id,
+            "type_name": policy.display_name,
+            "status": "enrolled",
+            "verification": "unverified",
+        }
+
+    def remove_profile(self, profile: str) -> dict[str, Any]:
+        _require_slug(profile, "profile")
+        removed, record = self._store.remove_profile(profile)
+        public = None if record is None else self._public_profile(profile, record)
+        return {
+            "profile": profile,
+            "type": None if public is None else public["type"],
+            "type_name": None if public is None else public["type_name"],
+            "status": "removed" if removed else "not_enrolled",
+        }
+
+    def for_plugin(self, plugin_id: str, provider: str, profile: str) -> "PluginAuthenticationBroker":
+        self._require_plugin_provider(plugin_id, provider)
+        provider = _provider(provider).id
+        record = self._profile_record(profile)
+        if plugin_id not in record.get("bindings", []):
+            raise AuthenticationError(
+                "profile_not_authorized",
+                "authentication profile is not selected for this plugin",
+            )
+        self.account_alias_for_profile(profile, provider)
+        return PluginAuthenticationBroker(self._paths, plugin_id, provider, profile)
+
+    def authenticate_profile(self, session: ManagedBrowserSession, profile: str) -> "AuthenticationResult":
+        provider = _realm(session.realm).id
+        alias = self.account_alias_for_profile(profile, provider)
+        return self.authenticate(session, alias)
+
+    def resume_profile(self, session: ManagedBrowserSession, profile: str) -> "AuthenticationResult":
+        provider = _realm(session.realm).id
+        alias = self.account_alias_for_profile(profile, provider)
+        return self.resume(session, alias)
 
     def status(self, realm_id: str | None = None, account_alias: str = "default") -> dict[str, Any]:
         _require_slug(account_alias, "account_alias")
@@ -345,6 +756,11 @@ class AuthenticationManager:
     def enroll(self, realm_id: str, account_alias: str, values: Mapping[str, str]) -> dict[str, Any]:
         policy = _realm(realm_id)
         _require_slug(account_alias, "account_alias")
+        if (realm_id, account_alias) in self._store.configured_accounts():
+            raise AuthenticationError(
+                "profile_exists",
+                "credential account already exists; create and select a new named profile",
+            )
         if set(values) != set(policy.credential_fields):
             raise AuthenticationError("invalid_credentials", "credential fields do not match the realm policy")
         normalized: dict[str, str] = {}
@@ -404,7 +820,18 @@ class AuthenticationManager:
     def remove(self, realm_id: str, account_alias: str = "default") -> dict[str, Any]:
         _realm(realm_id)
         _require_slug(account_alias, "account_alias")
-        removed = self._store.remove(realm_id, account_alias)
+        payload = self._store.profile_payload()
+        matches = [
+            profile
+            for profile, record in payload["profiles"].items()
+            if record.get("provider") == realm_id and record.get("account_alias") == account_alias
+        ]
+        if len(matches) > 1:
+            raise AuthenticationError("profile_binding_ambiguous", "credential account has multiple profile records")
+        if matches:
+            removed = self.remove_profile(matches[0])["status"] == "removed"
+        else:
+            removed = self._store.remove(realm_id, account_alias)
         return {
             "realm": realm_id,
             "account_alias": account_alias,
@@ -412,15 +839,40 @@ class AuthenticationManager:
         }
 
 
+class PluginAuthenticationBroker:
+    """Plugin-scoped authentication facade; raw vault records stay Core-owned."""
+
+    def __init__(self, paths: DispatchPaths, plugin_id: str, provider: str, profile: str) -> None:
+        self._paths = paths
+        self.plugin_id = plugin_id
+        self.provider = provider
+        self.profile = profile
+
+    @property
+    def account_alias(self) -> str:
+        return AuthenticationManager(self._paths).account_alias_for_profile(self.profile, self.provider)
+
+    def authenticate(self, session: ManagedBrowserSession) -> "AuthenticationResult":
+        if session.realm != self.provider:
+            raise AuthenticationError("profile_provider_mismatch", "managed browser session uses another provider")
+        return AuthenticationManager(self._paths).authenticate_profile(session, self.profile)
+
+    def resume(self, session: ManagedBrowserSession) -> "AuthenticationResult":
+        if session.realm != self.provider:
+            raise AuthenticationError("profile_provider_mismatch", "managed browser session uses another provider")
+        return AuthenticationManager(self._paths).resume_profile(session, self.profile)
+
 from .workflow import AuthenticationResult
 
 
 __all__ = [
     "AuthenticationError",
     "AuthenticationManager",
+    "PluginAuthenticationBroker",
     "AuthenticationRealm",
     "AuthenticationResult",
     "CredentialSet",
     "DEFAULT_AUTH_REALMS",
+    "DEFAULT_AUTH_PROVIDERS",
     "EncryptedCredentialStore",
 ]

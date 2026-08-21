@@ -3,13 +3,15 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 
+from provider_catalog import PROVIDER_CATALOG
+
 from .models import BrowserLeaseRequest, BrowserManagerError, BrowserPurpose, BrowserRealm
 
 
-DEFAULT_REALMS = (
+DEFAULT_REALMS = tuple(
     BrowserRealm(
-        id="amazon-operations",
-        landing_url="https://logistics.amazon.com/dspconsolev2",
+        id=provider.id,
+        landing_url=provider.landing_url,
         purposes=frozenset(
             {
                 BrowserPurpose.AUTHENTICATION,
@@ -17,18 +19,8 @@ DEFAULT_REALMS = (
                 BrowserPurpose.HEALTHCHECK,
             }
         ),
-    ),
-    BrowserRealm(
-        id="paycom-client",
-        landing_url="https://www.paycomonline.net/v4/cl/web.php/client-landing/arc",
-        purposes=frozenset(
-            {
-                BrowserPurpose.AUTHENTICATION,
-                BrowserPurpose.COLLECTION,
-                BrowserPurpose.HEALTHCHECK,
-            }
-        ),
-    ),
+    )
+    for provider in PROVIDER_CATALOG
 )
 
 
