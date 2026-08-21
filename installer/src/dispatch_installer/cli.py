@@ -54,6 +54,7 @@ def _parser() -> argparse.ArgumentParser:
         "harness-setup",
         help="select, install, and configure an agent harness profile",
     )
+    harness_setup.add_argument("--yes", action="store_true", help="run non-interactively with defaults")
     harness_setup.add_argument(
         "--install-harness",
         action="store_true",
