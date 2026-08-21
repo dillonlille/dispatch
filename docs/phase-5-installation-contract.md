@@ -9,7 +9,7 @@ Dispatch turns a reviewed Git source ref into a per-user installation. Stable an
 - private configuration and durable data remain separate from source;
 - system-owned browser or sandbox resources, when a future integration needs them, are outside the user source tree and require their own reviewed lifecycle boundary.
 
-Hermes is a user-supplied prerequisite. Dispatch does not install, configure, inspect, create profiles for, or mutate Hermes.
+Hermes is a user-supplied prerequisite. By default Dispatch does not install, configure, inspect, create profiles for, or mutate Hermes. When the user explicitly selects Hermes as an agent harness during setup, Dispatch may detect, digest-verified-install, and configure one dedicated profile per `harness-integration.md`; that selection is recorded and bounded.
 
 ## Installation phases
 

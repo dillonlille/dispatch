@@ -62,7 +62,7 @@ The bootstrap reads interactive prompts from `/dev/tty`, clones into `~/.dispatc
 └── installation.json         selected channel/ref/commit record
 ```
 
-Core executes directly from `dispatch-core/`; it is not installed as a wheel. `DISPATCH_HOME` may override the default root and must be absolute and non-symlinked. The launcher is normally `${HOME}/.local/bin/dispatch`. Hermes is entirely outside this contract and is never installed, inspected, modified, or removed by Dispatch.
+Core executes directly from `dispatch-core/`; it is not installed as a wheel. `DISPATCH_HOME` may override the default root and must be absolute and non-symlinked. The launcher is normally `${HOME}/.local/bin/dispatch`. An optional agent harness (Hermes) can be selected during setup; see [`docs/harness-integration.md`](docs/harness-integration.md). Without a selected harness, Hermes remains outside this contract and is never installed, inspected, modified, or removed by Dispatch.
 
 See [`docs/online-installation.md`](docs/online-installation.md), [`docs/path-configuration.md`](docs/path-configuration.md), and [`docs/uninstallation.md`](docs/uninstallation.md).
 

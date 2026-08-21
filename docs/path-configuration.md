@@ -63,4 +63,4 @@ Use `dispatch update` to advance the selected channel and `dispatch channel stab
 
 Core's path API supports explicit absolute root overrides for development, embedded process use, and intentionally external private storage. Installed launchers and user services project the exact validated roots selected at installation time: defaults remain beneath `DISPATCH_HOME`, while explicit `DISPATCH_*_ROOT` values may be separate non-overlapping private directories and are preserved for lifecycle and uninstall operations. Paths must not embed a username, a branch-specific private path, or a secret.
 
-Hermes is outside the Dispatch path contract. Dispatch never inspects, configures, creates profiles for, or removes Hermes files.
+Hermes is outside the Dispatch path contract unless the user explicitly selects it as a harness during setup (see `harness-integration.md`). Without a selected harness, Dispatch never inspects, configures, creates profiles for, or removes Hermes files. With a selected harness, Dispatch touches only its own dedicated profile and the artifacts recorded in its ownership manifest.
