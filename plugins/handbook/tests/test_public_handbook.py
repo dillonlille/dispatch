@@ -3,14 +3,18 @@ from __future__ import annotations
 import hashlib
 import importlib.util
 import json
+import os
 from pathlib import Path
+import re
+import shutil
 import tomllib
 
 import pytest
 
+from dispatch_handbook.chunking import ChunkingError, PageText, build_chunks
 from dispatch_handbook.demo import build_demo
 from dispatch_handbook.index import IndexError, verify_index
-from dispatch_handbook.service import handle
+from dispatch_handbook.service import ACTIONS, handle
 
 ROOT = Path(__file__).resolve().parents[1]
 FIXTURE = ROOT / "examples" / "synthetic-handbook.json"
@@ -160,3 +164,112 @@ def test_package_metadata_declares_source_plugin_identity_and_capabilities() -> 
         "id": "handbook",
         "capabilities": ["read_local_data"],
     }
+
+
+def test_lookup_rejects_unsearchable_question_as_invalid_input(tmp_path: Path) -> None:
+    index = make_index(tmp_path)
+    result = handle({"action": "lookup", "question": ". . ."}, index_path=index)
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_input"
+    assert "no searchable terms" in result["error"]["message"]
+
+
+def test_lookup_rejects_non_string_question() -> None:
+    result = handle({"action": "lookup", "question": 123})
+    assert result["ok"] is False
+    assert result["error"]["code"] == "invalid_input"
+    assert result["status"] == "error"
+
+
+def test_lookup_validates_stripped_question_length(tmp_path: Path) -> None:
+    index = make_index(tmp_path)
+    # Padding whitespace no longer counts toward the length limit: the
+    # stripped question is both validated and searched.
+    padded = "star" + " " * 600
+    padded_result = handle({"action": "lookup", "question": padded}, index_path=index)
+    assert padded_result["ok"] is True
+    assert padded_result["status"] == "found"
+
+    long = "a" * 501
+    too_long = handle({"action": "lookup", "question": long}, index_path=index)
+    assert too_long["ok"] is False
+    assert too_long["error"]["code"] == "invalid_input"
+
+    short = handle({"action": "lookup", "question": "  star  "}, index_path=index)
+    assert short["ok"] is True
+    assert short["status"] == "found"
+
+
+def test_search_rejects_world_readable_index(tmp_path: Path) -> None:
+    index = make_index(tmp_path)
+    os.chmod(index, 0o644)
+    try:
+        result = handle({"action": "lookup", "question": "paper star"}, index_path=index)
+        assert result["ok"] is False
+        assert result["error"]["code"] == "index_unavailable"
+        assert "owner-only" in result["error"]["message"]
+    finally:
+        os.chmod(index, 0o600)
+
+
+def test_read_rejects_live_wal_sidecar(tmp_path: Path) -> None:
+    index = make_index(tmp_path)
+    (tmp_path / "synthetic.sqlite3-wal").write_bytes(b"")
+    try:
+        for request in (
+            {"action": "health"},
+            {"action": "contents"},
+            {"action": "overview"},
+            {"action": "lookup", "question": "paper star"},
+        ):
+            result = handle(request, index_path=index)
+            assert result["ok"] is False, request
+            assert "write-ahead log" in result["error"]["message"], request
+    finally:
+        (tmp_path / "synthetic.sqlite3-wal").unlink()
+
+
+def test_read_rejects_symlinked_parent_directory(tmp_path: Path) -> None:
+    real = tmp_path / "real"
+    real.mkdir()
+    index = make_index(tmp_path)
+    shutil.copy(index, real / "synthetic.sqlite3")
+    link = tmp_path / "link"
+    link.symlink_to(real)
+    # The service layer resolves configured paths before verification, so the
+    # guard is enforced at the storage layer where raw paths arrive.
+    with pytest.raises(IndexError) as excinfo:
+        verify_index(link / "synthetic.sqlite3")
+    assert "physical directory" in str(excinfo.value)
+
+
+def test_chunk_identity_binds_to_content_hash() -> None:
+    pages = [PageText(1, "s1", "T", "k", "en", "one two three four five")]
+    first = build_chunks(pages, document_version="2026 v1", source_sha256="a" * 64)
+    second = build_chunks(pages, document_version="2026 v1", source_sha256="b" * 64)
+    assert first[0].chunk_id != second[0].chunk_id
+    assert first[0].citation_id != second[0].citation_id
+    # Same content stays deterministic across runs.
+    again = build_chunks(pages, document_version="2026 v1", source_sha256="a" * 64)
+    assert again[0].chunk_id == first[0].chunk_id
+    assert again[0].citation_id == first[0].citation_id
+
+
+def test_non_contiguous_section_fails_with_clear_error() -> None:
+    pages = [
+        PageText(1, "s1", "T", "k", "en", "alpha beta gamma"),
+        PageText(2, "s2", "T2", "k", "en", "delta epsilon"),
+        PageText(3, "s1", "T", "k", "en", "zeta eta theta"),
+    ]
+    with pytest.raises(ChunkingError) as excinfo:
+        build_chunks(pages, document_version="2026", source_sha256="a" * 64)
+    assert "not contiguous" in str(excinfo.value)
+
+
+def test_hermes_adapter_actions_match_service_actions() -> None:
+    adapter_path = ROOT / "integration" / "hermes-plugins" / "dispatch_handbook" / "__init__.py"
+    adapter_text = adapter_path.read_text(encoding="utf-8")
+    match = re.search(r"ACTIONS = \{([^}]*)\}", adapter_text)
+    assert match is not None, "adapter ACTIONS set not found"
+    adapter_actions = {value.strip().strip('"') for value in match.group(1).split(",")}
+    assert adapter_actions == ACTIONS

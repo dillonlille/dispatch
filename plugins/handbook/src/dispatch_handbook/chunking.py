@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, replace
+import hashlib
 import re
 from typing import Iterable
 
@@ -84,10 +85,19 @@ def build_chunks(
         raise ChunkingError("source hash must be SHA-256")
 
     version = _version_id(document_version)
+    # Bind chunk identity to content: two documents sharing a version string
+    # but differing in bytes must never produce colliding chunk/citation IDs.
+    content_tag = hashlib.sha256(source_sha256.encode("ascii")).hexdigest()[:8]
     result: list[Chunk] = []
     index = 0
+    seen_section_ids: set[str] = set()
     while index < len(values):
         section_id = values[index].section_id
+        if section_id in seen_section_ids:
+            raise ChunkingError(
+                f"section {section_id!r} is not contiguous; sections must not reappear after another section"
+            )
+        seen_section_ids.add(section_id)
         section_pages: list[PageText] = []
         while index < len(values) and values[index].section_id == section_id:
             section_pages.append(values[index])
@@ -121,8 +131,8 @@ def build_chunks(
                 if len(pages_tuple) == 1
                 else f"p{pages_tuple[0]:03d}-{pages_tuple[-1]:03d}"
             )
-            chunk_id = f"hb{version}-{section_id}-{ordinal:03d}"
-            citation_id = f"HB{version}-{page_component}-{section_id}-{ordinal:03d}"
+            chunk_id = f"hb{version}-{content_tag}-{section_id}-{ordinal:03d}"
+            citation_id = f"HB{version}-{page_component}-{section_id}-{ordinal:03d}-{content_tag}"
             section_chunks.append(Chunk(
                 chunk_id=chunk_id,
                 citation_id=citation_id,

@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 from typing import Any
 
-from .index import IndexError, list_sections, search_fts, verify_index
+from .index import IndexError, has_searchable_terms, list_sections, search_fts, verify_index
 
 ACTIONS = {"lookup", "overview", "contents", "health"}
 HEALTH_PLANES = (
@@ -162,10 +162,16 @@ def handle(args: Any, *, index_path: str | Path | None = None) -> dict[str, Any]
     question = None
     if action == "lookup":
         question = args.get("question")
-        if type(question) is not str or not 3 <= len(question.strip()) <= 500:
+        if type(question) is not str:
+            return error("invalid_input", "The question must be a string.", action)
+        # Validate the exact string that will be searched: the stripped question.
+        stripped = question.strip()
+        if not 3 <= len(stripped) <= 500:
             return error("invalid_input", "Question length must be between 3 and 500 characters.", action)
         if any(ord(character) < 32 or ord(character) == 127 for character in question):
             return error("invalid_input", "The question contains control characters.", action)
+        if not has_searchable_terms(stripped):
+            return error("invalid_input", "The question contains no searchable terms.", action)
 
     ready = _ready_index(index_path, action)
     if isinstance(ready, dict):
