@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import NoReturn, cast
 
 from .doctor import inspect_installation
+from .doctor_render import render_doctor
 from .layout import InstallLayout, InstallerError, installation_lock, read_installation
 from .lifecycle import install_or_update, recover_incomplete_installation, repair_existing
 from .setup import run_setup, selected_long_running_plugins
@@ -240,7 +241,10 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.action in {"doctor", "verify"}:
             result = inspect_installation(layout)
-            _emit(bool(result["ok"]), args.action, str(result["status"]), result)
+            if not args.json:
+                print(render_doctor(result))
+            else:
+                _emit(bool(result["ok"]), args.action, str(result["status"]), result)
             return 0 if result["ok"] else 1
         if args.action == "recover":
             with installation_lock(layout):

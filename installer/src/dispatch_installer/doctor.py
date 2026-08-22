@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 
+import shlex
 import stat
 from pathlib import Path
 from typing import Any
@@ -16,12 +17,36 @@ from .user_command import inspect_user_command
 
 def _directory_check(path: Path) -> dict[str, object]:
     if not path.exists() and not path.is_symlink():
-        return {"status": "missing", "path": str(path)}
+        return {
+            "status": "missing",
+            "path": str(path),
+            "reason": "directory has not been created",
+            "hint": "dispatch repair",
+        }
     if path.is_symlink() or not path.is_dir():
-        return {"status": "unsafe", "path": str(path)}
+        return {
+            "status": "unsafe",
+            "path": str(path),
+            "reason": "expected a real directory, found a symlink or other file",
+            "hint": "dispatch repair",
+        }
     details = path.stat()
+    if details.st_uid != os.geteuid():
+        return {
+            "status": "unsafe",
+            "path": str(path),
+            "reason": "directory is owned by another user",
+            "hint": "dispatch repair",
+        }
+    if details.st_mode & 0o077:
+        return {
+            "status": "unsafe",
+            "path": str(path),
+            "reason": f"permissions are too open ({stat.filemode(details.st_mode)})",
+            "hint": f"chmod 700 {shlex.quote(str(path))}",
+        }
     return {
-        "status": "ready" if details.st_uid == os.geteuid() and (details.st_mode & 0o077) == 0 else "unsafe",
+        "status": "ready",
         "path": str(path),
     }
 
@@ -61,12 +86,30 @@ def inspect_installation(layout: InstallLayout) -> dict[str, Any]:
     for name in ("dispatch_home", "clone", "venv", "config", "secrets", "data", "state", "cache", "logs", "run"):
         checks[name] = _directory_check(getattr(layout, name))
     checks["venv"]["python"] = _venv_python_status(layout.venv_python)
+    if checks["venv"]["python"] == "unsafe":
+        checks["venv"]["python_reason"] = "interpreter failed ownership or executability checks"
+        checks["venv"]["python_hint"] = "dispatch repair"
+    elif checks["venv"]["python"] == "missing":
+        checks["venv"]["python_reason"] = "no virtual environment interpreter was found"
+        checks["venv"]["python_hint"] = "dispatch repair"
     checks["command"] = inspect_user_command(layout)
     checks["service"] = inspect_user_service(layout)
+    if checks["service"].get("status") == "incomplete":
+        if checks["service"].get("active"):
+            checks["service"]["reason"] = "service is running but will not start at login"
+            checks["service"]["hint"] = "systemctl --user enable dispatch.service  ·  or: dispatch repair"
+        else:
+            checks["service"]["reason"] = "service is enabled but not currently running"
+            checks["service"]["hint"] = "systemctl --user start dispatch.service  ·  or: dispatch repair"
     try:
         record = read_installation(layout)
     except InstallerError as exc:
-        checks["installation"] = {"status": "unsafe", "error": str(exc)[:256]}
+        checks["installation"] = {
+            "status": "unsafe",
+            "error": str(exc)[:256],
+            "reason": str(exc)[:256],
+            "hint": "dispatch recover",
+        }
         record = None
     else:
         checks["installation"] = {
@@ -75,6 +118,9 @@ def inspect_installation(layout: InstallLayout) -> dict[str, Any]:
             "ref": record.get("ref") if record else None,
             "commit": record.get("commit") if record else None,
         }
+        if record is None:
+            checks["installation"]["reason"] = "no installation record was found"
+            checks["installation"]["hint"] = "run the Dispatch installer to complete setup"
     checks["clone"]["git"] = _git_status(layout.clone, record)
     plugin_config = layout.config / "plugins.json"
     service_plugins: list[str] = []
@@ -86,11 +132,22 @@ def inspect_installation(layout: InstallLayout) -> dict[str, Any]:
                 raise InstallerError("plugin_config_invalid", "plugin configuration selection is invalid")
             service_plugins = selected_long_running_plugins(layout)
         except InstallerError as exc:
-            checks["plugins"] = {"status": "unsafe", "path": str(plugin_config), "error": str(exc)[:256]}
+            checks["plugins"] = {
+                "status": "unsafe",
+                "path": str(plugin_config),
+                "error": str(exc)[:256],
+                "reason": str(exc)[:256],
+                "hint": "dispatch setup --list  ·  or: dispatch repair",
+            }
         else:
             checks["plugins"] = {"status": "ready", "path": str(plugin_config)}
     else:
-        checks["plugins"] = {"status": "not_configured", "path": str(plugin_config)}
+        checks["plugins"] = {
+            "status": "not_configured",
+            "path": str(plugin_config),
+            "reason": "no plugin configuration exists yet",
+            "hint": "dispatch setup",
+        }
     checks["plugin_services"] = inspect_plugin_services(layout, service_plugins)
     required = ("dispatch_home", "clone", "venv", "config", "secrets", "data", "state", "cache", "logs", "run")
     unsafe = (
