@@ -69,6 +69,34 @@ retry() {
     done
 }
 
+json_field() {
+    # json_field <file> <dotted.path>: print a JSON string field, or nothing.
+    JSON_FILE="$1" JSON_PATH="$2" python3 - <<'PY'
+import json
+import os
+
+try:
+    with open(os.environ["JSON_FILE"], encoding="utf-8") as handle:
+        payload = json.load(handle)
+    for key in os.environ["JSON_PATH"].split("."):
+        if not isinstance(payload, dict):
+            payload = None
+            break
+        payload = payload.get(key)
+    if isinstance(payload, str):
+        print(payload)
+except (OSError, ValueError):
+    pass
+PY
+}
+
+fail_with_detail() {
+    # fail_with_detail <code> <message> <hint>: styled multi-line failure.
+    printf '%s\n' "Dispatch installation failed: $1 — $2" >&2
+    say_warn "$3"
+    exit 1
+}
+
 record_field() {
     # record_field <key>: print a string field from installation.json.
     # Empty output means: no record, unreadable record, or missing key —
@@ -268,12 +296,33 @@ if [ "$FORCE" -eq 0 ]; then
                 say_dim "Reinstall anyway: install.sh --force"
                 exit 0
             fi
-            printf 'Dispatch %s is installed (%s); updating to %s (%s) ...\n' \
-                "${INSTALLED_CHANNEL:-unknown}" "$INSTALLED_VERSION" "$TARGET_CHANNEL" "${CURRENT_REF:-latest}"
-            if [ "$TARGET_CHANNEL" = "$INSTALLED_CHANNEL" ]; then
-                "$LAUNCHER" update --channel "$TARGET_CHANNEL" || fail 'Dispatch update failed'
+            say_run "Updating Dispatch ${INSTALLED_VERSION} → ${TARGET_CHANNEL} (${CURRENT_REF:-latest}) ..."
+            delegate_output="$(mktemp 2>/dev/null)" || delegate_output=''
+            if [ -n "$delegate_output" ]; then
+                delegate_rc=0
+                # set -e guard: capture the launcher's exit code instead of dying
+                # on it, so the JSON envelope can be parsed into a friendly error.
+                if [ "$TARGET_CHANNEL" = "$INSTALLED_CHANNEL" ]; then
+                    "$LAUNCHER" update --channel "$TARGET_CHANNEL" >"$delegate_output" 2>&1 || delegate_rc=$?
+                else
+                    "$LAUNCHER" channel "$TARGET_CHANNEL" >"$delegate_output" 2>&1 || delegate_rc=$?
+                fi
+                DELEGATE_ERROR_CODE="$(json_field "$delegate_output" error.code)"
+                DELEGATE_ERROR_MESSAGE="$(json_field "$delegate_output" error.message)"
+                rm -f "$delegate_output"
+                if [ "$delegate_rc" -ne 0 ]; then
+                    fail_with_detail \
+                        "${DELEGATE_ERROR_CODE:-update_failed}" \
+                        "${DELEGATE_ERROR_MESSAGE:-the updater reported an unspecified error}" \
+                        "Run: $LAUNCHER repair    (or reinstall: install.sh --force)"
+                fi
             else
-                "$LAUNCHER" channel "$TARGET_CHANNEL" || fail 'Dispatch channel switch failed'
+                # No scratch file available: run unbuffered rather than fail.
+                if [ "$TARGET_CHANNEL" = "$INSTALLED_CHANNEL" ]; then
+                    "$LAUNCHER" update --channel "$TARGET_CHANNEL" || fail 'Dispatch update failed'
+                else
+                    "$LAUNCHER" channel "$TARGET_CHANNEL" || fail 'Dispatch channel switch failed'
+                fi
             fi
             show_banner
             say_ok "Dispatch is ready → $DISPATCH_HOME ($(commit12 "$(record_field commit)"))"
@@ -477,7 +526,7 @@ fi
 show_banner
 say_ok "System requirements met"
 say_run "Verifying installation paths ..."
-printf 'Cloning Dispatch %s (%s) ...\n' "$CHANNEL" "$ref"
+say_run "Cloning Dispatch ${CHANNEL} (${ref}) ..."
 if [ "$CHANNEL" = stable ]; then
     retry 'could not clone the Dispatch repository' \
         git clone --quiet --no-checkout --depth 1 "$REPOSITORY_URL" "$clone"
@@ -492,7 +541,6 @@ fi
 resolved_commit="$(git -C "$clone" rev-parse HEAD)"
 say_ok "Fetched ${CHANNEL} at commit $(commit12 "$resolved_commit")"
 
-printf '%s\n' 'Installing Dispatch dependencies and activating the user service ...'
 say_run "Installing dependencies and browser (this can take a few minutes) ..."
 if [ "$CHANNEL" = stable ]; then
     python3 -I -B -c 'import sys; sys.path.insert(0, sys.argv.pop(1)); from dispatch_installer.cli import main; raise SystemExit(main())' \
