@@ -12,6 +12,7 @@ from pathlib import Path
 import re
 import stat
 import tempfile
+import time
 from types import MappingProxyType
 from typing import Any, Iterator, Mapping
 
@@ -36,6 +37,9 @@ _PROFILE_VERIFICATIONS = {"unverified", "verified"}
 # rotations are verifiable and mismatched keys fail with precise errors.
 _VAULT_SCHEMA_VERSION = 2
 _KEY_ID_BYTES = 8
+# Bounded lock acquisition: fail auth_store_busy after this many seconds
+# instead of hanging forever on an externally-held flock.
+_LOCK_TIMEOUT_SECONDS = 10.0
 
 
 def _key_id(key: bytes) -> str:
@@ -136,6 +140,66 @@ def _prepare_private_tree(root: Path) -> None:
     _safe_directory(root, private=True)
 
 
+def _validate_ancestor_chain(root: Path) -> None:
+    """Re-check every ancestor of an EXISTING store before reading/writing.
+
+    Creation-time validation (_prepare_private_tree) expires the moment a
+    local attacker loosens an ancestor's permissions or repoints a path
+    component at another directory via a symlink. Every store open therefore
+    walks root -> filesystem top and rejects:
+      - symlinked components anywhere above the store root,
+      - non-directory components,
+      - foreign-owned components,
+      - group- or world-writable ancestors unless sticky (OpenSSH-style).
+    The store root itself is validated separately with the stricter
+    private=True rules by the caller.
+    """
+
+    chain: list[Path] = []
+    probe = root
+    while True:
+        chain.append(probe)
+        if probe.parent == probe:
+            break
+        probe = probe.parent
+    # Walk from the top of the filesystem down to the store's parent,
+    # applying OpenSSH-style ancestor rules (see loop body).
+    for directory in reversed(chain[1:]):
+        if directory.is_symlink():
+            raise AuthenticationError(
+                "auth_store_unsafe",
+                "authentication ancestor path component is a symlink",
+            )
+        try:
+            details = directory.stat()
+        except FileNotFoundError as exc:
+            # Components above an existing store must exist; a vanished
+            # ancestor means the tree was tampered with mid-flight.
+            raise AuthenticationError(
+                "auth_store_unsafe",
+                "authentication ancestor directory disappeared",
+            ) from exc
+        if not stat.S_ISDIR(details.st_mode):
+            raise AuthenticationError(
+                "auth_store_unsafe",
+                "authentication ancestor path component is not a directory",
+            )
+        if details.st_uid not in (0, os.geteuid()):
+            raise AuthenticationError(
+                "auth_store_unsafe",
+                "authentication ancestor directory ownership is unsafe",
+            )
+        # OpenSSH-style rule: a group- or world-writable ancestor is
+        # acceptable only when the sticky bit confines deletions to owners
+        # (the classic /tmp shape); otherwise it enables tree swaps.
+        mode = stat.S_IMODE(details.st_mode)
+        if mode & 0o022 and not mode & 0o1000:
+            raise AuthenticationError(
+                "auth_store_unsafe",
+                "authentication ancestor directory permissions are unsafe",
+            )
+
+
 def _safe_private_file(path: Path, *, maximum_size: int = _MAX_VAULT_SIZE) -> bytes:
     flags = (
         os.O_RDONLY
@@ -208,6 +272,8 @@ class EncryptedCredentialStore:
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
+        if self.root.exists() or self.root.is_symlink():
+            _validate_ancestor_chain(self.root)
         _prepare_private_tree(self.root)
         flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
         try:
@@ -223,7 +289,30 @@ class EncryptedCredentialStore:
                 or stat.S_IMODE(details.st_mode) != 0o600
             ):
                 raise AuthenticationError("auth_store_unsafe", "authentication lock file is unsafe")
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            # Bounded acquisition: an externally-held flock (leaked fd,
+            # squatter process) must fail loudly instead of hanging every
+            # auth operation forever.
+            deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise AuthenticationError(
+                            "auth_store_busy",
+                            "authentication vault is locked by another process; retry once it exits",
+                        ) from None
+                    time.sleep(0.05)
+            # Inode identity: a swapped-in replacement lock file would let a
+            # second process hold "the" lock simultaneously. Verify the inode
+            # we locked is still the one at the path.
+            path_details = os.stat(self.lock_file)
+            if (path_details.st_dev, path_details.st_ino) != (details.st_dev, details.st_ino):
+                raise AuthenticationError(
+                    "auth_store_unsafe",
+                    "authentication lock file was swapped while acquiring the vault lock",
+                )
             yield
         finally:
             os.close(descriptor)

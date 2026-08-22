@@ -302,7 +302,15 @@ def test_vault_v2_stamps_key_id_and_upgrades_v1_payloads(monkeypatch, tmp_path: 
     authentication = manager(tmp_path)
     values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
     store_root = authentication.store_root
-    store_root.mkdir(parents=True, mode=0o700)
+    # Create each level privately: parents=True with a umask would leave
+    # intermediates group-writable, which the ancestor-chain guard rejects.
+    missing = []
+    probe = store_root
+    while not probe.exists():
+        missing.append(probe)
+        probe = probe.parent
+    for level in reversed(missing):
+        level.mkdir(mode=0o700)
 
     # Write a v1-era vault token directly (pre-upgrade shape)...
     legacy_key = Fernet.generate_key()
