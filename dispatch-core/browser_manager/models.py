@@ -110,6 +110,10 @@ class BrowserRealm:
     default_mode: BrowserMode = BrowserMode.HEADLESS
     launch_timeout_seconds: int = 30
     lease_timeout_seconds: int = 900
+    # How many leases may hold this realm simultaneously. Profiles remain
+    # exclusively locked per lease, so concurrent leases on one realm never
+    # share a browser process, cookies, or profile directory.
+    max_concurrent_leases: int = 4
 
     def __post_init__(self) -> None:
         _slug(self.id, "realm")
@@ -128,6 +132,11 @@ class BrowserRealm:
             raise BrowserManagerError("invalid_browser_policy", "launch timeout must be between 1 and 300 seconds")
         if not 30 <= self.lease_timeout_seconds <= 7200:
             raise BrowserManagerError("invalid_browser_policy", "lease timeout must be between 30 and 7200 seconds")
+        if not 1 <= self.max_concurrent_leases <= 64:
+            raise BrowserManagerError(
+                "invalid_browser_policy",
+                "realm max concurrent leases must be between 1 and 64",
+            )
 
 
 @dataclass(frozen=True)

@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 import os
 from pathlib import Path
 import sqlite3
@@ -170,10 +170,19 @@ class LeaseStore:
         self._initialise()
 
     def _connect(self) -> sqlite3.Connection:
-        connection = sqlite3.connect(self.database, timeout=5.0)
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA foreign_keys = ON")
-        connection.execute("PRAGMA busy_timeout = 5000")
+        try:
+            connection = sqlite3.connect(self.database, timeout=5.0)
+            connection.row_factory = sqlite3.Row
+            connection.execute("PRAGMA foreign_keys = ON")
+            connection.execute("PRAGMA busy_timeout = 5000")
+        except sqlite3.Error as exc:
+            # Contention or corruption at open time must surface as a bounded
+            # BrowserManagerError, not a raw OperationalError that escapes
+            # CLI/service handlers which only catch BrowserManagerError.
+            raise BrowserManagerError(
+                "browser_state_busy",
+                "browser state database is unavailable",
+            ) from exc
         return connection
 
     def _initialise(self) -> None:
@@ -269,6 +278,7 @@ class LeaseStore:
         expires_at: datetime,
         runtime_identity: BrowserRuntimeIdentity,
         maximum_browsers: int,
+        realm_max_concurrent: int = 1,
     ) -> LeaseRow:
         now_value = format_timestamp(created_at)
         placeholders = ",".join("?" for _ in _TERMINAL_VALUES)
@@ -281,12 +291,15 @@ class LeaseStore:
             ).fetchone()
             if existing is not None:
                 raise BrowserManagerError("browser_profile_busy", "browser profile already has an active lease")
-            existing = connection.execute(
-                f"SELECT lease_id FROM leases WHERE realm = ? AND state NOT IN ({placeholders}) LIMIT 1",
+            # Realm capacity is counted, not exclusive: concurrent same-realm
+            # leases are allowed up to the realm's configured limit. Profiles
+            # remain exclusively locked per lease above this layer.
+            occupied_in_realm = connection.execute(
+                f"SELECT COUNT(*) FROM leases WHERE realm = ? AND state NOT IN ({placeholders})",
                 (request.realm, *_TERMINAL_VALUES),
             ).fetchone()
-            if existing is not None:
-                raise BrowserManagerError("browser_realm_busy", "browser realm already has an active lease")
+            if occupied_in_realm is None or int(occupied_in_realm[0]) >= max(realm_max_concurrent, 1):
+                raise BrowserManagerError("browser_realm_busy", "browser realm concurrency limit reached")
             occupied = connection.execute(
                 f"SELECT COUNT(*) FROM leases WHERE state NOT IN ({placeholders})",
                 _TERMINAL_VALUES,
@@ -325,6 +338,15 @@ class LeaseStore:
         except sqlite3.IntegrityError as exc:
             connection.rollback()
             raise BrowserManagerError("browser_lease_collision", "browser lease identity already exists") from exc
+        except sqlite3.Error as exc:
+            # Contention (busy timeout exhausted) or I/O errors must surface
+            # as bounded BrowserManagerErrors instead of raw OperationalErrors
+            # that escape CLI/service handlers.
+            connection.rollback()
+            raise BrowserManagerError(
+                "browser_state_busy",
+                "browser state database is unavailable",
+            ) from exc
         except Exception:
             connection.rollback()
             raise
@@ -361,6 +383,15 @@ class LeaseStore:
             if connection.total_changes != 1:
                 raise BrowserManagerError("browser_state_conflict", "browser lease changed concurrently")
             connection.commit()
+        except sqlite3.Error as exc:
+            # Contention (busy timeout exhausted) or I/O errors must surface
+            # as bounded BrowserManagerErrors instead of raw OperationalErrors
+            # that escape CLI/service handlers.
+            connection.rollback()
+            raise BrowserManagerError(
+                "browser_state_busy",
+                "browser state database is unavailable",
+            ) from exc
         except Exception:
             connection.rollback()
             raise
@@ -392,6 +423,15 @@ class LeaseStore:
             if connection.total_changes != 1:
                 raise BrowserManagerError("browser_state_conflict", "browser lease changed concurrently")
             connection.commit()
+        except sqlite3.Error as exc:
+            # Contention (busy timeout exhausted) or I/O errors must surface
+            # as bounded BrowserManagerErrors instead of raw OperationalErrors
+            # that escape CLI/service handlers.
+            connection.rollback()
+            raise BrowserManagerError(
+                "browser_state_busy",
+                "browser state database is unavailable",
+            ) from exc
         except Exception:
             connection.rollback()
             raise
@@ -423,6 +463,55 @@ class LeaseStore:
             if connection.total_changes != 1:
                 raise BrowserManagerError("browser_state_conflict", "browser lease changed concurrently")
             connection.commit()
+        except sqlite3.Error as exc:
+            # Contention (busy timeout exhausted) or I/O errors must surface
+            # as bounded BrowserManagerErrors instead of raw OperationalErrors
+            # that escape CLI/service handlers.
+            connection.rollback()
+            raise BrowserManagerError(
+                "browser_state_busy",
+                "browser state database is unavailable",
+            ) from exc
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
+        return self.get(lease_id)
+
+    def renew(
+        self,
+        lease_id: str,
+        *,
+        at: datetime,
+        lease_seconds: int,
+    ) -> LeaseRow:
+        """Extend a nonterminal lease's deadline; no-op on terminal rows."""
+
+        if not 30 <= int(lease_seconds) <= 7200:
+            raise BrowserManagerError("invalid_browser_policy", "lease timeout must be between 30 and 7200 seconds")
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            value = connection.execute("SELECT * FROM leases WHERE lease_id = ?", (lease_id,)).fetchone()
+            current = self._row(value)
+            if current.state in TERMINAL_STATES:
+                return current
+            expires_at = format_timestamp(at + timedelta(seconds=lease_seconds))
+            updated = connection.execute(
+                "UPDATE leases SET expires_at = ?, updated_at = ? WHERE lease_id = ? AND state NOT IN "
+                f"({','.join('?' for _ in _TERMINAL_VALUES)})",
+                (expires_at, format_timestamp(at), lease_id, *_TERMINAL_VALUES),
+            )
+            if updated.rowcount != 1:
+                raise BrowserManagerError("browser_state_conflict", "browser lease changed concurrently")
+            connection.commit()
+        except sqlite3.Error as exc:
+            connection.rollback()
+            raise BrowserManagerError(
+                "browser_state_busy",
+                "browser state database is unavailable",
+            ) from exc
         except Exception:
             connection.rollback()
             raise

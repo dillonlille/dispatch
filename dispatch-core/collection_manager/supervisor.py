@@ -548,12 +548,14 @@ class ServiceTick:
     scheduled: int
     reconciled: int
     worker: WorkerOutcome
+    browser_outcomes: tuple[dict[str, str], ...] = ()
 
     def safe_data(self) -> dict[str, object]:
         return {
             "scheduled": self.scheduled,
             "reconciled": self.reconciled,
             "worker": self.worker.safe_data(),
+            "browser_maintenance": [dict(item) for item in self.browser_outcomes],
         }
 
 
@@ -566,17 +568,28 @@ class CollectionService:
         supervisor: CollectionWorkerSupervisor,
         *,
         clock: Callable[[], datetime] = utc_now,
+        browser_maintenance: Callable[[], list[dict[str, str]]] | None = None,
     ) -> None:
         self._store = store
         self._supervisor = supervisor
         self._clock = clock
+        # Optional BrowserManager.maintain hook: enforces lease expiry and
+        # crash reaping every tick. Absent in tests/minimal deployments.
+        self._browser_maintenance = browser_maintenance
 
     def tick(self, stop_requested: Callable[[], bool] = lambda: False) -> ServiceTick:
         orphaned = self._supervisor.reconcile_orphans()
         reconciled = orphaned + self._store.reconcile(self._clock())
         scheduled = self._store.enqueue_due(self._clock())
+        browser_outcomes: list[dict[str, str]] = []
+        if self._browser_maintenance is not None:
+            try:
+                browser_outcomes = self._browser_maintenance()
+            except Exception as exc:  # never let maintenance kill the loop
+                code = getattr(exc, "code", "browser_maintenance_failed")
+                browser_outcomes = [{"lease_id": "-", "status": str(code)[:64]}]
         worker = self._supervisor.run_once(stop_requested=stop_requested)
-        return ServiceTick(len(scheduled), len(reconciled), worker)
+        return ServiceTick(len(scheduled), len(reconciled), worker, tuple(browser_outcomes))
 
     def run(
         self,

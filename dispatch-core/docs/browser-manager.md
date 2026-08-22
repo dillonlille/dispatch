@@ -42,6 +42,13 @@ The secret-free installation record reports:
 
 Realm profiles are private and persist across ordinary updates and uninstall. Browser binaries and runtime bookkeeping are disposable.
 
+## Concurrency
+
+- Up to 8 browsers run concurrently by default (`DISPATCH_BROWSER_CAPACITY` overrides, 1–64).
+- Collectors scraping the same site run in parallel when they use different account profiles; each lease holds its own profile exclusively, so no two leases ever share a browser process or profile state.
+- Each realm permits up to `max_concurrent_leases` simultaneous leases (default 4); a collector re-using a busy profile waits or fails with `browser_profile_busy`.
+- The Core service loop runs browser maintenance every tick: crashed browsers are reaped and expired leases closed. Long-running collectors should renew their lease (`ManagedLease.renew`) while active; renewal requires the browser process to still match its recorded identity.
+
 ## Provider foundation
 
 The closed provider registry currently implements only `managed-playwright`. It reserves non-operational contracts for `persistent-cdp` and `external-cdp` so later collector migrations can add authenticated persistent providers without giving collectors ownership of executables, profiles, endpoints, or locks.

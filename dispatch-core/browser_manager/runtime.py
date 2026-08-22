@@ -1,7 +1,7 @@
 """Private filesystem, locking, and Playwright Chromium runtime."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from contextlib import contextmanager
 import fcntl
 import hashlib
@@ -227,6 +227,7 @@ class LeaseLocks:
         *,
         maximum_browsers: int,
         realm: str,
+        realm_max_concurrent: int,
         profile_key: str,
     ) -> "LeaseLocks":
         generation_lock = FileLock(
@@ -236,6 +237,7 @@ class LeaseLocks:
         )
         generation_lock.acquire()
         slot: FileLock | None = None
+        realm_slot: FileLock | None = None
         try:
             for index in range(maximum_browsers):
                 candidate = FileLock(layout.lock_path("global", str(index)), "browser_capacity_unavailable")
@@ -250,26 +252,53 @@ class LeaseLocks:
             if slot is None:
                 raise BrowserManagerError("browser_capacity_unavailable", "all approved browser slots are occupied")
 
-            realm_lock = FileLock(layout.lock_path("realm", realm), "browser_realm_busy")
+            # Realm concurrency is slot-based, not exclusive: up to
+            # realm_max_concurrent leases may hold the realm simultaneously.
+            # Profiles stay exclusively locked per lease, so concurrent
+            # same-realm leases never share a browser process or profile.
+            realm_slot = None
             profile_lock = FileLock(layout.lock_path("profile", profile_key), "browser_profile_busy")
             try:
-                realm_lock.acquire()
-                profile_lock.acquire()
+                for index in range(realm_max_concurrent):
+                    candidate = FileLock(layout.lock_path("realmslot", f"{realm}-{index}"), "browser_realm_busy")
+                    try:
+                        candidate.acquire()
+                    except BrowserManagerError as exc:
+                        if exc.code != "browser_realm_busy":
+                            raise
+                        continue
+                    realm_slot = candidate
+                    break
+                if realm_slot is None:
+                    raise BrowserManagerError("browser_realm_busy", "realm concurrency limit reached")
+                try:
+                    profile_lock.acquire()
+                except BaseException:
+                    realm_slot.release()
+                    raise
             except BaseException:
-                profile_lock.release()
-                realm_lock.release()
+                # Release the global slot on every downstream failure path;
+                # leaking it would permanently reduce process capacity.
                 slot.release()
                 raise
         except BaseException:
             generation_lock.release()
             raise
-        return cls(generation=generation_lock, slot=slot, realm=realm_lock, profile=profile_lock)
+        return cls(generation=generation_lock, slot=slot, realm=realm_slot, profile=profile_lock)
 
     def release(self) -> None:
-        self.profile.release()
-        self.realm.release()
-        self.slot.release()
-        self.generation.release()
+        # Release every lock even if an intermediate release raises: a leaked
+        # slot lock permanently reduces browser capacity for this process.
+        try:
+            self.profile.release()
+        finally:
+            try:
+                self.realm.release()
+            finally:
+                try:
+                    self.slot.release()
+                finally:
+                    self.generation.release()
 
 
 class RuntimeHandle(Protocol):
@@ -310,47 +339,53 @@ class ProcessRuntimeHandle:
     control_pid: int
     control_process_start_ticks: int
     closed: bool = False
+    _close_mutex: threading.Lock = field(default_factory=threading.Lock)
 
     def is_alive(self) -> bool:
         return not self.closed and process_start_ticks(self.pid) == self.process_start_ticks
 
     def close(self) -> None:
-        if self.closed:
-            return
-        cleanup_error: BaseException | None = None
-        try:
-            for operation in (self.context.close, self.playwright.stop):
-                try:
-                    _call_bounded(operation, timeout_seconds=2)
-                except BaseException as exc:
-                    cleanup_error = cleanup_error or exc
-            if process_start_ticks(self.pid) == self.process_start_ticks:
-                try:
-                    terminate_owned_process(
-                        self.pid,
-                        self.process_start_ticks,
-                        self.profile,
-                        self.identity.executable,
-                    )
-                except BaseException as exc:
-                    cleanup_error = cleanup_error or exc
-            if process_start_ticks(self.control_pid) == self.control_process_start_ticks:
-                try:
-                    terminate_control_process(
-                        self.control_pid,
-                        self.control_process_start_ticks,
-                        self.identity.control_executable,
-                    )
-                except BaseException as exc:
-                    cleanup_error = cleanup_error or exc
-        finally:
-            self.closed = True
-        browser_alive = process_start_ticks(self.pid) == self.process_start_ticks
-        control_alive = process_start_ticks(self.control_pid) == self.control_process_start_ticks
-        if cleanup_error is not None and (browser_alive or control_alive):
-            raise BrowserManagerError("browser_cleanup_failed", "owned browser process tree did not close") from cleanup_error
-        if isinstance(cleanup_error, (KeyboardInterrupt, SystemExit)):
-            raise cleanup_error
+        # Serialize teardown: context.close()/playwright.stop() run on
+        # non-thread-safe sync-API objects, and concurrent terminate_* runs
+        # would race each other's identity checks. First closer wins; later
+        # callers observe closed=True and return.
+        with self._close_mutex:
+            if self.closed:
+                return
+            cleanup_error: BaseException | None = None
+            try:
+                for operation in (self.context.close, self.playwright.stop):
+                    try:
+                        _call_bounded(operation, timeout_seconds=2)
+                    except BaseException as exc:
+                        cleanup_error = cleanup_error or exc
+                if process_start_ticks(self.pid) == self.process_start_ticks:
+                    try:
+                        terminate_owned_process(
+                            self.pid,
+                            self.process_start_ticks,
+                            self.profile,
+                            self.identity.executable,
+                        )
+                    except BaseException as exc:
+                        cleanup_error = cleanup_error or exc
+                if process_start_ticks(self.control_pid) == self.control_process_start_ticks:
+                    try:
+                        terminate_control_process(
+                            self.control_pid,
+                            self.control_process_start_ticks,
+                            self.identity.control_executable,
+                        )
+                    except BaseException as exc:
+                        cleanup_error = cleanup_error or exc
+            finally:
+                self.closed = True
+            browser_alive = process_start_ticks(self.pid) == self.process_start_ticks
+            control_alive = process_start_ticks(self.control_pid) == self.control_process_start_ticks
+            if cleanup_error is not None and (browser_alive or control_alive):
+                raise BrowserManagerError("browser_cleanup_failed", "owned browser process tree did not close") from cleanup_error
+            if isinstance(cleanup_error, (KeyboardInterrupt, SystemExit)):
+                raise cleanup_error
 
 
 class PlaywrightRuntime:
@@ -726,8 +761,14 @@ def process_start_ticks(pid: int) -> int | None:
 
 def _process_identity(pid: int) -> tuple[int, int] | None:
     try:
-        value = Path(f"/proc/{pid}/stat").read_text(encoding="utf-8")
+        # Read bytes: the comm field inside /proc/<pid>/stat is arbitrary
+        # bytes from the process name and need not be valid UTF-8.
+        raw = Path(f"/proc/{pid}/stat").read_bytes()
     except OSError:
+        return None
+    try:
+        value = raw.decode("utf-8", errors="replace")
+    except (AttributeError, ValueError):  # pragma: no cover - decode with replace does not raise
         return None
     closing = value.rfind(")")
     if closing < 0:
@@ -780,6 +821,10 @@ def _signal_processes(identities: dict[int, int], requested_signal: signal.Signa
         try:
             os.kill(pid, requested_signal)
         except ProcessLookupError:
+            continue
+        except PermissionError:
+            # Same-uid kills make this rare, but a partial tree kill beats
+            # aborting teardown halfway through.
             continue
 
 
