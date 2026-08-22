@@ -143,9 +143,21 @@ def _code_row(checks: dict[str, Any]) -> tuple[str, list[str]]:
     lines: list[str] = []
     if "unsafe" in statuses:
         detail = "managed checkout is compromised or drifted"
+        reason_text = str(check.get("reason") or "the checkout does not match the installation record")
+        drift = check.get("drift")
+        explanations: list[str] = []
+        if isinstance(drift, dict):
+            behind = drift.get("behind")
+            ahead = drift.get("ahead")
+            if isinstance(behind, int) and behind > 0:
+                explanations.append(f"the channel has advanced {behind} commit{'s' if behind != 1 else ''} since this checkout")
+            if isinstance(ahead, int) and ahead > 0:
+                explanations.append(f"{ahead} local commit{'s' if ahead != 1 else ''} are not on the channel")
+        if explanations:
+            reason_text = "; ".join(explanations)
         _note(
             lines,
-            str(check.get("reason") or "the checkout does not match the installation record"),
+            reason_text,
             remedy=_installer_or("dispatch update", checks),
         )
     elif "missing" in statuses:
@@ -174,7 +186,8 @@ def _runtime_row(checks: dict[str, Any]) -> tuple[str, list[str]]:
         detail = "virtual environment is missing"
         _note(lines, reason or "no virtual environment was found", remedy=_installer_or(hint or "dispatch repair", checks))
     else:
-        detail = "virtual environment verified"
+        version = str(venv.get("python_version") or "").strip()
+        detail = f"virtual environment verified (Python {version})" if version else "virtual environment verified"
     return _row(_glyph_for(statuses), "Runtime", detail), lines
 
 
@@ -300,6 +313,14 @@ def render_doctor(report: dict[str, Any]) -> str:
         rendered_rows.append(row)
         lines.append(row)
         lines.extend(notes)
+    raw_advisories = report.get("advisories")
+    advisories = [item for item in raw_advisories if isinstance(item, dict)] if isinstance(raw_advisories, list) else []
+    for advisory in advisories:
+        hint = advisory.get("hint")
+        lines.append(f"  {accent('ℹ')} {bold('Advisory'.ljust(_LABEL_WIDTH))}{_truncate(str(advisory.get('detail', '')), max(terminal_width() - _LABEL_WIDTH - 6, 24))}")
+        if isinstance(hint, str) and hint:
+            # Remedies are copy-pasteable commands: never truncate them.
+            lines.append(f"      {accent('try:')} {hint}")
     status = str(report.get("status", "unsafe"))
     verdict = _VERDICTS.get(status, "Installation needs attention")
     problems = sum(1 for row in rendered_rows if "✗" in row)
@@ -309,12 +330,16 @@ def render_doctor(report: dict[str, Any]) -> str:
         counts.append(f"{problems} problem{'s' if problems != 1 else ''}")
     if cautions:
         counts.append(f"{cautions} warning{'s' if cautions != 1 else ''}")
+    if advisories:
+        counts.append(f"{len(advisories)} note{'s' if len(advisories) != 1 else ''}")
     summary = verdict if not counts else f"{verdict} · {', '.join(counts)}"
+    duration = report.get("duration_ms")
+    stamp = f" in {int(duration) / 1000:.1f}s" if isinstance(duration, int) and duration >= 0 else ""
     lines.extend(
         [
             "",
             summary_divider(),
-            f"  {bold(summary)}",
+            f"  {bold(summary + stamp)}",
             dim("  machine detail: dispatch --json doctor"),
             "",
         ]
