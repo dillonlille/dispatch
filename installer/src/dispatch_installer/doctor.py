@@ -5,14 +5,19 @@ import os
 
 import shlex
 import stat
+import subprocess
+from datetime import UTC, datetime
 from pathlib import Path
+from time import monotonic
 from typing import Any
 
 from .layout import InstallLayout, InstallerError, read_installation
-from .repository import local_checkout_matches_record
+from .repository import local_channel_drift, local_checkout_matches_record
 from .service import inspect_plugin_services, inspect_user_service
 from .setup import load_plugin_config, selected_long_running_plugins
 from .user_command import inspect_user_command
+
+_BROWSER_DIGEST_MARKER = ".dispatch-content-sha256"
 
 
 def _directory_check(path: Path) -> dict[str, object]:
@@ -81,11 +86,58 @@ def _venv_python_status(path: Path) -> str:
     return "ready"
 
 
+def _browser_digest_check(cache: Path) -> dict[str, object]:
+    """Scan managed Chromium generations for missing content-digest markers.
+
+    Advisory only: a pre-marker generation (installed before digest
+    verification shipped) is not unsafe, but the next update will require
+    staged adoption, so doctor surfaces it as an early heads-up.
+    """
+
+    generations: dict[str, int] = {}
+    cache_present = False
+    try:
+        if cache.is_symlink() or not cache.is_dir():
+            return {"status": "ready", "generations": {}, "cache_present": False}
+        cache_present = True
+        for entry in sorted(cache.iterdir()):
+            if entry.is_symlink() or not entry.is_dir() or not entry.name.startswith("chromium-"):
+                continue
+            marker = entry / _BROWSER_DIGEST_MARKER
+            if marker.is_file():
+                continue
+            try:
+                file_count = sum(1 for item in entry.rglob("*") if item.is_file())
+            except OSError:
+                file_count = 0
+            generations[entry.name] = min(file_count, 99999)
+    except OSError:
+        return {"status": "ready", "generations": {}, "cache_present": cache_present}
+    return {
+        "status": "ready" if not generations else "unverified",
+        "generations": generations,
+        "cache_present": cache_present,
+    }
+
+
 def inspect_installation(layout: InstallLayout) -> dict[str, Any]:
+    _started = monotonic()
     checks: dict[str, Any] = {}
     for name in ("dispatch_home", "clone", "venv", "config", "secrets", "data", "state", "cache", "logs", "run"):
         checks[name] = _directory_check(getattr(layout, name))
     checks["venv"]["python"] = _venv_python_status(layout.venv_python)
+    try:
+        checks["venv"]["python_version"] = (
+            subprocess.run(
+                (str(layout.venv_python), "-c", "import sys; print('%d.%d.%d' % sys.version_info[:3])"),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=10,
+            ).stdout.strip()
+        )
+    except (OSError, subprocess.SubprocessError):
+        pass
     if checks["venv"]["python"] == "unsafe":
         checks["venv"]["python_reason"] = "interpreter failed ownership or executability checks"
         checks["venv"]["python_hint"] = "dispatch repair"
@@ -122,6 +174,7 @@ def inspect_installation(layout: InstallLayout) -> dict[str, Any]:
             checks["installation"]["reason"] = "no installation record was found"
             checks["installation"]["hint"] = "run the Dispatch installer to complete setup"
     checks["clone"]["git"] = _git_status(layout.clone, record)
+    checks["clone"]["drift"] = local_channel_drift(layout.clone, record)
     plugin_config = layout.config / "plugins.json"
     service_plugins: list[str] = []
     if plugin_config.exists() or plugin_config.is_symlink():
@@ -149,6 +202,19 @@ def inspect_installation(layout: InstallLayout) -> dict[str, Any]:
             "hint": "dispatch setup",
         }
     checks["plugin_services"] = inspect_plugin_services(layout, service_plugins)
+    checks["browser"] = _browser_digest_check(layout.browser_cache)
+    advisories: list[dict[str, str]] = []
+    browser = checks["browser"]
+    if isinstance(browser, dict) and browser.get("status") == "unverified":
+        raw_generations = browser.get("generations")
+        names = ", ".join(sorted(raw_generations)) if isinstance(raw_generations, dict) else "unknown"
+        advisories.append(
+            {
+                "kind": "browser_digest_unverified",
+                "detail": f"managed Chromium generation(s) lack content-digest markers: {names}",
+                "hint": "dispatch update adopts them through staging",
+            }
+        )
     required = ("dispatch_home", "clone", "venv", "config", "secrets", "data", "state", "cache", "logs", "run")
     unsafe = (
         any(checks[name]["status"] == "unsafe" for name in required)
@@ -165,7 +231,14 @@ def inspect_installation(layout: InstallLayout) -> dict[str, Any]:
         and checks["command"]["status"] == "ready"
         and checks["service"]["status"] == "ready"
     )
-    return {"ok": ready, "status": "ready" if ready else ("unsafe" if unsafe else "incomplete"), "checks": checks}
+    return {
+        "ok": ready,
+        "status": "ready" if ready else ("unsafe" if unsafe else "incomplete"),
+        "checks": checks,
+        "advisories": advisories,
+        "generated_at": datetime.now(UTC).isoformat(timespec="seconds"),
+        "duration_ms": int((monotonic() - _started) * 1000),
+    }
 
 
 __all__ = ["inspect_installation"]

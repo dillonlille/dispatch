@@ -951,7 +951,7 @@ def _reconcile_installation(
             # previously running plugin services may remain down.
             raise InstallerError(
                 "activation_rolled_back_plugin_services_down",
-                "activation rolled back and prior generation is active, but previously running plugin services could not be restarted",
+                "activation rolled back and prior generation is active, but previously running plugin services could not be restarted; inspect with: dispatch plugin-service status <plugin_id>",
             ) from plugin_restore_failure
         raise
 

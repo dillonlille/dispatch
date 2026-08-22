@@ -198,6 +198,68 @@ def current_commit(clone: Path, *, run: RunCommand = run_command) -> str:
     return commit.lower()
 
 
+def local_channel_drift(clone: Path, record: dict[str, object] | None) -> dict[str, int] | None:
+    """Count commits between HEAD and the locally cached channel tip.
+
+    Read-only and fully offline: it consults only ``refs/remotes/origin/<ref>``
+    as of the last fetch/update, using the same hardened git argv as
+    :func:`local_checkout_matches_record`. Returns ``None`` whenever drift is
+    not measurable (missing record/ref/remote tracking ref, or any git
+    failure) — doctor treats ``None`` as "no information", never as an error.
+    """
+
+    if record is None:
+        return None
+    ref = str(record.get("ref", ""))
+    if not ref:
+        return None
+    metadata = clone / ".git"
+    if clone.is_symlink() or not clone.is_dir() or metadata.is_symlink() or not metadata.is_dir():
+        return None
+    base = (
+        "git",
+        "--no-optional-locks",
+        "-c",
+        "core.hooksPath=/dev/null",
+        "-c",
+        "core.fsmonitor=false",
+        "-c",
+        "protocol.ext.allow=never",
+        "-C",
+        str(clone),
+    )
+
+    def invoke(*arguments: str) -> subprocess.CompletedProcess[str]:
+        try:
+            return subprocess.run(
+                (*base, *arguments),
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.SubprocessError):
+            return subprocess.CompletedProcess((), 1, "", "")
+
+    head = invoke("rev-parse", "--verify", "HEAD^{commit}")
+    remote = invoke("rev-parse", "--verify", f"refs/remotes/origin/{ref}^{{commit}}")
+    if head.returncode != 0 or remote.returncode != 0:
+        return None
+    head_commit = head.stdout.strip().lower()
+    remote_commit = remote.stdout.strip().lower()
+    if re.fullmatch(r"[0-9a-f]{40,64}", head_commit) is None or re.fullmatch(r"[0-9a-f]{40,64}", remote_commit) is None:
+        return None
+    if head_commit == remote_commit:
+        return {"behind": 0, "ahead": 0}
+    counts = invoke("rev-list", "--left-right", "--count", f"{head_commit}...{remote_commit}")
+    if counts.returncode != 0:
+        return None
+    columns = counts.stdout.split()
+    if len(columns) != 2 or not all(column.isdigit() for column in columns):
+        return None
+    return {"behind": int(columns[1]), "ahead": int(columns[0])}
+
+
 def local_checkout_matches_record(clone: Path, record: dict[str, object] | None) -> bool:
     """Validate local checkout identity without contacting or trusting a remote."""
     metadata = clone / ".git"
@@ -394,6 +456,7 @@ __all__ = [
     "assert_checkout_clean",
     "clone_repository",
     "current_commit",
+    "local_channel_drift",
     "local_checkout_matches_record",
     "resolve_latest_release",
     "resolve_published_release",
