@@ -516,7 +516,16 @@ class EncryptedCredentialStore:
         stamped["schema_version"] = _VAULT_SCHEMA_VERSION
         stamped["key_id"] = _key_id(key)
         cleartext = (json.dumps(stamped, sort_keys=True, separators=(",", ":")) + "\n").encode()
-        _atomic_private_file(self.vault_file, Fernet(key).encrypt(cleartext))
+        token = Fernet(key).encrypt(cleartext)
+        if len(token) > _MAX_VAULT_SIZE:
+            # Enforce the cap on the NEW bytes. The reader validates the file
+            # it is about to read; writing an oversized vault would succeed
+            # once and then be unreadable forever.
+            raise AuthenticationError(
+                "auth_store_limit",
+                "authentication vault exceeds its size policy",
+            )
+        _atomic_private_file(self.vault_file, token)
 
     @staticmethod
     def _validate_profile_payload(payload: Any) -> None:

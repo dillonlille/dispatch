@@ -382,6 +382,31 @@ def test_vault_load_detects_a_stamped_key_mismatch(monkeypatch, tmp_path: Path) 
     assert failure.value.code == "auth_store_key_mismatch"
 
 
+def test_oversized_vault_write_is_refused_before_bricking_reads(monkeypatch, tmp_path: Path) -> None:
+    """VULN-6 regression: the size cap must apply to the NEW token at write
+    time, so a vault can never be written that its own reader will refuse."""
+    ring = FakeKeyring()
+    ring.install(monkeypatch)
+    ring.available = False
+    authentication = manager(tmp_path)
+    big = "V" * 4096
+    written = 0
+    # Keep writing until the store refuses; the refusal must come from the
+    # write path (auth_store_limit) BEFORE the oversized file lands.
+    for index in range(500):
+        try:
+            authentication._store.put("amazon-operations", f"acct{index}", {"username": big, "password": big})
+            written += 1
+        except AuthenticationError as exc:
+            assert exc.code == "auth_store_limit", f"unexpected error at {index}: {exc.code}"
+            break
+    else:  # pragma: no cover - cap never reached in 500 accounts
+        pytest.fail("vault size cap never triggered")
+    assert written > 0
+    # The previously-written accounts remain readable — no brick.
+    assert authentication.credentials("amazon-operations", "acct0").values["username"] == big
+
+
 def test_successful_login_marks_profile_verified(tmp_path: Path) -> None:
     from tests.authentication.test_workflow import FakePage
 
