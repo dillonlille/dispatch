@@ -266,6 +266,24 @@ def test_workflow_never_leaks_a_raw_keyerror_on_catalog_drift(tmp_path: Path) ->
     assert drifted.value.code == "auth_store_invalid"
 
 
+def test_approved_urls_reject_non_normalized_bypass_shapes() -> None:
+    from authentication.workflow import _approved
+
+    # Dot-segment traversal that would land on the signin path after
+    # browser normalization must not be approved as a console page...
+    assert _approved("amazon-operations", "https://logistics.amazon.com/dspconsolev2/../../ap/signin") is False
+    # ...and after collapsing it must match the SIGNIN approval, not the
+    # console prefix (fragment is stripped either way).
+    assert _approved("amazon-operations", "https://logistics.amazon.com/dspconsolev2/../../ap/signin#x") is False
+    assert _approved("amazon-operations", "https://www.amazon.com/ap/signin#evil") is True
+    # Leading/embedded whitespace and control characters fail closed.
+    assert _approved("amazon-operations", " https://logistics.amazon.com/dspconsolev2") is False
+    assert _approved("amazon-operations", "https://logistics.amazon.com/dspconsolev2\n") is False
+    assert _approved("amazon-operations", "https://logistics.ama\x1bzon.com/dspconsolev2") is False
+    # Path escaping its own root is rejected outright.
+    assert _approved("paycom-client", "https://www.paycomonline.net/v4/cl/../../etc") is False
+
+
 def test_approved_urls_reject_ports_userinfo_and_plain_http() -> None:
     from authentication.workflow import _approved
 

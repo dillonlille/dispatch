@@ -136,9 +136,47 @@ def _snapshot(page: Any) -> dict[str, Any] | None:
     return value
 
 
-def _approved(realm: str, url: str) -> bool:
+def _normalize_url(url: str) -> str | None:
+    """Canonical form used for allowlist matching, or None if unusable.
+
+    Strips the fragment, collapses dot-segments in the path, and rejects
+    URLs whose raw form contains leading/embedded whitespace or control
+    characters — the three shapes a browser would normalize away before
+    navigation but a naive string comparison would not.
+    """
+
+    if url != url.strip() or any(char.isspace() and char != " " for char in url) or any(
+        ord(char) < 0x20 for char in url
+    ):
+        return None
     try:
         parsed = urlsplit(url)
+        port = parsed.port
+    except ValueError:
+        return None
+    path = parsed.path or "/"
+    # Collapse "." and ".." segments the way a browser would before the
+    # request leaves; a path that escapes its own root is rejected.
+    segments: list[str] = []
+    for segment in path.split("/"):
+        if segment == ".":
+            continue
+        if segment == "..":
+            if not segments:
+                return None
+            segments.pop()
+            continue
+        segments.append(segment)
+    normalized = parsed._replace(path="/".join(segments), fragment="")
+    return normalized.geturl()
+
+
+def _approved(realm: str, url: str) -> bool:
+    normalized = _normalize_url(url)
+    if normalized is None:
+        return False
+    try:
+        parsed = urlsplit(normalized)
         port = parsed.port
     except ValueError:
         return False
