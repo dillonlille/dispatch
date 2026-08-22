@@ -92,8 +92,10 @@ PY
 
 fail_with_detail() {
     # fail_with_detail <code> <message> <hint>: styled multi-line failure.
+    # Everything goes to stderr so the recovery hint stays attached to the
+    # error even when stdout is captured separately.
     printf '%s\n' "Dispatch installation failed: $1 — $2" >&2
-    say_warn "$3"
+    printf '  %s⚠%s %s\n' "$C_WARN" "$C_RESET" "$3" >&2
     exit 1
 }
 
@@ -311,10 +313,20 @@ if [ "$FORCE" -eq 0 ]; then
                 DELEGATE_ERROR_MESSAGE="$(json_field "$delegate_output" error.message)"
                 rm -f "$delegate_output"
                 if [ "$delegate_rc" -ne 0 ]; then
+                    if [ "$DELEGATE_ERROR_CODE" = "core_help_gate_failed" ]; then
+                        # The installed CLI failed its own staged-Core verification
+                        # gate, so `repair` would rerun that same gate and fail
+                        # identically. Only --force bypasses the installed code
+                        # path entirely: it re-clones and runs the fresh installer.
+                        fail_with_detail \
+                            "core_help_gate_failed" \
+                            "${DELEGATE_ERROR_MESSAGE:-the updater reported an unspecified error}" \
+                            "Run: install.sh --force    (the installed updater cannot repair its own failed verification gate)"
+                    fi
                     fail_with_detail \
                         "${DELEGATE_ERROR_CODE:-update_failed}" \
                         "${DELEGATE_ERROR_MESSAGE:-the updater reported an unspecified error}" \
-                        "Run: $LAUNCHER repair    (or reinstall: install.sh --force)"
+                        "Run: $LAUNCHER repair --yes    (or reinstall: install.sh --force)"
                 fi
             else
                 # No scratch file available: run unbuffered rather than fail.
