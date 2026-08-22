@@ -524,6 +524,23 @@ class EncryptedCredentialStore:
         registry = self._load_profiles()
         return self._reconciled_profiles(vault, registry)
 
+    def profile_payload_consistent(self) -> dict[str, Any]:
+        """Reconciled profile projection read under the store lock.
+
+        Identical to ``profile_payload()`` but never serves a snapshot that
+        interleaves with a concurrent writer; used where a stale projection
+        would produce wrong decisions rather than merely old ones. Absent
+        stores stay absent (no tree creation on read).
+        """
+
+        if not self.root.exists() and not self.root.is_symlink():
+            empty = {"schema_version": _VAULT_SCHEMA_VERSION, "accounts": {}}
+            return self._reconciled_profiles(empty, None)
+        with self._locked():
+            vault = self._load()
+            registry = self._load_profiles()
+            return self._reconciled_profiles(vault, registry)
+
     def write_profile_payload(self, payload: dict[str, Any]) -> None:
         self._validate_profile_payload(payload)
         data = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
@@ -664,7 +681,10 @@ class EncryptedCredentialStore:
             self._write(payload)
 
     def get(self, realm_id: str, account_alias: str) -> dict[str, str]:
-        payload = self._load()
+        if not self.root.exists() and not self.root.is_symlink():
+            raise AuthenticationError("credentials_not_enrolled", "credentials are not enrolled")
+        with self._locked():
+            payload = self._load()
         try:
             values = payload["accounts"][realm_id][account_alias]["values"]
         except KeyError as exc:
@@ -684,7 +704,10 @@ class EncryptedCredentialStore:
             return True
 
     def configured_accounts(self) -> set[tuple[str, str]]:
-        payload = self._load()
+        if not self.root.exists() and not self.root.is_symlink():
+            return set()
+        with self._locked():
+            payload = self._load()
         return {
             (realm_id, alias)
             for realm_id, accounts in payload["accounts"].items()
@@ -786,7 +809,7 @@ class AuthenticationManager:
     def profile_for_plugin(self, plugin_id: str, provider: str) -> str:
         self._require_plugin_provider(plugin_id, provider)
         provider_id = _provider(provider).id
-        payload = self._store.profile_payload()
+        payload = self._store.profile_payload_consistent()
         matches = [
             profile
             for profile, record in payload["profiles"].items()
@@ -1062,7 +1085,7 @@ class AuthenticationManager:
     def remove(self, realm_id: str, account_alias: str = "default") -> dict[str, Any]:
         _realm(realm_id)
         _require_slug(account_alias, "account_alias")
-        payload = self._store.profile_payload()
+        payload = self._store.profile_payload_consistent()
         matches = [
             profile
             for profile, record in payload["profiles"].items()
