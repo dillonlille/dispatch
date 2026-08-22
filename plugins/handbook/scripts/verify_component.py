@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,6 +17,12 @@ def load_policy():
     if spec is None or spec.loader is None:
         raise RuntimeError("plugin_policy_import_failed")
     module = importlib.util.module_from_spec(spec)
+    # plugin_policy imports plugin_yaml from its own directory; make sure that
+    # directory is importable regardless of how this script was invoked.
+    core_root = str(WORKSPACE / "dispatch-core")
+    if core_root not in sys.path:
+        sys.path.insert(0, core_root)
+    sys.modules["dispatch_source_plugin_policy"] = module
     spec.loader.exec_module(module)
     return module
 
