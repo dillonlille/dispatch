@@ -21,6 +21,7 @@ try:
     import yaml
 except ModuleNotFoundError:  # plugin_policy is a source-conformance tool; the
     yaml = None  # installed runtime venv does not carry PyYAML (dev-only dep).
+import plugin_yaml
 
 CORE_ROOT = Path(__file__).resolve().parent
 WORKSPACE = CORE_ROOT.parent
@@ -88,9 +89,18 @@ class Audit:
 
 
 def _load_yaml(path: Path) -> Any:
-    if yaml is None:
-        raise ValueError("PyYAML is not installed in this environment")
-    return yaml.safe_load(path.read_text(encoding="utf-8"))
+    text = path.read_text(encoding="utf-8")
+    if yaml is not None:
+        loaded = yaml.safe_load(text)
+        # The bounded subset parser is the contract for clean installs; when
+        # PyYAML happens to be present, require the two to agree so dev
+        # environments cannot drift into accepting documents that a clean
+        # install would reject.
+        fallback = plugin_yaml.parse_subset(text)
+        if loaded != fallback:
+            raise ValueError("manifest uses constructs outside the bounded YAML subset")
+        return loaded
+    return plugin_yaml.parse_subset(text)
 
 
 _YAML_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError) + ((yaml.YAMLError,) if yaml is not None else ())
