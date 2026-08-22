@@ -41,7 +41,12 @@ import dispatch_installer.setup as setup_runtime
 cli_runtime = importlib.import_module("dispatch_installer.cli")
 layout_runtime = importlib.import_module("dispatch_installer.layout")
 from dispatch_installer.doctor import inspect_installation
-from dispatch_installer.lifecycle import ensure_venv, install_from_clone, install_or_update
+from dispatch_installer.lifecycle import (
+    ensure_venv,
+    install_from_clone,
+    install_or_update,
+    recover_incomplete_installation,
+)
 from dispatch_installer.repository import (
     DEVELOPMENT_BRANCH,
     LEGACY_DEVELOPMENT_BRANCH,
@@ -4698,3 +4703,86 @@ def test_interrupted_stop_stays_an_interrupt_even_when_restore_fails(
 
     with pytest.raises(KeyboardInterrupt):
         stop_plugin_services_for_activation(layout, ["alpha", "beta"], run=fake_run)
+
+
+def test_recover_sweeps_staging_residue_from_crashed_install(tmp_path: Path) -> None:
+    # Audit L-8: recovery claimed completeness but only removed clone+venv,
+    # leaving .install-tmp staging, an adjacent browser staging cache, and
+    # stale swap backups behind.
+    layout = make_layout(tmp_path)
+    layout.prepare()
+
+    install_tmp = layout.dispatch_home / ".install-tmp"
+    install_tmp.mkdir(mode=0o700)
+    (install_tmp / "bootstrap.123").mkdir()
+    browser_staging = layout.dispatch_home / "browser-manager-playwright"
+    browser_staging.mkdir(mode=0o700)
+    (browser_staging / "chromium-99").mkdir()
+    stale_backup = layout.dispatch_home / ".previous-venv"
+    stale_backup.mkdir(mode=0o700)
+    two_days_ago = datetime.now(UTC).timestamp() - 2 * 86400
+    import os as _os
+
+    _os.utime(stale_backup, (two_days_ago, two_days_ago))
+    fresh_backup = layout.dispatch_home / ".failed-venv"
+    fresh_backup.mkdir(mode=0o700)
+
+    result = recover_incomplete_installation(layout)
+
+    assert result["status"] == "recovered"
+    removed = set(result["removed"])
+    assert "install-tmp" in removed
+    assert "browser-manager-playwright" in removed
+    assert not install_tmp.exists()
+    assert not browser_staging.exists()
+    assert not stale_backup.exists()  # past the 24h window -> swept
+    assert fresh_backup.exists()  # recent rollback material -> preserved
+
+
+def test_recover_refuses_symlinked_staging_paths(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    outside = tmp_path / "outside"
+    outside.mkdir(mode=0o700)
+    link = layout.dispatch_home / ".install-tmp"
+    link.symlink_to(outside, target_is_directory=True)
+
+    with pytest.raises(InstallerError) as error:
+        recover_incomplete_installation(layout)
+    assert error.value.code == "managed_directory_unsafe"
+    assert link.is_symlink()  # untouched
+
+
+def test_install_or_update_holds_lock_across_stage_and_promote(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Audit L-9: the lock used to be released after staging and re-acquired
+    # inside install_from_clone, letting a concurrent setup interleave
+    # last-writer-wins between the two. The whole stage+promote span must
+    # sit inside one continuous lock hold.
+    layout = make_layout(tmp_path)
+    layout.prepare()
+
+    holds: list[str] = []
+
+    real_lock = lifecycle_runtime.installation_lock
+
+    @contextlib.contextmanager
+    def tracking_lock(value, **kwargs):
+        with real_lock(value, **kwargs):
+            holds.append("held")
+            yield
+
+    monkeypatch.setattr(lifecycle_runtime, "installation_lock", tracking_lock)
+    monkeypatch.setattr(
+        lifecycle_runtime,
+        "_stage_repository",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("stop at staging")),
+    )
+
+    with pytest.raises(RuntimeError, match="stop at staging"):
+        install_or_update(layout, channel="dev", source=None, run=lambda *_a, **_k: completed())
+    # The failure happened while holding the lock — proving stage+promote
+    # share one hold rather than lock/release/lock.
+    assert holds == ["held"]
