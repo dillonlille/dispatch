@@ -1070,6 +1070,12 @@ def recover_incomplete_installation(
 
     Safe by construction: with no installation record, any clone/venv under
     DISPATCH_HOME was created by a prior installer run and never activated.
+    The sweep also removes leftover staging material from a crashed run —
+    the private ``.install-tmp`` staging root, an adjacent
+    ``browser-manager-playwright`` staging cache, and stale ``.previous-``
+    / ``.failed-`` swap backups older than the same 24h window the update
+    path uses (audit L-8: recovery used to leave those behind while
+    claiming completeness).
     """
 
     if read_installation(layout) is not None:
@@ -1087,6 +1093,30 @@ def recover_incomplete_installation(
                 )
             _safe_remove(managed)
             removed.append(managed.name)
+
+    # Staging residue from a crashed install. Same safety posture as the
+    # managed paths above: refuse symlinks and non-directories instead of
+    # following them.
+    candidates = (
+        ("install-tmp", layout.dispatch_home / ".install-tmp"),
+        ("browser-manager-playwright", layout.dispatch_home / "browser-manager-playwright"),
+    )
+    for label, residue in candidates:
+        if not (residue.exists() or residue.is_symlink()):
+            continue
+        if residue.is_symlink() or not residue.is_dir():
+            raise InstallerError(
+                "managed_directory_unsafe",
+                f"unrecorded managed path is unsafe: {residue}",
+            )
+        _safe_remove(residue)
+        removed.append(label)
+
+    # Swap backups are rollback material for an ACTIVE generation; with no
+    # installation record there is nothing to roll back to, so anything
+    # past the update path's own freshness window is garbage.
+    sweep_stale_swap_directories(layout)
+
     return {"status": "recovered", "removed": removed}
 
 
@@ -1130,23 +1160,31 @@ def install_or_update(
         return result
 
     layout.prepare()
-    with installation_lock(layout):
-        assert_installation_root_current(layout)
-        if current is not None and (layout.clone.exists() or layout.clone.is_symlink()):
-            assert_checkout_clean(layout.clone, run=run)
-        staged, work = _stage_repository(layout, channel=channel, ref=ref, run=run)
+    work: Path | None = None
     try:
-        result = install_from_clone(layout, source=staged, channel=channel, ref=ref, run=run, now=now)
+        with installation_lock(layout):
+            assert_installation_root_current(layout)
+            if current is not None and (layout.clone.exists() or layout.clone.is_symlink()):
+                assert_checkout_clean(layout.clone, run=run)
+            # Stage AND promote under one lock hold (audit L-9): releasing
+            # the lock between staging and install_from_clone let two
+            # concurrent setups interleave last-writer-wins with no error.
+            # The contextmanager is re-entrant for this holder, so
+            # install_from_clone's internal acquisition yields straight
+            # through.
+            staged, work = _stage_repository(layout, channel=channel, ref=ref, run=run)
+            result = install_from_clone(layout, source=staged, channel=channel, ref=ref, run=run, now=now)
         result["status"] = result_status()
         return result
     finally:
-        try:
-            _safe_remove(work)
-        except BaseException as cleanup_error:
-            raise InstallerError(
-                "repository_stage_cleanup_failed",
-                "repository reconciliation completed but private staging could not be removed",
-            ) from cleanup_error
+        if work is not None:
+            try:
+                _safe_remove(work)
+            except BaseException as cleanup_error:
+                raise InstallerError(
+                    "repository_stage_cleanup_failed",
+                    "repository reconciliation completed but private staging could not be removed",
+                ) from cleanup_error
 
 
 def repair_existing(
