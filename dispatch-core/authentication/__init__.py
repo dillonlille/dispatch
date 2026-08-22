@@ -221,26 +221,72 @@ class EncryptedCredentialStore:
     def _key(self, *, create: bool) -> bytes | None:
         key_present = self.key_file.exists() or self.key_file.is_symlink()
         vault_present = self.vault_file.exists() or self.vault_file.is_symlink()
-        if vault_present and not key_present:
-            # The key may live in the OS keyring instead of on disk.
+        if key_present:
+            disk_key = _safe_private_file(self.key_file, maximum_size=128)
+            try:
+                Fernet(disk_key)
+            except (TypeError, ValueError) as exc:
+                raise AuthenticationError("auth_store_invalid", "authentication vault key is invalid") from exc
+            if vault_present and self._ring_has_key():
+                ring_key = self._key_from_ring()
+                if ring_key is not None and ring_key != disk_key:
+                    # Two different keys exist; the disk copy wins today, but a
+                    # silent divergence is how vaults get bricked. Fail loudly.
+                    raise AuthenticationError(
+                        "auth_store_ambiguous",
+                        "vault key exists both in the OS keyring and on disk with different values",
+                    )
+            return disk_key
+        if vault_present:
+            if not self._ring_available():
+                raise AuthenticationError(
+                    "auth_store_key_unavailable",
+                    "vault key lives in the OS keyring, which is currently unreachable",
+                )
             ring_key = self._key_from_ring()
             if ring_key is not None:
                 return ring_key
-        if key_present:
-            key = _safe_private_file(self.key_file, maximum_size=128)
-            try:
-                Fernet(key)
-            except (TypeError, ValueError) as exc:
-                raise AuthenticationError("auth_store_invalid", "authentication vault key is invalid") from exc
-            return key
-        if vault_present:
-            raise AuthenticationError("auth_store_invalid", "authentication vault key is missing")
+            raise AuthenticationError(
+                "auth_store_invalid",
+                "authentication vault key is missing from the OS keyring",
+            )
         if not create:
             return None
         key = Fernet.generate_key()
         if not self._key_to_ring(key):
             _atomic_private_file(self.key_file, key)
         return key
+
+    @staticmethod
+    def _ring_available() -> bool:
+        """True when an OS keyring is reachable at all.
+
+        Distinguishes "no usable keyring exists" from "the keyring is
+        temporarily unreachable", so a dbus hiccup cannot masquerade as data
+        loss.
+        """
+
+        try:
+            import importlib
+
+            keyring_store = importlib.import_module("authentication.keyring")
+            return keyring_store.available()
+        except Exception:
+            return False
+
+    @classmethod
+    def _ring_has_key(cls) -> bool:
+        """True when the OS keyring is available AND holds a vault key."""
+
+        try:
+            import importlib
+
+            keyring_store = importlib.import_module("authentication.keyring")
+            if not keyring_store.available():
+                return False
+            return keyring_store.load() is not None
+        except Exception:
+            return False
 
     @staticmethod
     def _key_from_ring() -> bytes | None:
@@ -275,6 +321,26 @@ class EncryptedCredentialStore:
             return False
         self.key_file.unlink(missing_ok=True)
         return True
+
+    def rotate(self) -> dict[str, Any]:
+        """Re-encrypt the vault under a freshly generated key.
+
+        Creates a key (and its keyring/disk home) even when the vault is
+        still empty, so rotation is safe to run at any time. All existing
+        account records are preserved.
+        """
+
+        with self._locked():
+            payload = self._load()
+            key = Fernet.generate_key()
+            if not self._key_to_ring(key):
+                _atomic_private_file(self.key_file, key)
+            if payload["accounts"]:
+                self._write(payload)
+            return {
+                "status": "rotated",
+                "accounts": sum(len(items) for items in payload["accounts"].values()),
+            }
 
     def _load(self) -> dict[str, Any]:
         if not self.root.exists() and not self.root.is_symlink():
@@ -892,6 +958,11 @@ class AuthenticationManager:
             "account_alias": account_alias,
             "status": "removed" if removed else "not_enrolled",
         }
+
+    def rotate_vault(self) -> dict[str, Any]:
+        """Rotate the vault key, re-encrypting every stored credential."""
+
+        return self._store.rotate()
 
 
 class PluginAuthenticationBroker:

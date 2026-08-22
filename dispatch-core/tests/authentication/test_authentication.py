@@ -7,6 +7,8 @@ import types
 
 import pytest
 
+from cryptography.fernet import Fernet
+
 from authentication import AuthenticationError, AuthenticationManager
 from browser_manager import ManagedBrowserSession
 from paths import DispatchPaths
@@ -232,6 +234,58 @@ def test_group_writable_store_directory_fails_closed(monkeypatch, tmp_path: Path
     assert failure.value.code == "auth_store_unsafe"
     os.chmod(authentication.store_root, 0o700)
     assert authentication.credentials("amazon-operations").values == values
+
+
+def test_divergent_dual_keys_fail_closed_instead_of_silent_disk_preference(monkeypatch, tmp_path: Path) -> None:
+    ring = FakeKeyring()
+    ring.install(monkeypatch)
+    ring.available = False
+    authentication = manager(tmp_path)
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll("amazon-operations", "default", values)
+    # A second key appears in the keyring while an older disk key exists.
+    ring.available = True
+    ring.items["vault-key"] = Fernet.generate_key()
+
+    with pytest.raises(AuthenticationError) as failure:
+        authentication.credentials("amazon-operations")
+    assert failure.value.code == "auth_store_ambiguous"
+
+
+def test_unreachable_keyring_with_ring_only_vault_is_reported_as_transient(monkeypatch, tmp_path: Path) -> None:
+    ring = FakeKeyring()
+    ring.install(monkeypatch)
+    authentication = manager(tmp_path)
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    # Enroll normally so the key lands in the (fake) OS keyring...
+    authentication.enroll("amazon-operations", "default", values)
+    assert not (authentication.store_root / "vault.key").exists()
+    # ...then make the keyring disappear entirely (dbus down).
+    ring.available = False
+
+    with pytest.raises(AuthenticationError) as failure:
+        authentication.credentials("amazon-operations")
+    assert failure.value.code == "auth_store_key_unavailable"
+
+    # Recovery is possible once the keyring returns.
+    ring.available = True
+    assert authentication.credentials("amazon-operations").values == values
+
+
+def test_rotate_rekeys_the_vault_without_losing_accounts(monkeypatch, tmp_path: Path) -> None:
+    ring = FakeKeyring()
+    ring.install(monkeypatch)
+    authentication = manager(tmp_path)
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll("amazon-operations", "default", values)
+
+    result = authentication.rotate_vault()
+
+    assert result == {"status": "rotated", "accounts": 1}
+    assert len(ring.items) == 1
+    # The old key must be gone from the ring; the new one decrypts the data.
+    assert authentication.credentials("amazon-operations").values == values
+    assert authentication.remove("amazon-operations")["status"] == "removed"
 
 
 def test_browser_session_is_bound_to_the_canonical_realm_landing_page(tmp_path: Path) -> None:
