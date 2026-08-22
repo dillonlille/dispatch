@@ -10,7 +10,6 @@ from __future__ import annotations
 import os
 import shutil
 import sys
-from dataclasses import dataclass
 
 _ACCENT = "36"      # cyan
 _SUCCESS = "32"     # green
@@ -188,14 +187,7 @@ def select_menu(
 _arrow_single_select = None  # installed by dispatch_installer.interactive
 
 
-@dataclass(slots=True)
-class MenuOption:
-    value: str
-    description: str = ""
-
-
 __all__ = [
-    "MenuOption",
     "accent",
     "banner",
     "bold",

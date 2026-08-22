@@ -319,23 +319,41 @@ def _patch_two_compatible_profiles(monkeypatch) -> FakeAuthentication:
     return manager
 
 
-@pytest.mark.parametrize("answer", ["0", "-1", "99"])
-def test_reuse_picker_rejects_out_of_range_numbers_instead_of_binding_wrong_profile(
+@pytest.mark.parametrize("answer", ["0", "-1", "99", "banana"])
+def test_reuse_picker_reasks_on_out_of_range_answers_and_never_binds_wrong_profile(
     monkeypatch,
     tmp_path: Path,
     answer: str,
+    capsys,
 ) -> None:
     # Python's negative indexing used to turn "0" into the LAST compatible
     # profile and "-1" into the second-to-last — a silent wrong-profile
-    # binding. Out-of-range answers must abort loudly instead.
+    # binding. Out-of-range answers now re-ask (audit L-1 consistency) and
+    # can never bind a profile the user did not select.
     manager = _patch_two_compatible_profiles(monkeypatch)
-    monkeypatch.setattr("builtins.input", lambda _prompt: answer)
+    answers = iter([answer, "2"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
 
-    with pytest.raises(setup_runtime.InstallerError) as failure:
+    configured, pending = setup_runtime._setup_auth_profiles(tmp_path, ["companion-bridge"], human=True)  # type: ignore[arg-type]
+
+    assert pending == []
+    assert configured[0]["profile"] == "amazon-alt"
+    assert manager.bound == [("amazon-alt", "companion-bridge", "amazon-operations")]
+    assert "or 'c' to create" in capsys.readouterr().err
+
+
+def test_reuse_picker_eof_still_exits_cleanly(monkeypatch, tmp_path: Path) -> None:
+    # The re-ask loop must not trap piped/CI runs: EOF propagates and
+    # run_setup converts it to the structured input_unavailable error.
+    manager = _patch_two_compatible_profiles(monkeypatch)
+
+    def exhausted_input(_prompt):
+        raise EOFError
+
+    monkeypatch.setattr("builtins.input", exhausted_input)
+
+    with pytest.raises(EOFError):
         setup_runtime._setup_auth_profiles(tmp_path, ["companion-bridge"], human=True)  # type: ignore[arg-type]
-
-    assert failure.value.code == "profile_selection_invalid"
-    assert manager.enrolled == []
     assert manager.bound == []
 
 
@@ -356,6 +374,25 @@ def test_reuse_picker_still_accepts_valid_row_numbers(monkeypatch, tmp_path: Pat
         }
     ]
     assert manager.bound == [("amazon-alt", "companion-bridge", "amazon-operations")]
+
+
+def test_wizard_slug_rule_matches_core_enrollment_rule():
+    # Audit hygiene: setup.py validates profile names up front with its own
+    # _PROFILE_NAME, while Core's enroll_profile enforces its own _SLUG +
+    # length rule. If either side drifts, the wizard accepts names Core
+    # rejects (or vice versa) and users hit the wall mid-run. Pin them
+    # together.
+    import authentication as auth_module
+
+    assert setup_runtime._PROFILE_NAME.pattern == auth_module._SLUG.pattern
+    # The wizard's acceptance predicate is Core's exact rule:
+    # slug pattern AND at most 63 chars.
+    def wizard_accepts(name: str) -> bool:
+        return len(name) <= 63 and setup_runtime._PROFILE_NAME.fullmatch(name) is not None
+
+    assert not wizard_accepts("a" * 64)
+    assert not wizard_accepts("Bad Name")
+    assert wizard_accepts("amazon-work")
 
 
 def _patch_raw_config(monkeypatch, manager, plugins_config) -> None:
