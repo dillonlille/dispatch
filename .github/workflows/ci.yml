@@ -82,6 +82,45 @@ jobs:
       - name: Smoke-run the source Core command
         run: python dispatch-core --help
 
+  plugin-conformance:
+    name: Plugin Standard v1 conformance gate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out reviewed source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+
+      - name: Configure Python 3.11
+        uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: "3.11"
+
+      - name: Audit every plugin against the Dispatch Plugin Standard
+        run: |
+          status=0
+          for owner in $(find plugins -maxdepth 1 -mindepth 1 -type d | sort); do
+            echo "::group::Policy audit: $owner"
+            python3 -B dispatch-core/plugin_policy.py "$owner" || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
+
+      - name: Run lifecycle scripts for every plugin (fixture-only)
+        run: |
+          status=0
+          for owner in plugins/*; do
+            [ -x "$owner/scripts/test" ] || continue
+            echo "::group::Lifecycle: $owner"
+            "$owner/scripts/test" || status=1
+            "$owner/scripts/build" || status=1
+            "$owner/scripts/verify" || status=1
+            "$owner/scripts/health" >/dev/null || status=1
+            echo "::endgroup::"
+          done
+          exit "$status"
+
   python-compat:
     name: Python 3.12 and 3.13 compatibility
     runs-on: ubuntu-24.04
