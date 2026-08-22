@@ -288,6 +288,31 @@ def test_rotate_rekeys_the_vault_without_losing_accounts(monkeypatch, tmp_path: 
     assert authentication.remove("amazon-operations")["status"] == "removed"
 
 
+def test_successful_login_marks_profile_verified(tmp_path: Path) -> None:
+    from tests.authentication.test_workflow import FakePage
+
+    authentication = manager(tmp_path)
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll_profile("operations", "amazon-operations", values)
+    assert authentication.profile_status("operations")["verification"] == "unverified"
+
+    page = FakePage("amazon-operations")
+    landing = "https://logistics.amazon.com/dspconsolev2"
+    managed_session = ManagedBrowserSession(
+        lease_id="synthetic-lease",
+        realm="amazon-operations",
+        landing_url=landing,
+        page=page,
+        context=object(),
+    )
+
+    result = authentication.authenticate_profile(managed_session, "operations")
+
+    assert result.authenticated is True
+    assert result.account_alias == "operations"
+    assert authentication.profile_status("operations")["verification"] == "verified"
+
+
 def test_browser_session_is_bound_to_the_canonical_realm_landing_page(tmp_path: Path) -> None:
     authentication = manager(tmp_path)
     authentication.enroll(

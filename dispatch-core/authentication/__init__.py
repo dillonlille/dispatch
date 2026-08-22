@@ -844,6 +844,33 @@ class AuthenticationManager:
         self.account_alias_for_profile(profile, provider)
         return PluginAuthenticationBroker(self._paths, plugin_id, provider, profile)
 
+    def _mark_profile_verified(self, provider: str, account_alias: str) -> None:
+        """Flip a profile's verification to 'verified' after a live login.
+
+        Best-effort and idempotent: a successful bounded login against the
+        realm is the strongest acceptance evidence Dispatch has, so the
+        profile registry reflects it. Failures here never mask the result.
+        """
+
+        try:
+            with self._store._locked():
+                vault = self._store._load()
+                registry = self._store._reconciled_profiles(vault, self._store._load_profiles())
+                changed = False
+                for record in registry["profiles"].values():
+                    if (
+                        record.get("provider") == provider
+                        and record.get("account_alias") == account_alias
+                        and record.get("verification") != "verified"
+                    ):
+                        record["verification"] = "verified"
+                        record["updated_at"] = _utc_now()
+                        changed = True
+                if changed:
+                    self._store.write_profile_payload(registry)
+        except AuthenticationError:
+            return
+
     def authenticate_profile(self, session: ManagedBrowserSession, profile: str) -> "AuthenticationResult":
         provider = _realm(session.realm).id
         alias = self.account_alias_for_profile(profile, provider)
@@ -927,7 +954,10 @@ class AuthenticationManager:
     ) -> "AuthenticationResult":
         from .workflow import authenticate
 
-        return authenticate(self, session, account_alias)
+        result = authenticate(self, session, account_alias)
+        if result.authenticated:
+            self._mark_profile_verified(_realm(session.realm).id, account_alias)
+        return result
 
     def resume(
         self,
@@ -936,7 +966,10 @@ class AuthenticationManager:
     ) -> "AuthenticationResult":
         from .workflow import authenticate
 
-        return authenticate(self, session, account_alias, resume=True)
+        result = authenticate(self, session, account_alias, resume=True)
+        if result.authenticated:
+            self._mark_profile_verified(_realm(session.realm).id, account_alias)
+        return result
 
     def remove(self, realm_id: str, account_alias: str = "default") -> dict[str, Any]:
         _realm(realm_id)
