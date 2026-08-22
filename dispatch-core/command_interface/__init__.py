@@ -107,6 +107,15 @@ def parser(*, prog: str = "dispatch-core") -> argparse.ArgumentParser:
         help="release a plugin's selected authentication profile",
     )
     auth_deselect.add_argument("--plugin", required=True, help="built-in plugin ID")
+    auth_rotate = auth_actions.add_parser(
+        "rotate",
+        help="re-encrypt the vault under a freshly generated key",
+    )
+    auth_rotate.add_argument(
+        "--yes",
+        action="store_true",
+        help="confirm vault key rotation",
+    )
 
     collection = subcommands.add_parser("collection", help="operate the durable Collection Manager worker")
     collection_actions = collection.add_subparsers(dest="collection_action", required=True)
@@ -219,6 +228,13 @@ def _auth_result(args: argparse.Namespace, *, interactive: bool) -> dict[str, An
             data = authentication.select_plugin_profile(args.profile, args.plugin, provider)
         elif args.auth_action == "deselect":
             data = authentication.clear_plugin_profile(args.plugin)
+        elif args.auth_action == "rotate":
+            if not args.yes:
+                raise AuthenticationError(
+                    "confirmation_required",
+                    "vault key rotation requires --yes",
+                )
+            data = authentication.rotate_vault()
         elif args.auth_action == "enroll":
             if not interactive:
                 raise AuthenticationError(

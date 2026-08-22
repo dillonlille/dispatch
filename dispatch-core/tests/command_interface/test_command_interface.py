@@ -166,6 +166,31 @@ def test_auth_select_and_deselect_round_trip_unblocks_removal(monkeypatch, tmp_p
     assert removed["data"]["status"] == "removed"
 
 
+def test_auth_rotate_requires_confirmation_and_rotates(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+    secrets = iter(["synthetic-user", "synthetic-password"])
+    monkeypatch.setattr(command_interface.getpass, "getpass", lambda _prompt: next(secrets))
+
+    assert main(["auth", "add", "amazon-main", "--provider", "amazon"]) == 0
+    capsys.readouterr()
+
+    # Rotation is gated behind --yes like other destructive actions.
+    assert main(["auth", "rotate"]) == 1
+    blocked = json.loads(capsys.readouterr().out)
+    assert blocked["error"]["code"] == "confirmation_required"
+
+    assert main(["auth", "rotate", "--yes"]) == 0
+    rotated = json.loads(capsys.readouterr().out)
+    assert rotated["data"] == {"status": "rotated", "accounts": 1}
+    # Credentials survive the rotation.
+    assert main(["auth", "list"]) == 0
+    listed = json.loads(capsys.readouterr().out)
+    assert listed["data"]["profiles"][0]["profile"] == "amazon-main"
+
+
 def test_noninteractive_auth_help_is_one_json_document(capsys) -> None:
     assert main(["auth", "list", "--help"], interactive=False) == 0
     captured = capsys.readouterr()
