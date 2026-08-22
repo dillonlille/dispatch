@@ -160,7 +160,19 @@ def run_harness_setup(
     index: int | None = None
     if existing is not None:
         print(status_line("ok", f"Harness already selected: {existing}"))
-        index = 0 if existing != "none" else len(options) - 1
+        # Resolve the recorded id against the rendered rows instead of
+        # assuming position 0: HARNESS_CATALOG iteration order is not a
+        # contract, and a stale positional assumption silently selects
+        # the wrong harness.
+        matches = [i for i, (option_id, _) in enumerate(options) if option_id == existing]
+        index = matches[0] if matches else None
+        if index is None:
+            # Defensive: load_selection validates against the same catalog,
+            # so every recorded id renders as a row today. If that contract
+            # ever loosens, degrade to skipping rather than selecting the
+            # wrong harness.
+            print(status_line("warn", f"{existing} is no longer offered; skipping harness setup"))
+            return result
     elif human:
         index = select_menu(
             "Select harness",

@@ -136,3 +136,46 @@ def test_result_envelope_never_contains_secrets(layout, monkeypatch):
     payload = json.dumps(result.as_dict())
     assert "contains_secrets" in payload
     assert json.loads(payload)["contains_secrets"] is False
+
+
+def _two_harness_catalog():
+    """A catalog where the recorded selection is NOT the first row."""
+    from dataclasses import replace
+
+    codex = replace(
+        HARNESS_CATALOG["hermes"],
+        id="codex",
+        display_name="Codex CLI",
+        description="OpenAI Codex CLI.",
+        launcher="codex",
+    )
+    return {"hermes": HARNESS_CATALOG["hermes"], "codex": codex}
+
+
+def test_existing_selection_resolves_by_id_not_position(layout, monkeypatch):
+    # Regression (setup audit M-4): a recorded selection used to be mapped
+    # to menu index 0, so whichever harness happened to render first was
+    # activated instead of the one the user actually picked.
+    from dispatch_installer import harness
+
+    catalog = _two_harness_catalog()
+    monkeypatch.setattr(harness, "HARNESS_CATALOG", catalog)
+    monkeypatch.setattr(harness_setup, "HARNESS_CATALOG", catalog)
+    write_selection(layout.config, catalog["codex"], DetectionResult("ready", version="v9", home="/c"))
+    _skip_install(monkeypatch)
+    monkeypatch.setattr(harness_setup, "_hermes_command", FakeHermes(auth_logged_in=True))
+
+    result = harness_setup.run_harness_setup(layout, human=False)
+
+    assert result.selected is True
+    assert result.harness_id == "codex"
+
+
+def test_missing_recorded_selection_skips_instead_of_guessing(layout, monkeypatch, capsys):
+    # Defensive path: if a recorded id ever stops rendering as a row,
+    # degrade to a skip with a warning rather than activating some other
+    # harness silently.
+    monkeypatch.setattr(harness_setup, "load_selection", lambda _config: "vanished")
+    result = harness_setup.run_harness_setup(layout, human=False)
+    assert result.selected is False
+    assert "no longer offered" in capsys.readouterr().out
