@@ -179,3 +179,83 @@ def test_missing_recorded_selection_skips_instead_of_guessing(layout, monkeypatc
     result = harness_setup.run_harness_setup(layout, human=False)
     assert result.selected is False
     assert "no longer offered" in capsys.readouterr().out
+
+
+def _profile_list_hermes(list_output: str, *, list_rc: int = 0):
+    class ListHermes:
+        def __init__(self):
+            self.calls = []
+
+        def __call__(self, launcher, arguments, **kwargs):
+            self.calls.append(arguments)
+            import subprocess
+
+            if arguments[:2] == ("profile", "list"):
+                return subprocess.CompletedProcess(arguments, list_rc, list_output, "")
+            return subprocess.CompletedProcess(arguments, 0, json.dumps({"ok": True}), "")
+
+    return ListHermes()
+
+
+def test_profile_detection_matches_exact_row_not_substring(layout, monkeypatch):
+    # Audit L-4: startswith/substring matching let " dispatch-operations-x"
+    # or any line containing the name count as an existing profile, so the
+    # wizard skipped creating a profile that did not exist. Only a row whose
+    # first field equals the exact name counts.
+    from dispatch_installer.harness import DetectionResult
+
+    monkeypatch.setattr(
+        harness_setup,
+        "detect_harness",
+        lambda spec: DetectionResult("ready", version="v1", home="/h"),
+    )
+    fake = _profile_list_hermes("  dispatch-operations-extra\n* other-profile\ndispatch-operations-notes\n")
+    monkeypatch.setattr(harness_setup, "_hermes_command", fake)
+
+    assert harness_setup._profile_exists("hermes", harness_setup.PROFILE_NAME) is False
+
+
+def test_profile_detection_accepts_marker_prefixed_exact_row(layout, monkeypatch):
+    from dispatch_installer.harness import DetectionResult
+
+    monkeypatch.setattr(
+        harness_setup,
+        "detect_harness",
+        lambda spec: DetectionResult("ready", version="v1", home="/h"),
+    )
+    fake = _profile_list_hermes("* dispatch-operations   active\n  other\n")
+    monkeypatch.setattr(harness_setup, "_hermes_command", fake)
+
+    assert harness_setup._profile_exists("hermes", harness_setup.PROFILE_NAME) is True
+
+
+def test_profile_config_failure_discloses_applied_keys(layout, monkeypatch):
+    # Audit L-5: the three config writes are independent CLI calls with no
+    # rollback. Failing on key 2 used to leave model set with zero
+    # indication; the error must say what was already applied and how to
+    # finish by hand.
+    from dispatch_installer.harness import DetectionResult
+
+    class ExplodingConfig:
+        def __call__(self, launcher, arguments, **kwargs):
+            import subprocess
+
+            if arguments[:2] == ("profile", "list"):
+                return subprocess.CompletedProcess(arguments, 0, "", "")
+            if arguments[:2] == ("config", "set") and arguments[2] == "model.provider":
+                return subprocess.CompletedProcess(arguments, 1, "", "boom")
+            return subprocess.CompletedProcess(arguments, 0, json.dumps({"ok": True}), "")
+
+    monkeypatch.setattr(
+        harness_setup,
+        "detect_harness",
+        lambda spec: DetectionResult("ready", version="v1", home="/h"),
+    )
+    write_selection(layout.config, HARNESS_CATALOG["hermes"], DetectionResult("ready", version="v1", home="/h"))
+    monkeypatch.setattr(harness_setup, "_hermes_command", ExplodingConfig())
+
+    with pytest.raises(harness_setup.InstallerError) as error:
+        harness_setup.run_harness_setup(layout, human=False)
+    assert error.value.code == "harness_config_failed"
+    assert "applied before failure: model.default" in str(error.value)
+    assert "finish with" in str(error.value)

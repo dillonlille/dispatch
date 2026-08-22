@@ -89,10 +89,22 @@ def _profile_exists(launcher: str, name: str) -> bool:
     completed = _sys.modules[__name__]._hermes_command(launcher, ("profile", "list"))
     if completed.returncode != 0:
         return False
-    return any(
-        line.strip().startswith(name) or f" {name} " in line
-        for line in (completed.stdout or "").splitlines()
-    )
+    # Match whole table rows only (audit L-4): a bare startswith/substring
+    # match accepted any line that merely began with or contained the name,
+    # so a format drift or a name like "dispatch" matching
+    # "dispatch-operations" produced a false positive and the wizard skipped
+    # creating a profile that did not exist. A row is a hit when its first
+    # whitespace-delimited field equals the exact profile name.
+    for line in (completed.stdout or "").splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Tolerate list markers ("- item", "* item", "• item") before the
+        # name, then compare the exact first field.
+        token = stripped.lstrip("-*•").strip().split(None, 1)[0]
+        if token == name:
+            return True
+    return False
 
 
 def _ensure_profile(spec: HarnessSpec, detection: DetectionResult, result: HarnessSetupResult) -> None:
@@ -115,14 +127,22 @@ def _write_profile_config(spec: HarnessSpec, detection: DetectionResult, model: 
         ("model.provider", "openai-codex"),
         ("agent.reasoning_effort", reasoning),
     )
+    applied: list[str] = []
     for key, value in pairs:
         completed = _hermes_command(launcher, ("config", "set", key, value, "--profile", PROFILE_NAME))
         if completed.returncode != 0:
             detail = (completed.stderr or completed.stdout or "").strip()[:256]
+            # The writes are three independent CLI calls with no rollback
+            # (audit L-5): failing on key 2 used to leave model set and
+            # provider/reasoning unset with zero indication. Say exactly
+            # what was applied so the operator can finish by hand.
+            prefix = f"applied before failure: {', '.join(applied)}; " if applied else ""
             raise InstallerError(
                 "harness_config_failed",
-                f"could not set {key} on the {PROFILE_NAME} profile: {detail}",
+                f"could not set {key} on the {PROFILE_NAME} profile: {detail} ({prefix}"
+                f"finish with: {launcher} config set <key> <value> --profile {PROFILE_NAME})",
             )
+        applied.append(key)
 
 
 def _codex_pending() -> dict[str, str]:
