@@ -1,5 +1,6 @@
 #!/usr/bin/env sh
 set -eu
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+cd "$ROOT"
 export PYTHONDONTWRITEBYTECODE=1
 exec python3 -B -c 'import ast,pathlib; root=pathlib.Path("src"); files=sorted(root.rglob("*.py")); assert files; [ast.parse(path.read_text(encoding="utf-8"), filename=str(path)) for path in files]'
