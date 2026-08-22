@@ -704,7 +704,14 @@ def _build_replacement_venv(layout: InstallLayout, *, run: RunCommand) -> tuple[
             ) from cleanup_error
         raise InstallerError("browser_provisioning_failed", "Browser Manager did not return one provisioning result")
     browser_result = browser_results[0]
-    _verify_staged_core(replacement, layout.clone / "dispatch-core", work, run=run)
+    # The gate executes an interpreter: pass the staged venv's python, not the
+    # venv root directory (which spawned "Permission denied" under env -i).
+    _verify_staged_core(
+        replacement / "bin" / "python",
+        layout.clone / "dispatch-core",
+        work,
+        run=run,
+    )
     staged = browser_replacement if bool(getattr(browser_result, "replacement_required", False)) else None
     return replacement, staged, work, browser_result
 
@@ -740,6 +747,16 @@ def _verify_staged_core(python: Path, code_root: Path, work: Path, *, run: RunCo
     entrypoint = code_root / "__main__.py"
     if entrypoint.is_symlink() or not entrypoint.is_file():
         raise InstallerError("core_help_gate_failed", "staged Core entry point is missing or unsafe")
+    python = Path(python)
+    if (
+        python.is_dir()
+        or not python.is_file()
+        or not os.access(python, os.X_OK)
+    ):
+        # Rejects venv roots and other non-interpreter paths before spawning:
+        # env would otherwise fail with an opaque "Permission denied". Venv
+        # interpreters may legitimately be symlinks to the base Python.
+        raise InstallerError("core_help_gate_failed", "staged environment has no usable Python interpreter")
     timeout = _approved_host_tool(Path("/usr/bin/timeout"), "timeout")
     completed = run(
         (
