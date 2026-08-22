@@ -2,7 +2,9 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from authentication import AuthenticationManager
+import pytest
+
+from authentication import AuthenticationError, AuthenticationManager
 from browser_manager import ManagedBrowserSession
 from paths import DispatchPaths
 
@@ -235,6 +237,33 @@ def test_paycom_rejects_an_ambiguous_security_challenge(tmp_path: Path) -> None:
 
     assert result.status == "manual_verification_required"
     assert page.challenge_payload is None
+
+
+def test_workflow_never_leaks_a_raw_keyerror_on_catalog_drift(tmp_path: Path) -> None:
+    """Defense-in-depth: if a vault record ever lacks a catalog field, the
+    bounded workflow must raise the typed store error, not a raw KeyError."""
+    from dataclasses import dataclass, field
+    from typing import Any, Mapping
+
+    from authentication.workflow import authenticate
+
+    @dataclass(frozen=True)
+    class _StubCredential:
+        realm: str
+        account_alias: str
+        values: Mapping[str, str] = field(repr=False, compare=False)
+
+    class _StubManager:
+        def credentials_for_session(self, session: Any, account_alias: str) -> _StubCredential:
+            return _StubCredential(session.realm, account_alias, {"username": "synthetic-user"})
+
+    manager = _StubManager()
+    page = FakePage("amazon-operations")
+    managed_session = session(page)
+
+    with pytest.raises(AuthenticationError) as drifted:
+        authenticate(manager, managed_session)
+    assert drifted.value.code == "auth_store_invalid"
 
 
 def test_approved_urls_reject_ports_userinfo_and_plain_http() -> None:
