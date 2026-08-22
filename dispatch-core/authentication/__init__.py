@@ -925,15 +925,25 @@ class AuthenticationManager:
             _realm(realm_id)
         configured = self._store.configured_accounts()
         selected = [value for value in DEFAULT_AUTH_REALMS if realm_id is None or value.id == realm_id]
+        selected_ids = {value.id for value in selected}
+        any_configured = any(realm in selected_ids for (realm, _alias) in configured)
         return {
             "backend": "ready",
-            "configured": any((value.id, account_alias) in configured for value in selected),
+            # True when the selected realms hold ANY enrolled account, so a
+            # vault holding only named-profile records (alias = profile slug)
+            # still reports as configured. The per-realm list below stays
+            # pinned to the explicitly requested alias.
+            "configured": any((value.id, account_alias) in configured for value in selected) or any_configured,
             "account_alias": account_alias,
             "realms": [
                 {
                     "id": value.id,
                     "landing_url": value.landing_url,
-                    "status": "configured" if (value.id, account_alias) in configured else "not_enrolled",
+                    "status": "configured" if (value.id, account_alias) in configured else (
+                        "configured_named_only"
+                        if any(realm == value.id for (realm, _alias) in configured)
+                        else "not_enrolled"
+                    ),
                 }
                 for value in selected
             ],
