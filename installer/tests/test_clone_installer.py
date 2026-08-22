@@ -4583,3 +4583,118 @@ def test_rollback_plugin_restore_failure_is_reported_distinctly(
     # Every earlier rollback step still ran: the prior generation itself is
     # restored; only the plugin restart failed.
     assert ("systemctl", "--user", "daemon-reload") in commands
+
+
+def _two_active_plugin_services(layout) -> dict[str, dict[str, bool]]:
+    ensure_private_directory(layout.service_directory, "service directory")
+    prepare_plugin_service(layout, "alpha")
+    prepare_plugin_service(layout, "beta")
+    return {
+        "alpha": {"active": True, "enabled": True},
+        "beta": {"active": True, "enabled": True},
+    }
+
+
+def _service_state_run(states, commands, fail_starts_for: frozenset[str] | set[str] = frozenset()):
+    def plugin_id_of(values: tuple[str, ...]) -> str:
+        service = values[-1]
+        return service.removeprefix("dispatch-plugin-").removesuffix(".service")
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        plugin_id = plugin_id_of(values)
+        if values[:3] == ("systemctl", "--user", "is-active"):
+            return completed(returncode=0 if states.get(plugin_id, {}).get("active") else 1)
+        if values[:3] == ("systemctl", "--user", "is-enabled"):
+            return completed(returncode=0 if states.get(plugin_id, {}).get("enabled") else 1)
+        if values[:3] == ("systemctl", "--user", "stop") and plugin_id in states:
+            states[plugin_id]["active"] = False
+            if plugin_id == "beta":
+                return completed(returncode=1)  # beta refuses to stop
+        if values[:3] == ("systemctl", "--user", "enable") and plugin_id in states:
+            states[plugin_id]["enabled"] = True
+        if values[:3] == ("systemctl", "--user", "start") and plugin_id in states:
+            if plugin_id in fail_starts_for:
+                raise InstallerError("plugin_service_unsafe", f"{plugin_id} unit could not be restored safely")
+            states[plugin_id]["active"] = True
+        return completed()
+
+    return fake_run
+
+
+def test_stop_rollback_restores_every_id_even_after_one_restore_fails(
+    tmp_path: Path,
+) -> None:
+    # Audit M-3: when a stop fails mid-sweep, the internal restore used to be
+    # all-or-nothing — the first failing id abandoned the remaining ids,
+    # leaving services down that could have been restarted.
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    states = _two_active_plugin_services(layout)
+    commands: list[tuple[str, ...]] = []
+    fake_run = _service_state_run(states, commands, fail_starts_for={"alpha"})
+
+    with pytest.raises(InstallerError) as error:
+        stop_plugin_services_for_activation(layout, ["alpha", "beta"], run=fake_run)
+
+    assert error.value.code == "plugin_service_rollback_failed"
+    starts = [values[-1] for values in commands if values[:3] == ("systemctl", "--user", "start")]
+    assert "dispatch-plugin-alpha.service" in starts
+    assert "dispatch-plugin-beta.service" in starts
+
+
+def test_stop_rollback_failure_keeps_the_primary_stop_error_as_cause(
+    tmp_path: Path,
+) -> None:
+    # Audit M-3: the wrapped rollback error used to REPLACE the original
+    # stop failure entirely, hiding why activation aborted. The generic code
+    # remains, but the root cause rides along as __cause__.
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    states = _two_active_plugin_services(layout)
+    commands: list[tuple[str, ...]] = []
+    fake_run = _service_state_run(states, commands, fail_starts_for={"alpha"})
+
+    with pytest.raises(InstallerError) as error:
+        stop_plugin_services_for_activation(layout, ["alpha", "beta"], run=fake_run)
+
+    assert error.value.code == "plugin_service_rollback_failed"
+    cause = error.value.__cause__
+    assert isinstance(cause, InstallerError)
+    assert cause.code == "plugin_service_stop_failed"
+
+
+def test_interrupted_stop_stays_an_interrupt_even_when_restore_fails(
+    tmp_path: Path,
+) -> None:
+    # An abort must surface as an abort: a Ctrl-C during the stop sweep used
+    # to be swallowed into plugin_service_rollback_failed whenever the
+    # cleanup restore also struggled.
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    states = _two_active_plugin_services(layout)
+    commands: list[tuple[str, ...]] = []
+
+    def plugin_id_of(values: tuple[str, ...]) -> str:
+        service = values[-1]
+        return service.removeprefix("dispatch-plugin-").removesuffix(".service")
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        plugin_id = plugin_id_of(values)
+        if values[:3] == ("systemctl", "--user", "is-active"):
+            return completed(returncode=0 if states.get(plugin_id, {}).get("active") else 1)
+        if values[:3] == ("systemctl", "--user", "is-enabled"):
+            return completed(returncode=0 if states.get(plugin_id, {}).get("enabled") else 1)
+        if values[:3] == ("systemctl", "--user", "stop") and plugin_id in states:
+            states[plugin_id]["active"] = False
+            if plugin_id == "beta":
+                raise KeyboardInterrupt("operator aborted during stop sweep")
+        if values[:3] == ("systemctl", "--user", "start") and plugin_id == "alpha":
+            raise OSError("restore effort failed too")
+        return completed()
+
+    with pytest.raises(KeyboardInterrupt):
+        stop_plugin_services_for_activation(layout, ["alpha", "beta"], run=fake_run)
