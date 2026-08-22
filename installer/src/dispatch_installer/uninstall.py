@@ -667,8 +667,24 @@ def uninstall(
             if "launcher" in selection and (layout.command_path.exists() or layout.command_path.is_symlink()):
                 remove_user_command(layout)
 
+            keyring_removed = False
             if mode_label == COMPLETE_MODE:
                 targets = [*_selected_external_roots(layout, selection), layout.dispatch_home]
+                # A purge that leaves the OS-keyring-resident vault key
+                # behind orphans secret material outside DISPATCH_HOME
+                # (audit hygiene pairing with M-2/F19). Best-effort: a
+                # headless host without a reachable Secret Service has no
+                # key to delete, and uninstall must not fail over cleanup
+                # of an item it may have never written.
+                try:
+                    import importlib
+
+                    keyring_store = importlib.import_module("authentication.keyring")
+                    if keyring_store.available():
+                        keyring_store.delete()
+                        keyring_removed = True
+                except Exception:
+                    keyring_removed = False
             else:
                 targets = []
                 if "code" in selection:
@@ -715,7 +731,11 @@ def uninstall(
                     "selection": sorted(selection),
                     "remove": sorted(str(path) for path in [*removed, *external_removed]),
                     "preserve": [],
-                    "notes": [],
+                    "notes": [
+                        "OS keyring vault key removed"
+                        if keyring_removed
+                        else "OS keyring vault key not found (or keyring unreachable); nothing to remove"
+                    ],
                     "system_dependencies": "preserved-shared",
                     "hermes": "untouched",
                     "blockers": [],

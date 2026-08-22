@@ -4698,3 +4698,120 @@ def test_interrupted_stop_stays_an_interrupt_even_when_restore_fails(
 
     with pytest.raises(KeyboardInterrupt):
         stop_plugin_services_for_activation(layout, ["alpha", "beta"], run=fake_run)
+
+
+def _seed_authoritative_install(layout) -> None:
+    """Minimal git-backed installation that passes uninstall provenance."""
+    layout.prepare()
+    layout.clone.mkdir()
+    subprocess.run(("git", "init", "-q", "-b", DEVELOPMENT_BRANCH, str(layout.clone)), check=True)
+    subprocess.run(("git", "-C", str(layout.clone), "remote", "add", "origin", REPOSITORY_URL), check=True)
+    subprocess.run(("git", "-C", str(layout.clone), "config", "user.email", "tests@example.invalid"), check=True)
+    subprocess.run(("git", "-C", str(layout.clone), "config", "user.name", "Dispatch Tests"), check=True)
+    (layout.clone / "managed.txt").write_text("managed")
+    subprocess.run(("git", "-C", str(layout.clone), "add", "managed.txt"), check=True)
+    subprocess.run(("git", "-C", str(layout.clone), "commit", "-q", "-m", "managed"), check=True)
+    commit = subprocess.run(
+        ("git", "-C", str(layout.clone), "rev-parse", "HEAD"),
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    subprocess.run(
+        ("git", "-C", str(layout.clone), "update-ref", f"refs/remotes/origin/{DEVELOPMENT_BRANCH}", commit),
+        check=True,
+    )
+    subprocess.run(
+        ("git", "-C", str(layout.clone), "config", f"branch.{DEVELOPMENT_BRANCH}.remote", "origin"),
+        check=True,
+    )
+    subprocess.run(
+        (
+            "git", "-C", str(layout.clone), "config",
+            f"branch.{DEVELOPMENT_BRANCH}.merge", f"refs/heads/{DEVELOPMENT_BRANCH}",
+        ),
+        check=True,
+    )
+    (layout.venv / "bin").mkdir(parents=True)
+    (layout.venv_python).write_text("python")
+    atomic_json(
+        layout.installation_record,
+        {
+            "schema_version": 1,
+            "repository": REPOSITORY_URL,
+            "channel": "dev",
+            "ref": DEVELOPMENT_BRANCH,
+            "commit": commit,
+            "checkout": str(layout.clone),
+            "venv": str(layout.venv),
+            "paths": layout.as_dict(),
+            "updated_at": "2026-08-16T00:00:00Z",
+            "contains_secrets": False,
+        },
+    )
+
+
+def test_purge_removes_os_keyring_vault_key_and_reports_it(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Audit hygiene (pairs with M-2/F19): --purge used to wipe DISPATCH_HOME
+    # while an OS-keyring-resident vault key survived outside it — orphaned
+    # secret material with no owner. Purge now deletes the key best-effort
+    # and says what happened in the receipt notes.
+    import sys
+    import types
+
+    deleted: list[bool] = []
+
+    class FakeKeyringStore:
+        @staticmethod
+        def available() -> bool:
+            return True
+
+        @staticmethod
+        def delete() -> None:
+            deleted.append(True)
+
+    fake_module = types.ModuleType("authentication.keyring")
+    fake_module.available = FakeKeyringStore.available  # type: ignore[attr-defined]
+    fake_module.delete = FakeKeyringStore.delete  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "authentication.keyring", fake_module)
+
+    layout = make_layout(tmp_path)
+    _seed_authoritative_install(layout)
+    result = uninstall(layout, purge=True, verify_authority=lambda _record: True)
+
+    assert result["status"] == "purged"
+    assert deleted == [True]
+    notes = result["notes"]
+    assert isinstance(notes, list)
+    assert any("keyring vault key removed" in str(note) for note in notes)
+
+
+def test_purge_without_keyring_still_succeeds_with_note(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # Headless host, no reachable Secret Service: nothing to delete and
+    # uninstall must not fail over it — but the receipt must say so.
+    import sys
+    import types
+
+    class UnavailableKeyring:
+        @staticmethod
+        def available() -> bool:
+            return False
+
+    fake_module = types.ModuleType("authentication.keyring")
+    fake_module.available = UnavailableKeyring.available  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "authentication.keyring", fake_module)
+
+    layout = make_layout(tmp_path)
+    _seed_authoritative_install(layout)
+    result = uninstall(layout, purge=True, verify_authority=lambda _record: True)
+
+    assert result["status"] == "purged"
+    notes = result["notes"]
+    assert isinstance(notes, list)
+    assert any("nothing to remove" in str(note) for note in notes)
