@@ -263,10 +263,34 @@ def ensure_venv(
         raise InstallerError("requirements_missing", "Core source directory is missing or unsafe") from exc
     if core.is_symlink() or not core.is_dir() or not core_resolved.is_relative_to(clone_resolved):
         raise InstallerError("requirements_missing", "Core source directory is missing or unsafe")
+    lock = core / "requirements.lock"
+    if lock.is_symlink():
+        raise InstallerError("dependency_lock_unsafe", "Core dependency lockfile is unsafe")
     assert_source_project_safe(core)
     requirements = core / "requirements.txt"
     if not requirements.is_file() or requirements.is_symlink():
         raise InstallerError("requirements_missing", "Core runtime requirements are missing")
+    if lock.is_file():
+        _checked(
+            private_run,
+            (
+                str(python),
+                "-m",
+                "pip",
+                "install",
+                "--disable-pip-version-check",
+                "--require-hashes",
+                "--only-binary",
+                ":all:",
+                "--index-url",
+                "https://pypi.org/simple",
+                "-r",
+                str(lock),
+            ),
+            None,
+            "core_dependencies_failed",
+            "Core dependency verification failed; the downloaded artifacts did not match the reviewed lockfile",
+        )
     _checked(
         private_run,
         (

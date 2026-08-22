@@ -44,6 +44,15 @@ jobs:
       - name: Verify source safety
         run: python -B scripts/verify-source-export . --json
 
+      - name: Check dependency lockfile freshness
+        run: |
+          python -m pip install -q uv
+          python -B scripts/update-dependency-lock
+          git diff --exit-code -- dispatch-core/requirements.lock || {
+            echo "::error::dispatch-core/requirements.lock is stale. Run scripts/update-dependency-lock and commit the result."
+            exit 1
+          }
+
       - name: Install test dependencies and editable components
         run: |
           python -m pip install -r dispatch-core/requirements-dev.txt
