@@ -832,6 +832,44 @@ class AuthenticationManager:
             "status": "removed" if removed else "not_enrolled",
         }
 
+    def select_plugin_profile(self, profile: str, plugin_id: str, provider: str) -> dict[str, Any]:
+        """Bind an enrolled profile to a plugin (one profile per plugin)."""
+
+        _require_slug(profile, "profile")
+        self._require_plugin_provider(plugin_id, provider)
+        updated = self._store.select_profile_for_plugin(profile, plugin_id, _provider(provider).id)
+        return self._public_profile(profile, updated)
+
+    def clear_plugin_profile(self, plugin_id: str) -> dict[str, Any]:
+        """Release a plugin's profile binding so its profile can be removed."""
+
+        _require_slug(plugin_id, "plugin_id")
+        with self._store._locked():
+            vault = self._store._load()
+            registry = self._store._reconciled_profiles(vault, self._store._load_profiles())
+            released = None
+            now = _utc_now()
+            for record in registry["profiles"].values():
+                if plugin_id in record["bindings"]:
+                    record["bindings"] = [value for value in record["bindings"] if value != plugin_id]
+                    record["updated_at"] = now
+                    if released is None:
+                        released = dict(record)
+                        released.pop("bindings", None)
+            if released is None:
+                raise AuthenticationError(
+                    "profile_not_selected",
+                    f"plugin {plugin_id} has no selected authentication profile",
+                )
+            self._store.write_profile_payload(registry)
+        return {
+            "profile": None,
+            "type": None,
+            "type_name": None,
+            "status": "released",
+            "released": released,
+        }
+
     def for_plugin(self, plugin_id: str, provider: str, profile: str) -> "PluginAuthenticationBroker":
         self._require_plugin_provider(plugin_id, provider)
         provider = _provider(provider).id

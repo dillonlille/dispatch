@@ -95,6 +95,18 @@ def parser(*, prog: str = "dispatch-core") -> argparse.ArgumentParser:
     auth_remove.add_argument("--account", default="default")
     auth_remove.add_argument("--realm")
     auth_remove.add_argument("--yes", action="store_true", help="confirm credential removal")
+    auth_select = auth_actions.add_parser(
+        "select",
+        help="select an enrolled authentication profile for a plugin",
+    )
+    auth_select.add_argument("profile")
+    auth_select.add_argument("--plugin", required=True, help="built-in plugin ID")
+    auth_select.add_argument("--provider", help="override the profile type derived from the profile")
+    auth_deselect = auth_actions.add_parser(
+        "deselect",
+        help="release a plugin's selected authentication profile",
+    )
+    auth_deselect.add_argument("--plugin", required=True, help="built-in plugin ID")
 
     collection = subcommands.add_parser("collection", help="operate the durable Collection Manager worker")
     collection_actions = collection.add_subparsers(dest="collection_action", required=True)
@@ -192,8 +204,21 @@ def _auth_result(args: argparse.Namespace, *, interactive: bool) -> dict[str, An
                 policy = authentication.provider(provider)
             values = {name: getpass.getpass(f"{name}: ") for name in policy.credential_fields}
             data = authentication.enroll_profile(profile, policy.id, values)
-        elif args.auth_action == "status":  # pragma: no cover - handled above
-            raise AuthenticationError("invalid_auth_request", "unsupported authentication action")
+        elif args.auth_action == "select":
+            # Provider is derived from the profile's own enrollment unless the
+            # operator overrides it; the store re-validates compatibility.
+            provider = args.provider
+            if provider is None:
+                record = authentication.profile_status(args.profile)
+                if record["type"] == "unavailable":
+                    raise AuthenticationError(
+                        "unknown_auth_provider",
+                        "authentication profile type is not installed",
+                    )
+                provider = record["type"]
+            data = authentication.select_plugin_profile(args.profile, args.plugin, provider)
+        elif args.auth_action == "deselect":
+            data = authentication.clear_plugin_profile(args.plugin)
         elif args.auth_action == "enroll":
             if not interactive:
                 raise AuthenticationError(
