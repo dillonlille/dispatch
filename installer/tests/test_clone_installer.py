@@ -4316,6 +4316,9 @@ def test_verify_staged_core_gate_runs_non_mutating_help_from_staged_venv(tmp_pat
     core.mkdir(parents=True)
     (core / "__main__.py").write_text("", encoding="utf-8")
     python = tmp_path / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("python", encoding="utf-8")
+    python.chmod(0o700)
     work = tmp_path / "work"
     work.mkdir()
     calls: list[tuple[str, ...]] = []
@@ -4337,14 +4340,16 @@ def test_verify_staged_core_gate_maps_failure_to_core_help_gate_failed(tmp_path:
     core = tmp_path / "clone" / "dispatch-core"
     core.mkdir(parents=True)
     (core / "__main__.py").write_text("", encoding="utf-8")
+    python = tmp_path / "venv" / "bin" / "python"
+    python.parent.mkdir(parents=True)
+    python.write_text("python", encoding="utf-8")
+    python.chmod(0o700)
 
     def run(command, cwd=None):
         return completed(returncode=1, stdout="boom from staged core")
 
     with pytest.raises(InstallerError) as error:
-        lifecycle_runtime._verify_staged_core(
-            tmp_path / "venv" / "bin" / "python", core, tmp_path / "work", run=run
-        )
+        lifecycle_runtime._verify_staged_core(python, core, tmp_path / "work", run=run)
     assert error.value.code == "core_help_gate_failed"
     assert "boom from staged core" in str(error.value)
 
@@ -4374,4 +4379,70 @@ def test_verify_staged_core_gate_fails_closed_on_broken_real_stub_core(tmp_path:
 
     with pytest.raises(InstallerError) as error:
         lifecycle_runtime._verify_staged_core(Path(sys.executable), core, work, run=lifecycle_runtime.run_command)
+    assert error.value.code == "core_help_gate_failed"
+
+
+def test_build_replacement_venv_passes_interpreter_not_venv_root_to_help_gate(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Regression: the help gate received the venv DIRECTORY as ``python``.
+
+    The staged gate exec'd ``…/venv`` itself (Permission denied) instead of
+    ``…/venv/bin/python``, failing every update with core_help_gate_failed.
+    Unit stubs of ``run`` never exec'd anything, so only an argument-level
+    assertion catches this.
+    """
+    from types import SimpleNamespace
+
+    layout = make_layout(tmp_path)
+    layout.prepare()
+
+    def fake_ensure_venv(_layout, *, destination, browser_cache, browser_results, run):
+        python = destination / "bin" / "python"
+        python.parent.mkdir(parents=True)
+        python.write_text("python", encoding="utf-8")
+        python.chmod(0o700)
+        browser_results.append(
+            SimpleNamespace(
+                status="installed",
+                replacement_required=True,
+                safe_data=lambda: {"status": "installed"},
+            )
+        )
+
+    captured: dict[str, object] = {}
+
+    def fake_gate(python, code_root, work, *, run):
+        captured["python"] = python
+        captured["code_root"] = code_root
+        captured["exists"] = Path(python).is_file()
+
+    monkeypatch.setattr(lifecycle_runtime, "ensure_venv", fake_ensure_venv)
+    monkeypatch.setattr(lifecycle_runtime, "_verify_staged_core", fake_gate)
+
+    replacement, _staged, work, _browser = lifecycle_runtime._build_replacement_venv(
+        layout,
+        run=lambda *_args, **_kwargs: completed(),
+    )
+
+    assert captured["python"] == replacement / "bin" / "python"
+    assert captured["exists"] is True
+    assert captured["code_root"] == layout.clone / "dispatch-core"
+    shutil.rmtree(work, ignore_errors=True)
+
+
+def test_verify_staged_core_gate_fails_closed_on_missing_interpreter(tmp_path: Path) -> None:
+    """A non-executable ``python`` argument is rejected before spawning env."""
+    core = tmp_path / "clone" / "dispatch-core"
+    core.mkdir(parents=True)
+    (core / "__main__.py").write_text("", encoding="utf-8")
+    work = tmp_path / "work"
+    work.mkdir(mode=0o700)
+
+    def run(command, cwd=None):
+        raise AssertionError(("gate must not spawn with a missing interpreter", command))
+
+    with pytest.raises(InstallerError) as error:
+        lifecycle_runtime._verify_staged_core(tmp_path / "venv", core, work, run=run)
     assert error.value.code == "core_help_gate_failed"
