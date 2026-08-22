@@ -356,3 +356,162 @@ def test_reuse_picker_still_accepts_valid_row_numbers(monkeypatch, tmp_path: Pat
         }
     ]
     assert manager.bound == [("amazon-alt", "companion-bridge", "amazon-operations")]
+
+
+def _patch_raw_config(monkeypatch, manager, plugins_config) -> None:
+    monkeypatch.setattr(setup_runtime, "load_plugin_config", lambda _layout: {"plugins": plugins_config})
+    monkeypatch.setattr(setup_runtime, "_auth_manager_for_layout", lambda _layout: manager)
+
+
+def test_malformed_required_profiles_become_pending_not_silence(monkeypatch, tmp_path: Path) -> None:
+    # Audit L-2: a SELECTED plugin whose manifest entry is malformed used to
+    # vanish silently — zero prompts, zero pendings — failing only later
+    # behind a generic service-enable error. It must surface as a pending.
+    manager = FakeAuthentication()
+    _patch_raw_config(
+        monkeypatch,
+        manager,
+        [{"id": "companion-bridge", "required_profiles": "amazon-operations"}],
+    )
+
+    configured, pending = setup_runtime._setup_auth_profiles(tmp_path, ["companion-bridge"], human=False)  # type: ignore[arg-type]
+
+    assert configured == []
+    assert len(pending) == 1
+    assert pending[0]["plugin"] == "companion-bridge"
+    assert "fix required_profiles" in pending[0]["action"]
+    assert manager.enrolled == []
+
+
+def test_malformed_provider_entry_is_reported_alongside_valid_ones(monkeypatch, tmp_path: Path) -> None:
+    # Audit L-2: one garbage entry inside required_profiles used to be
+    # skipped without a trace while the valid ones proceeded.
+    manager = FakeAuthentication()
+    _patch_raw_config(
+        monkeypatch,
+        manager,
+        [
+            {
+                "id": "companion-bridge",
+                "required_profiles": [{"provider": "amazon-operations"}, "garbage-entry"],
+            }
+        ],
+    )
+
+    configured, pending = setup_runtime._setup_auth_profiles(tmp_path, ["companion-bridge"], human=False)  # type: ignore[arg-type]
+
+    # The valid requirement still flows into the headless bind attempt
+    # (FakeAuthentication has no binding -> pending), plus one explicit
+    # malformed-entry pending.
+    actions = [item["action"] for item in pending]
+    assert any("fix the provider entry" in action for action in actions)
+    assert any("run dispatch setup interactively" in action for action in actions)
+
+
+class PickyProviderAuthentication(FakeAuthentication):
+    """Resolves only amazon-operations; anything else is an unknown realm."""
+
+    def provider(self, value):
+        if value != "amazon-operations":
+            raise RuntimeError("unknown_auth_realm")
+        return provider_policy(value)
+
+
+def test_unknown_provider_degrades_to_pending_and_valid_plugins_still_enroll(
+    monkeypatch,
+    tmp_path: Path,
+) -> None:
+    # Audit L-3: one plugin declaring an unknown provider used to kill the
+    # ENTIRE auth stage after installs were committed, so perfectly good
+    # plugins never reached enrollment. Now the broken one degrades to a
+    # pending and the healthy one enrolls normally.
+    manager = PickyProviderAuthentication()
+    _patch_raw_config(
+        monkeypatch,
+        manager,
+        [
+            {"id": "broken-bridge", "required_profiles": [{"provider": "ghost-realm"}]},
+            {"id": "companion-bridge", "required_profiles": [{"provider": "amazon-operations"}]},
+        ],
+    )
+    answers = iter(["amazon-work"])
+    secrets = iter(["synthetic-user", "synthetic-password"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: next(secrets))
+
+    configured, pending = setup_runtime._setup_auth_profiles(
+        tmp_path, ["broken-bridge", "companion-bridge"], human=True  # type: ignore[arg-type]
+    )
+
+    assert [item["plugin"] for item in configured] == ["companion-bridge"]
+    assert manager.enrolled == [
+        (
+            "amazon-work",
+            "amazon-operations",
+            {"username": "synthetic-user", "password": "synthetic-password"},
+            "companion-bridge",
+        )
+    ]
+    assert len(pending) == 1
+    assert pending[0]["plugin"] == "broken-bridge"
+    assert "dispatch setup again" in pending[0]["action"]
+
+
+def test_empty_credential_values_reprompt_instead_of_failing_late(
+    monkeypatch,
+    tmp_path: Path,
+    capsys,
+) -> None:
+    # Audit L-7: empty values used to pass the prompt loop and only blow up
+    # in enroll_profile AFTER every prompt completed, forcing a full re-run.
+    manager = FakeAuthentication()
+    patch_required_plugin(monkeypatch, manager)
+    answers = iter(["amazon-work"])
+    secrets = iter(["", "synthetic-user", "", "synthetic-password"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: next(secrets))
+
+    configured, pending = setup_runtime._setup_auth_profiles(tmp_path, ["companion-bridge"], human=True)  # type: ignore[arg-type]
+
+    assert pending == []
+    assert configured[0]["profile"] == "amazon-work"
+    assert manager.enrolled == [
+        (
+            "amazon-work",
+            "amazon-operations",
+            {"username": "synthetic-user", "password": "synthetic-password"},
+            "companion-bridge",
+        )
+    ]
+    assert "is required" in capsys.readouterr().err
+
+
+def test_keyring_downgrade_notice_shown_only_when_unavailable(monkeypatch, tmp_path: Path, capsys) -> None:
+    # Audit L-6: enrollment on a host whose OS keyring is unreachable must
+    # SAY SO before collecting credentials, instead of silently downgrading
+    # to a disk-backed vault key.
+    import sys
+    import types
+
+    manager = FakeAuthentication()
+    patch_required_plugin(monkeypatch, manager)
+    answers = iter(["amazon-work"])
+    secrets = iter(["synthetic-user", "synthetic-password"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: next(secrets))
+
+    unavailable = types.ModuleType("authentication.keyring")
+    unavailable.available = lambda: False  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "authentication.keyring", unavailable)
+    setup_runtime._setup_auth_profiles(tmp_path, ["companion-bridge"], human=True)  # type: ignore[arg-type]
+    assert "No OS keyring available" in capsys.readouterr().out
+
+    available = types.ModuleType("authentication.keyring")
+    available.available = lambda: True  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "authentication.keyring", available)
+    answers = iter(["amazon-work-2"])
+    secrets = iter(["synthetic-user", "synthetic-password"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: next(secrets))
+    setup_runtime._setup_auth_profiles(tmp_path, ["companion-bridge"], human=True)  # type: ignore[arg-type]
+    assert "No OS keyring available" not in capsys.readouterr().out

@@ -1004,24 +1004,43 @@ def _auth_manager_for_layout(layout: InstallLayout):
 def _setup_auth_profiles(layout: InstallLayout, selected: Sequence[str], *, human: bool) -> tuple[list[dict[str, object]], list[dict[str, str]]]:
     config = load_plugin_config(layout)
     requirements: list[tuple[str, str]] = []
+    malformed: list[dict[str, str]] = []
     configured_plugins = config.get("plugins", [])
     if not isinstance(configured_plugins, list):
         return [], [{"plugin": "unknown", "provider": "unknown", "action": "run dispatch setup again"}]
     for plugin in configured_plugins:
         if not isinstance(plugin, dict) or plugin.get("id") not in selected:
             continue
-        required = plugin.get("required_profiles", [])
-        if isinstance(required, list):
-            for item in required:
-                if isinstance(item, dict) and isinstance(item.get("provider"), str):
-                    requirements.append((str(plugin["id"]), str(item["provider"])))
+        # A SELECTED plugin whose manifest entry is malformed must not
+        # vanish silently: that used to produce zero prompts and zero
+        # pendings, failing only later with a generic service-enable error
+        # (audit L-2). Surface it as a pending requirement instead.
+        required = plugin.get("required_profiles")
+        if not isinstance(required, list):
+            malformed.append(
+                {
+                    "plugin": str(plugin["id"]),
+                    "action": "fix required_profiles in plugins.json (must be a list of {provider: ...}), then run dispatch setup again",
+                }
+            )
+            continue
+        for item in required:
+            if isinstance(item, dict) and isinstance(item.get("provider"), str):
+                requirements.append((str(plugin["id"]), str(item["provider"])))
+            else:
+                malformed.append(
+                    {
+                        "plugin": str(plugin["id"]),
+                        "action": "fix the provider entry under required_profiles in plugins.json, then run dispatch setup again",
+                    }
+                )
     try:
         authentication = _auth_manager_for_layout(layout)
         authentication.retain_plugin_bindings(set(selected))
     except (InstallerError, OSError, ValueError, RuntimeError) as exc:
         if isinstance(exc, InstallerError):
             raise
-        return [], [
+        return [], malformed + [
             {
                 "plugin": plugin_id,
                 "action": "run dispatch setup interactively to create or select a profile",
@@ -1029,11 +1048,31 @@ def _setup_auth_profiles(layout: InstallLayout, selected: Sequence[str], *, huma
             for plugin_id, provider in requirements
         ]
     if not requirements:
-        return [], []
+        return [], malformed
 
     configured: list[dict[str, object]] = []
-    pending: list[dict[str, str]] = []
+    pending: list[dict[str, str]] = list(malformed)
     from getpass import getpass
+
+    # Enrollment-time keyring transparency (audit L-6): on hosts without a
+    # reachable OS keyring, vault keys silently live in a 0600 disk file.
+    # That is a documented trust-model downgrade, so say so BEFORE the user
+    # starts typing credentials, not only in post-hoc health output.
+    if human and requirements:
+        try:
+            import importlib as _importlib
+
+            keyring_ok = bool(_importlib.import_module("authentication.keyring").available())
+        except Exception:
+            keyring_ok = False
+        if not keyring_ok:
+            print(
+                ui.status_line(
+                    "warn",
+                    "No OS keyring available",
+                    "vault keys will be stored in a private file on disk (see SECURITY.md)",
+                )
+            )
 
     for plugin_id, provider in requirements:
         if not human:
@@ -1050,8 +1089,20 @@ def _setup_auth_profiles(layout: InstallLayout, selected: Sequence[str], *, huma
                 )
             continue
 
-        policy = authentication.provider(provider)
-        compatible = authentication.compatible_profiles(provider)
+        # Per-plugin isolation (audit L-3): one plugin naming an unknown or
+        # broken provider must degrade to a pending requirement instead of
+        # aborting the whole auth stage after installs were already committed.
+        try:
+            policy = authentication.provider(provider)
+            compatible = authentication.compatible_profiles(provider)
+        except (InstallerError, OSError, ValueError, RuntimeError) as exc:
+            pending.append(
+                {
+                    "plugin": plugin_id,
+                    "action": f"{getattr(exc, 'code', 'authentication_provider_unavailable')}: run dispatch setup again to enroll this plugin's profile",
+                }
+            )
+            continue
         profile: str | None = None
         if compatible:
             print(f"{policy.display_name} profile for {plugin_id}:")
@@ -1090,7 +1141,17 @@ def _setup_auth_profiles(layout: InstallLayout, selected: Sequence[str], *, huma
                     print(f"A profile named {profile} already exists; choose another name.", file=sys.stderr)
                     continue
                 break
-            values = {name: getpass(f"{name}: ") for name in policy.credential_fields}
+            # Re-prompt on empty/invalid values instead of failing after all
+            # prompts completed (audit L-7). Mirrors Core's enrollment rule:
+            # non-empty string, at most 4096 chars, no NUL.
+            values: dict[str, str] = {}
+            for name in policy.credential_fields:
+                while True:
+                    value = getpass(f"{name}: ")
+                    if value and len(value) <= 4096 and "\x00" not in value:
+                        values[name] = value
+                        break
+                    print(f"{name} is required (max 4096 characters); try again.", file=sys.stderr)
             try:
                 authentication.enroll_profile(profile, provider, values, plugin_id=plugin_id)
             except Exception as exc:
