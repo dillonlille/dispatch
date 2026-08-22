@@ -4,7 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 from pathlib import Path
-from typing import NoReturn
+from typing import NoReturn, cast
 
 from .doctor import inspect_installation
 from .layout import InstallLayout, InstallerError, installation_lock, read_installation
@@ -63,15 +63,114 @@ def _parser() -> argparse.ArgumentParser:
     plugin_service = actions.add_parser("plugin-service", help="operate an exactly generated plugin service")
     plugin_service.add_argument("operation", choices=("status", "enable", "disable"))
     plugin_service.add_argument("plugin_id")
-    remove = actions.add_parser("uninstall", help="remove Dispatch user files")
-    remove.add_argument("--plan", action="store_true")
-    remove.add_argument("--purge", action="store_true")
-    remove.add_argument("--yes", action="store_true")
+    remove = actions.add_parser("uninstall", help="remove Dispatch files by mode or category")
+    remove.add_argument("--plan", action="store_true", help="print the removal plan without mutating")
+    remove.add_argument("--mode", choices=("standard", "complete", "custom"), help="standard keeps durable data; complete removes everything; custom selects categories")
+    remove.add_argument("--with", dest="with_category", action="append", metavar="CATEGORY", help="custom mode: remove exactly this category (repeatable)")
+    remove.add_argument("--without", action="append", metavar="CATEGORY", help="preset modes: keep this category (repeatable)")
+    remove.add_argument("--delete-secrets", action="store_true", help="confirm removing the secrets category in custom mode")
+    remove.add_argument("--purge", action="store_true", help="historical alias for --mode complete")
+    remove.add_argument("--yes", action="store_true", help="confirm uninstall without prompting")
     return parser
 
 
 def _emit(ok: bool, action: str, status: str, data: object, error: dict[str, str] | None = None) -> None:
     print(json.dumps({"ok": ok, "action": action, "status": status, "data": data, "error": error}, sort_keys=True))
+
+
+def _prompt_uninstall_mode(input_fn=input) -> tuple[str, list[str], list[str]]:
+    """Interactive mode chooser: preset pick or category multi-select."""
+    from .categories import CATEGORY_NAMES, DURABLE_CATEGORIES, dependency_notes
+    from .interactive import multi_select_menu
+    from .ui import select_menu, status_line
+
+    choice = select_menu(
+        "Choose an uninstall mode",
+        [
+            ("standard", "remove code and runtime, keep configuration, data, logs"),
+            ("complete", "remove everything Dispatch created, including data"),
+            ("custom", "choose exactly which categories to remove"),
+        ],
+        recommended="standard",
+        hint="Enter to continue",
+        input_fn=input_fn,
+    )
+    if choice is None:
+        raise InstallerError(
+            "confirmation_required",
+            "interactive selection requires a terminal; pass --mode with --yes instead",
+        )
+    if choice == 0:
+        return ("standard", [], [])
+    if choice == 1:
+        return ("complete", [], [])
+    options = [
+        (
+            name,
+            f"{name}{' (durable)' if name in DURABLE_CATEGORIES else ''}",
+        )
+        for name in sorted(CATEGORY_NAMES)
+    ]
+    indices = multi_select_menu(
+        "Select categories to remove",
+        options,
+        preselected=[],
+        hint="Space toggles, Enter confirms",
+    )
+    if indices is None:
+        raise InstallerError(
+            "confirmation_required",
+            "category selection requires a terminal; pass --with/--without with --yes instead",
+        )
+    include = [options[index][0] for index in indices]
+    if not include:
+        raise InstallerError("uninstall_selection_required", "no categories were selected")
+    for note in dependency_notes(frozenset(include)):
+        print(status_line("warn", note))
+    return ("custom", include, [])
+
+
+def _confirm_delete_secrets(input_fn=input) -> bool:
+    """Typed confirmation for removing the secrets category."""
+    try:
+        answer = input_fn("  Type 'delete secrets' to confirm: ").strip()
+    except EOFError:
+        return False
+    return answer == "delete secrets"
+
+
+def _confirm_interactive_uninstall(
+    layout: InstallLayout,
+    mode: str,
+    include: list[str],
+    exclude: list[str],
+    *,
+    input_fn=input,
+) -> None:
+    """Show the exact plan and require a typed confirmation before mutating."""
+    from .ui import dim, status_line
+
+    result = plan_uninstall(layout, mode=mode, include=include, exclude=exclude)
+    removals = sorted(str(path) for path in cast(list[object], result.get("remove", [])))
+    preserved = sorted(str(path) for path in cast(list[object], result.get("preserve", [])))
+    notes = sorted(str(note) for note in cast(list[object], result.get("notes", [])))
+    print(f"\n  About to remove ({result['mode']}):")
+    for path in removals:
+        print(f"    - {path}")
+    if preserved:
+        print(f"  {dim('Keeping:')}")
+        for path in preserved:
+            print(f"    {dim(f'+ {path}')}")
+    for note in notes:
+        print(status_line("warn", note))
+    for blocker in result["blockers"]:
+        print(status_line("fail", str(blocker)))
+    try:
+        answer = input_fn("  Type 'uninstall' to continue: ").strip()
+    except EOFError:
+        answer = ""
+    if answer != "uninstall":
+        raise InstallerError("confirmation_required", "uninstall was not confirmed")
 
 
 def _lifecycle(layout: InstallLayout, args: argparse.Namespace) -> dict[str, object]:
@@ -196,13 +295,52 @@ def main(argv: list[str] | None = None) -> int:
         if args.action == "uninstall":
             if args.plan and args.yes:
                 raise InstallerError("uninstall_arguments", "--plan and --yes cannot be combined")
+            include: list[str] = list(args.with_category or [])
+            exclude: list[str] = list(args.without or [])
+            mode = args.mode
+            if mode is None:
+                if include or exclude or args.delete_secrets:
+                    raise InstallerError(
+                        "uninstall_arguments",
+                        "--with/--without/--delete-secrets require --mode",
+                    )
+                if args.purge:
+                    mode = "complete"
+            kwargs = {
+                "mode": mode,
+                "include": include,
+                "exclude": exclude,
+                "secrets_confirmed": bool(args.delete_secrets),
+            }
             if args.plan:
-                result = plan_uninstall(layout, purge=args.purge)
+                result = plan_uninstall(layout, **kwargs)
                 _emit(not result["blockers"], "uninstall", str(result["status"]), result)
                 return 0 if not result["blockers"] else 2
             if not args.yes:
-                raise InstallerError("confirmation_required", "uninstall requires --yes or --plan")
-            result = uninstall(layout, purge=args.purge)
+                if mode is None:
+                    mode, include, exclude = _prompt_uninstall_mode()
+                    kwargs = {
+                        "mode": mode,
+                        "include": include,
+                        "exclude": exclude,
+                        "secrets_confirmed": bool(args.delete_secrets),
+                    }
+                    if mode == "custom" and "secrets" in include and not (
+                        args.delete_secrets
+                        or _confirm_delete_secrets(input)
+                    ):
+                        include = [category for category in include if category != "secrets"]
+                        kwargs["include"] = include
+                        kwargs["secrets_confirmed"] = False
+                _confirm_interactive_uninstall(layout, mode, include, exclude, input_fn=input)
+            elif mode == "custom" and "secrets" in include and not args.delete_secrets:
+                raise InstallerError(
+                    "uninstall_secrets_unconfirmed",
+                    "removing secrets requires explicit confirmation (--delete-secrets)",
+                )
+            if not include and mode == "custom":
+                raise InstallerError("uninstall_selection_required", "no categories were selected")
+            result = uninstall(layout, purge=args.purge and mode is None, **kwargs)
             _emit(True, "uninstall", str(result["status"]), result)
             return 0
         raise InstallerError("action_unknown", "unknown installer action")

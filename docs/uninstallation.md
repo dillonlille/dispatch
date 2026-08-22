@@ -22,7 +22,26 @@ Explicitly remove the complete Dispatch root, including durable data:
 dispatch uninstall --purge --yes
 ```
 
-The command requires `--plan` or `--yes`; there is no implicit destructive default.
+The command requires `--plan` or `--yes`; there is no implicit destructive default. Without either flag on a terminal, `dispatch uninstall` opens an interactive mode chooser (standard / complete / custom) and requires typed confirmation of the exact plan before mutating.
+
+## Modes
+
+`--mode` selects how much is removed; every invocation resolves to exactly one selection over the same closed category vocabulary:
+
+| Mode | Removes | Keeps |
+| --- | --- | --- |
+| `standard` (default) | code, runtime, services, launcher, cache | config, secrets, data, state, logs |
+| `complete` | everything Dispatch created, including `${DISPATCH_HOME}` itself | nothing |
+| `custom` | exactly the categories selected with `--with`, or everything except `--without` | the rest |
+
+Categories: `code` (clone, installation record), `runtime` (venv, run scratch), `services` (systemd user units and receipts), `launcher` (`~/.local/bin/dispatch`), `cache` (downloads including the managed browser), `logs`, `state`, `data`, `config`, and `secrets`.
+
+- Preset modes accept `--without CATEGORY` refinements only: `dispatch uninstall --mode standard --without cache --yes`.
+- Custom mode accepts either repeated `--with CATEGORY` (remove exactly these) or repeated `--without CATEGORY` (remove everything else), never both: `dispatch uninstall --mode custom --with logs --with data --yes`.
+- Removing `secrets` in custom mode additionally requires `--delete-secrets`.
+- Every plan envelope reports `mode`, `selection`, `remove`, `preserve`, and `notes` explaining partial-install consequences (for example removing code while keeping services).
+
+`--purge` remains a historical alias for `--mode complete`.
 
 ## Ordinary uninstall
 
