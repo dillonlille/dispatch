@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import argparse
 import ast
+import importlib.util
 import json
 import os
 import re
@@ -57,11 +58,70 @@ _PLUGIN_CAPABILITIES = {
     "direct_delivery",
     "long_running",
 }
-_AUTH_PROVIDERS = {"amazon-operations", "paycom-client"}
-_BUILTIN_PLUGIN_PROVIDERS = {
-    "companion-bridge": "amazon-operations",
-    "paycom": "paycom-client",
-}
+
+
+def _core_provider_catalog(clone_root: Path | None = None) -> object:
+    """Load Core's canonical provider policy from the staged clone.
+
+    The provider catalog is owned by ``dispatch-core/provider_catalog.py``.
+    The installer previously kept its own copy of the two id sets, which let
+    the three consumers drift apart. Loading it from the clone that is being
+    validated keeps one authority; the import is bounded to that directory.
+    Candidate roots are tried in priority order: an explicit plugin-parent
+    root, ``DISPATCH_CODE_ROOT``, then this checkout's repository root.
+    """
+
+    candidates: list[Path] = []
+    if clone_root is not None:
+        candidates.append(Path(clone_root))
+    # A validating caller passes a plugin source; its ancestors may host Core.
+    environment_root = os.environ.get("DISPATCH_CODE_ROOT", "")
+    if environment_root:
+        candidates.append(Path(environment_root))
+    candidates.append(Path(__file__).resolve().parents[3])
+    catalog_source: Path | None = None
+    for candidate in candidates:
+        located = Path(candidate) / "dispatch-core" / "provider_catalog.py"
+        if located.is_file() and not located.is_symlink():
+            catalog_source = located.parent
+            break
+    if catalog_source is None:
+        raise InstallerError(
+            "provider_catalog_unavailable",
+            "dispatch-core provider catalog is missing from every candidate root",
+        )
+    spec = importlib.util.spec_from_file_location("_dispatch_provider_catalog_staged", catalog_source / "provider_catalog.py")
+    if spec is None or spec.loader is None:
+        raise InstallerError("provider_catalog_unavailable", "dispatch-core provider catalog cannot be loaded")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules["_dispatch_provider_catalog_staged"] = module
+    try:
+        spec.loader.exec_module(module)
+    except BaseException as exc:  # noqa: BLE001 - fail closed on any catalog defect
+        sys.modules.pop("_dispatch_provider_catalog_staged", None)
+        raise InstallerError("provider_catalog_unavailable", "dispatch-core provider catalog is invalid") from exc
+    return module
+
+
+def _catalog_id_sets(module: object) -> tuple[frozenset[str], dict[str, str]]:
+    providers = getattr(module, "PROVIDERS_BY_ID", None)
+    builtin = getattr(module, "BUILTIN_PLUGIN_PROVIDERS", None)
+    if (
+        not isinstance(providers, dict)
+        or not providers
+        or not all(isinstance(key, str) for key in providers)
+        or not isinstance(builtin, dict)
+        or not all(isinstance(k, str) and isinstance(v, str) for k, v in builtin.items())
+    ):
+        raise InstallerError("provider_catalog_unavailable", "dispatch-core provider catalog is malformed")
+    known = frozenset(str(key) for key in providers)
+    for plugin_id, provider in builtin.items():
+        if provider not in known:
+            raise InstallerError(
+                "provider_catalog_unavailable",
+                f"built-in plugin {plugin_id} requires unknown provider {provider}",
+            )
+    return known, {str(k): str(v) for k, v in builtin.items()}
 
 
 def _run(command: Sequence[str], cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
@@ -380,6 +440,15 @@ def _plugin_project(source: Path, *, expected_id: str | None = None) -> dict[str
     if not isinstance(authentication, dict) or set(authentication) != {"required_profiles"}:
         raise InstallerError("plugin_authentication_invalid", f"plugin authentication metadata is invalid: {plugin_id}")
     required_profiles = authentication["required_profiles"]
+    # Only consult the Core provider catalog when the plugin actually declares
+    # authentication metadata; query-only plugins never need the catalog. The
+    # catalog lives at the plugin's clone root (its second parent).
+    if required_profiles:
+        known_providers, builtin_plugin_providers = _catalog_id_sets(
+            _core_provider_catalog(source.parent.parent)
+        )
+    else:
+        known_providers, builtin_plugin_providers = frozenset(), {}
     if (
         not isinstance(required_profiles, list)
         or len(required_profiles) > 1
@@ -387,14 +456,14 @@ def _plugin_project(source: Path, *, expected_id: str | None = None) -> dict[str
             not isinstance(item, dict)
             or set(item) != {"provider"}
             or not isinstance(item.get("provider"), str)
-            or item["provider"] not in _AUTH_PROVIDERS
+            or item["provider"] not in known_providers
             for item in required_profiles
         )
         or ("authentication" in capabilities and len(required_profiles) != 1)
         or ("authentication" not in capabilities and required_profiles)
         or (
-            plugin_id in _BUILTIN_PLUGIN_PROVIDERS
-            and required_profiles != [{"provider": _BUILTIN_PLUGIN_PROVIDERS[plugin_id]}]
+            plugin_id in builtin_plugin_providers
+            and required_profiles != [{"provider": builtin_plugin_providers[plugin_id]}]
         )
     ):
         raise InstallerError("plugin_authentication_invalid", f"plugin required profile metadata is invalid: {plugin_id}")
