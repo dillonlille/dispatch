@@ -441,20 +441,28 @@ class EncryptedCredentialStore:
         with self._locked():
             vault = self._load()
             registry = self._reconciled_profiles(vault, self._load_profiles())
+            # Existence is enforced here, under the lock, so two concurrent
+            # enrollments can never silently overwrite one another (the
+            # manager-level pre-check alone is advisory).
             existing = registry["profiles"].get(profile)
-            if existing is not None and existing["provider"] != provider:
-                raise AuthenticationError("profile_provider_mismatch", "profile is enrolled for another provider")
+            if existing is not None:
+                raise AuthenticationError("profile_exists", "authentication profile already exists")
+            for record in registry["profiles"].values():
+                if record.get("provider") == provider and record.get("account_alias") == account_alias:
+                    raise AuthenticationError(
+                        "profile_exists",
+                        "credential account is already enrolled as another profile",
+                    )
             accounts = vault["accounts"].setdefault(provider, {})
             accounts[account_alias] = {"updated_at": _utc_now(), "values": dict(values)}
             self._write(vault)
-            prior_bindings = [] if existing is None else list(existing["bindings"])
             registry["profiles"][profile] = {
                 "provider": provider,
                 "account_alias": account_alias,
                 "status": "enrolled",
                 "verification": "unverified",
                 "updated_at": _utc_now(),
-                "bindings": prior_bindings,
+                "bindings": [],
             }
             self.write_profile_payload(registry)
 
@@ -536,9 +544,16 @@ class EncryptedCredentialStore:
             return True, record
 
     def put(self, realm_id: str, account_alias: str, values: Mapping[str, str]) -> None:
+        _realm(realm_id)
+        _require_slug(account_alias, "account_alias")
         with self._locked():
             payload = self._load()
             accounts = payload["accounts"].setdefault(realm_id, {})
+            if account_alias in accounts:
+                raise AuthenticationError(
+                    "profile_exists",
+                    "credential account already exists; create and select a new named profile",
+                )
             accounts[account_alias] = {"updated_at": _utc_now(), "values": dict(values)}
             self._write(payload)
 
@@ -724,9 +739,9 @@ class AuthenticationManager:
                 raise AuthenticationError("invalid_credentials", "a credential value is empty or invalid")
             normalized[name] = value
         existing = self._store.profile_payload().get("profiles", {}).get(profile)
-        if existing is not None and existing["provider"] != provider:
-            raise AuthenticationError("profile_provider_mismatch", "profile is enrolled for another provider")
         if existing is not None:
+            # The store enforces this again under its lock; the early check
+            # just gives the common case a precise error before prompts/IO.
             raise AuthenticationError("profile_exists", "authentication profile already exists")
         account_alias = profile
         self._store.put_profile(profile, provider, account_alias, normalized)
