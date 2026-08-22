@@ -111,25 +111,81 @@ def test_interactive_setup_chains_profile_creation_after_plugin_selection(monkey
     ]
 
 
-def test_interactive_setup_rejects_profile_collision_before_secret_prompts(monkeypatch, tmp_path: Path) -> None:
+def test_interactive_setup_reprompts_on_profile_collision_before_secret_prompts(monkeypatch, tmp_path: Path) -> None:
     layout: Any = tmp_path
     manager = FakeAuthentication(
         profiles=[{"profile": "amazon-work", "type": "amazon", "status": "enrolled"}]
     )
     patch_required_plugin(monkeypatch, manager)
-    monkeypatch.setattr("builtins.input", lambda _prompt: "amazon-work")
-    monkeypatch.setattr(
-        "getpass.getpass",
-        lambda _prompt: (_ for _ in ()).throw(AssertionError("collision must fail before prompting")),
-    )
+    # The taken name is rejected with a re-ask; enrollment proceeds with the
+    # second answer instead of failing the whole setup run.
+    answers = iter(["amazon-work", "amazon-work-alt"])
+    secrets = iter(["synthetic-user", "synthetic-password"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: next(secrets))
 
-    with pytest.raises(setup_runtime.InstallerError) as collision:
-        setup_runtime._setup_auth_profiles(
-            layout,
-            ["companion-bridge"],
-            human=True,
+    configured, pending = setup_runtime._setup_auth_profiles(
+        layout,
+        ["companion-bridge"],
+        human=True,
+    )
+    assert pending == []
+    assert configured[0]["profile"] == "amazon-work-alt"
+    assert manager.enrolled == [
+        (
+            "amazon-work-alt",
+            "amazon-operations",
+            {"username": "synthetic-user", "password": "synthetic-password"},
+            "companion-bridge",
         )
-    assert collision.value.code == "profile_exists"
+    ]
+
+
+def test_interactive_setup_reprompts_on_invalid_profile_name(monkeypatch, tmp_path: Path) -> None:
+    layout: Any = tmp_path
+    manager = FakeAuthentication()
+    patch_required_plugin(monkeypatch, manager)
+    # Uppercase/underscore/space names violate the Dispatch slug rule; the
+    # wizard explains the rule and asks again instead of dying with an
+    # opaque invalid_auth_request error.
+    answers = iter(["Amazon Work!", "amazon_work", "-nope", "amazon-work"])
+    secrets = iter(["synthetic-user", "synthetic-password"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: next(secrets))
+
+    configured, pending = setup_runtime._setup_auth_profiles(layout, ["companion-bridge"], human=True)
+
+    assert pending == []
+    assert configured[0]["profile"] == "amazon-work"
+    assert manager.enrolled[0][0] == "amazon-work"
+
+
+def test_interactive_setup_preserves_enrollment_failure_details(monkeypatch, tmp_path: Path) -> None:
+    layout: Any = tmp_path
+    manager = FakeAuthentication()
+    patch_required_plugin(monkeypatch, manager)
+
+    class _CodedEnrollmentError(RuntimeError):
+        def __init__(self, message: str, code: str) -> None:
+            super().__init__(message)
+            self.code = code
+
+    def fail_enrollment(profile, provider, values, *, plugin_id=None):
+        raise _CodedEnrollmentError(
+            "credential account is already enrolled as another profile",
+            "profile_exists",
+        )
+
+    manager.enroll_profile = fail_enrollment
+    answers = iter(["amazon-work"])
+    secrets = iter(["synthetic-user", "synthetic-password"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+    monkeypatch.setattr("getpass.getpass", lambda _prompt: next(secrets))
+
+    with pytest.raises(setup_runtime.InstallerError) as failure:
+        setup_runtime._setup_auth_profiles(layout, ["companion-bridge"], human=True)
+    assert failure.value.code == "profile_exists"
+    assert "already enrolled as another profile" in str(failure.value)
 
 
 def test_deselection_drops_plugin_bindings_without_prompting(monkeypatch, tmp_path: Path) -> None:

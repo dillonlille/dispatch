@@ -15,6 +15,10 @@ import tomllib
 from collections.abc import Callable, Sequence
 from pathlib import Path
 
+# Dispatch profile-name slug rule, mirrored from Core authentication
+# (_require_slug) so the setup wizard can validate before enrollment.
+_PROFILE_NAME = re.compile(r"^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$")
+
 from . import interactive, ui
 from .layout import (
     InstallLayout,
@@ -1061,19 +1065,29 @@ def _setup_auth_profiles(layout: InstallLayout, selected: Sequence[str], *, huma
                 except (ValueError, IndexError, KeyError) as exc:
                     raise InstallerError("profile_selection_invalid", "authentication profile selection is invalid") from exc
         if profile is None:
-            profile = input(f"New profile name for {plugin_id}: ").strip()
-            if any(item.get("profile") == profile for item in authentication.profiles()):
-                raise InstallerError(
-                    "profile_exists",
-                    "authentication profile already exists; select it instead",
-                )
+            # Validate at the prompt: Dispatch slugs are lowercase
+            # letters/digits/hyphens starting with a letter. Re-ask with a
+            # concrete reason instead of failing the whole setup run.
+            while True:
+                profile = input(f"New profile name for {plugin_id}: ").strip()
+                if len(profile) > 63 or _PROFILE_NAME.fullmatch(profile) is None:
+                    print(
+                        "Profile names use lowercase letters, digits, and hyphens, "
+                        "starting with a letter (e.g. amazon-work). Try another name.",
+                        file=sys.stderr,
+                    )
+                    continue
+                if any(item.get("profile") == profile for item in authentication.profiles()):
+                    print(f"A profile named {profile} already exists; choose another name.", file=sys.stderr)
+                    continue
+                break
             values = {name: getpass(f"{name}: ") for name in policy.credential_fields}
             try:
                 authentication.enroll_profile(profile, provider, values, plugin_id=plugin_id)
             except Exception as exc:
                 raise InstallerError(
                     str(getattr(exc, "code", "authentication_profile_failed")),
-                    "authentication profile could not be enrolled safely",
+                    str(exc) or "authentication profile could not be enrolled safely",
                 ) from exc
         else:
             try:
