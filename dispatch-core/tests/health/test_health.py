@@ -143,6 +143,27 @@ def test_authentication_capability_requires_configured_authentication_status(mon
     assert configured["ok"] is True
     assert configured["data"]["authentication"]["configured"] is True
     assert configured["data"]["planes"]["authentication"] == "ready"
+    # Keyring preflight: the field always reflects probe reality.
+    assert configured["data"]["authentication"]["keyring_available"] is False
+
+
+def test_health_keyring_preflight_reports_true_when_secret_service_exists(monkeypatch, tmp_path: Path) -> None:
+    import types
+
+    configure(monkeypatch, tmp_path)
+    monkeypatch.setattr(
+        health_runtime,
+        "plugin_health",
+        lambda selected: {"ready": True, "plugins": {}, "error": None},
+    )
+    module = types.ModuleType("authentication.keyring")
+    module.available = lambda: True
+    monkeypatch.setitem(__import__("sys").modules, "authentication.keyring", module)
+
+    health = resolved("health")
+
+    assert health["ok"] is True
+    assert health["data"]["authentication"]["keyring_available"] is True
 
 
 def test_service_authentication_requires_its_selected_named_profile(monkeypatch, tmp_path: Path) -> None:

@@ -1,6 +1,7 @@
 """Read-only installed health, verification, and path responses."""
 from __future__ import annotations
 
+import importlib
 import json
 import os
 import stat
@@ -222,8 +223,17 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
                 authentication = {"configured": False, "dependency": "not_installed"}
             else:
                 try:
+                    # Resolve exactly like EncryptedCredentialStore does
+                    # (sys.modules-aware), not via the package attribute.
+                    keyring_store = importlib.import_module("authentication.keyring")
+
+                    authentication_keyring_available = bool(keyring_store.available())
+                except Exception:
+                    authentication_keyring_available = False
+                try:
                     authentication_manager = AuthenticationManager(paths)
                     authentication = authentication_manager.status()
+                    authentication["keyring_available"] = authentication_keyring_available
                 except AuthenticationError as exc:
                     authentication_error = exc
         required_authentication_realms = {
