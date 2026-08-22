@@ -4446,3 +4446,140 @@ def test_verify_staged_core_gate_fails_closed_on_missing_interpreter(tmp_path: P
     with pytest.raises(InstallerError) as error:
         lifecycle_runtime._verify_staged_core(tmp_path / "venv", core, work, run=run)
     assert error.value.code == "core_help_gate_failed"
+
+
+def _activation_with_plugin_rollback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    *,
+    selected: list[str],
+    fail_restore_for: set[str],
+) -> tuple[str | None, dict[str, dict[str, bool]], list[tuple[str, ...]]]:
+    """Run a real install_from_clone whose activation fails at the user
+    service restart — i.e. AFTER stop_plugin_services_for_activation has
+    swept the owned plugin units — and capture the rollback effects.
+
+    Returns (installer error code, simulated service states, every command).
+    """
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    (layout.clone / ".git").mkdir(parents=True)
+    plugin_config = layout.config / "plugins.json"
+
+    def migrate(_layout):
+        atomic_json(
+            plugin_config,
+            {
+                "schema_version": 1,
+                "status": "complete",
+                "selected_plugins": selected,
+                "plugins": [],
+                "contains_secrets": False,
+            },
+        )
+        return True
+
+    # Two long-running-style plugin units: "worker" stays selected, "ghost"
+    # was deselected mid-update but its unit is still installed, so the
+    # activation stop sweep picks up both.
+    ensure_private_directory(layout.service_directory, "service directory")
+    prepare_plugin_service(layout, "worker")
+    prepare_plugin_service(layout, "ghost")
+
+    states = {
+        "worker": {"active": True, "enabled": True},
+        "ghost": {"active": True, "enabled": True},
+    }
+    commands: list[tuple[str, ...]] = []
+
+    def plugin_id_of(values: tuple[str, ...]) -> str:
+        service = values[-1]
+        return service.removeprefix("dispatch-plugin-").removesuffix(".service")
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        if values[1:3] == ("-m", "venv"):
+            python = Path(values[-1]) / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("new-python")
+            python.chmod(0o700)
+            fake_site_packages(python)
+        if values[:3] == ("systemctl", "--user", "is-active"):
+            return completed(returncode=0 if states.get(plugin_id_of(values), {}).get("active") else 1)
+        if values[:3] == ("systemctl", "--user", "is-enabled"):
+            return completed(returncode=0 if states.get(plugin_id_of(values), {}).get("enabled") else 1)
+        if values[:3] == ("systemctl", "--user", "stop") and "dispatch-plugin-" in values[-1]:
+            states[plugin_id_of(values)]["active"] = False
+        if values[:3] == ("systemctl", "--user", "start") and "dispatch-plugin-" in values[-1]:
+            if plugin_id_of(values) in fail_restore_for:
+                raise InstallerError(
+                    "plugin_service_unsafe",
+                    f"{plugin_id_of(values)} unit could not be restored safely",
+                )
+            states[plugin_id_of(values)]["active"] = True
+        if values == ("systemctl", "--user", "restart", "dispatch.service"):
+            return completed(returncode=1)
+        response = authority_response(command)
+        if response is not None:
+            return response
+        return browser_response(command) or completed()
+
+    monkeypatch.setattr(lifecycle_runtime, "migrate_legacy_plugin_config", migrate)
+
+    source = layout.dispatch_home / ".install-tmp" / "candidate" / "dispatch"
+    source.parent.parent.mkdir(mode=0o700)
+    source.parent.mkdir(mode=0o700)
+    (source / ".git").mkdir(parents=True)
+    write_test_project(source / "installer")
+    write_browser_manager_project(source / "dispatch-core")
+    # The selected plugin must exist in the staged candidate or the
+    # preflight raises selected_plugin_missing before activation begins.
+    _write_runtime_plugin(source, plugin_id="worker")
+
+    error_code: str | None = None
+    try:
+        install_from_clone(layout, source, channel="dev", ref=DEVELOPMENT_BRANCH, run=fake_run)
+    except InstallerError as error:
+        error_code = error.code
+    return error_code, states, commands
+
+
+def test_rollback_restart_skips_deselected_plugins_and_restores_selected(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # worker stays selected; ghost was deselected mid-update. The rollback
+    # restart used to run WITHOUT allowed_ids and resurrected ghost from its
+    # stale/removed unit. It must now mirror the happy-path constraint, and
+    # the original activation failure must surface untouched.
+    error_code, states, commands = _activation_with_plugin_rollback(
+        tmp_path,
+        monkeypatch,
+        selected=["worker"],
+        fail_restore_for=set(),
+    )
+    assert error_code == "service_activation_failed"
+    starts = [values[-1] for values in commands if values[:3] == ("systemctl", "--user", "start")]
+    assert "dispatch-plugin-worker.service" in starts
+    assert "dispatch-plugin-ghost.service" not in starts
+    assert states["worker"]["active"] is True
+
+
+def test_rollback_plugin_restore_failure_is_reported_distinctly(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # If the constrained restore itself fails (venv swapped under old units),
+    # the user must get activation_rolled_back_plugin_services_down — not a
+    # generic activation_rollback_failed that hides the outage cause.
+    error_code, _states, commands = _activation_with_plugin_rollback(
+        tmp_path,
+        monkeypatch,
+        selected=["worker"],
+        fail_restore_for={"worker"},
+    )
+    assert error_code == "activation_rolled_back_plugin_services_down"
+    # Every earlier rollback step still ran: the prior generation itself is
+    # restored; only the plugin restart failed.
+    assert ("systemctl", "--user", "daemon-reload") in commands

@@ -302,3 +302,57 @@ def test_service_preflight_binds_one_compatible_legacy_profile() -> None:
         "amazon-operations",
     )
     assert manager.bound == [("amazon-main", "companion-bridge", "amazon-operations")]
+
+
+def _patch_two_compatible_profiles(monkeypatch) -> FakeAuthentication:
+    """Manager whose reuse picker offers two compatible profiles."""
+
+    class TwoProfileAuthentication(FakeAuthentication):
+        def compatible_profiles(self, provider):
+            return [
+                {"profile": "amazon-main", "status": "enrolled"},
+                {"profile": "amazon-alt", "status": "enrolled"},
+            ]
+
+    manager = TwoProfileAuthentication()
+    patch_required_plugin(monkeypatch, manager)
+    return manager
+
+
+@pytest.mark.parametrize("answer", ["0", "-1", "99"])
+def test_reuse_picker_rejects_out_of_range_numbers_instead_of_binding_wrong_profile(
+    monkeypatch,
+    tmp_path: Path,
+    answer: str,
+) -> None:
+    # Python's negative indexing used to turn "0" into the LAST compatible
+    # profile and "-1" into the second-to-last — a silent wrong-profile
+    # binding. Out-of-range answers must abort loudly instead.
+    manager = _patch_two_compatible_profiles(monkeypatch)
+    monkeypatch.setattr("builtins.input", lambda _prompt: answer)
+
+    with pytest.raises(setup_runtime.InstallerError) as failure:
+        setup_runtime._setup_auth_profiles(tmp_path, ["companion-bridge"], human=True)  # type: ignore[arg-type]
+
+    assert failure.value.code == "profile_selection_invalid"
+    assert manager.enrolled == []
+    assert manager.bound == []
+
+
+def test_reuse_picker_still_accepts_valid_row_numbers(monkeypatch, tmp_path: Path) -> None:
+    manager = _patch_two_compatible_profiles(monkeypatch)
+    answers = iter(["2"])
+    monkeypatch.setattr("builtins.input", lambda _prompt: next(answers))
+
+    configured, pending = setup_runtime._setup_auth_profiles(tmp_path, ["companion-bridge"], human=True)  # type: ignore[arg-type]
+
+    assert pending == []
+    assert configured == [
+        {
+            "plugin": "companion-bridge",
+            "profile": "amazon-alt",
+            "type": "amazon",
+            "status": "enrolled",
+        }
+    ]
+    assert manager.bound == [("amazon-alt", "companion-bridge", "amazon-operations")]
