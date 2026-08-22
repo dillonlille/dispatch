@@ -466,7 +466,28 @@ def provision_managed_browser(
         if exc.code not in {"browser_cache_missing", "browser_runtime_missing"}:
             raise
     else:
-        verify_generation_digest(active_cache, version)
+        try:
+            verify_generation_digest(active_cache, version)
+        except BrowserProvisioningError as exc:
+            if exc.code != "browser_digest_missing":
+                raise
+            # Generations provisioned before digest recording existed have no
+            # marker. Adopt them through staging — copy, write a fresh digest,
+            # smoke-verify, and swap in transactionally — instead of failing
+            # closed (which would permanently lock pre-digest installs out of
+            # updates). Genuine tampering still fails: a present-but-mismatched
+            # digest raises browser_digest_mismatch above.
+            _copy_legacy_cache(active_cache, staging_cache)
+            executable = inspect_managed_cache(staging_cache, version)
+            write_generation_digest(_generation_root(staging_cache, version))
+            missing = _verify_host(
+                python=python,
+                cache=staging_cache,
+                executable=executable,
+                run=run,
+                install_system_dependencies=install_system_dependencies,
+            )
+            return BrowserProvisioningResult("adopted", version, active_cache, staging_cache, missing)
         missing = _verify_host(
             python=python,
             cache=active_cache,

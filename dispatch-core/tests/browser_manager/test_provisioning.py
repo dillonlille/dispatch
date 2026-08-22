@@ -440,26 +440,50 @@ def test_provider_registry_reserves_future_contracts_without_activating_them() -
     assert data[2]["implemented"] is False
 
 
-def test_reuse_fails_closed_when_generation_has_no_digest_marker(tmp_path: Path) -> None:
+def test_pre_digest_generation_is_adopted_through_staging(tmp_path: Path) -> None:
+    """Generations provisioned before digest recording existed adopt cleanly.
+
+    Regression: #43 made reuse demand a digest marker, which permanently
+    locked every pre-#43 install out of `dispatch update`
+    (browser_digest_missing). Missing markers now migrate through staging;
+    genuine tampering (mismatched digest) still fails closed.
+    """
     python = staged_python(tmp_path)
     active = tmp_path / "active"
     active.mkdir(mode=0o700)
     install_fake_browser(active)
     marker = active / "chromium-1234567" / ".dispatch-content-sha256"
     marker.unlink()
+    staging = tmp_path / "staging"
+    commands: list[tuple[str, ...]] = []
 
     def run(command, cwd=None):
-        raise AssertionError(("provisioning must not proceed", command))
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        if any(Path(value).name == "ldd" for value in values):
+            return completed(stdout="ready\n")
+        if any("chromium_sandbox=True" in value for value in values):
+            return completed()
+        raise AssertionError(values)
 
-    with pytest.raises(BrowserProvisioningError) as error:
-        provision_managed_browser(
-            python=python,
-            active_cache=active,
-            staging_cache=tmp_path / "staging",
-            legacy_cache=None,
-            run=run,
-        )
-    assert error.value.code == "browser_digest_missing"
+    result = provision_managed_browser(
+        python=python,
+        active_cache=active,
+        staging_cache=staging,
+        legacy_cache=None,
+        run=run,
+    )
+    assert result.status == "adopted"
+    assert result.replacement_required is True
+    # No re-download: the installed generation is reused, not replaced.
+    assert not any(is_browser_install(command) for command in commands)
+    # The staged copy is digest-marked and verifies; the active generation
+    # is untouched until the caller's transactional swap activates staging.
+    staged_generation = staging / "chromium-1234567"
+    assert (staged_generation / ".dispatch-content-sha256").is_file()
+    assert provisioning_module.verify_generation_digest(staging, target_browser_version(python))
+    assert not marker.exists()
+    assert (active / "chromium-1234567" / "chrome-linux64" / "chrome").is_file()
 
 
 def test_reuse_fails_closed_when_generation_content_was_tampered_with(tmp_path: Path) -> None:
