@@ -488,14 +488,27 @@ def stop_plugin_services_for_activation(
             if run(("systemctl", "--user", "stop", service), None).returncode != 0:
                 raise InstallerError("plugin_service_stop_failed", "plugin service could not be stopped for activation")
     except BaseException as primary:
-        try:
-            restore_plugin_service_states(layout, stopped, run=run)
-        except BaseException as rollback_error:
-            raise InstallerError(
-                "plugin_service_rollback_failed",
-                "plugin service stop failed and prior services could not be restored",
-            ) from rollback_error
-        raise primary
+        # Best-effort per-id restore (audit M-3): one id failing to come
+        # back must not abandon the remaining ids, and the PRIMARY stop
+        # failure must stay the reported error. The old all-or-nothing
+        # restore replaced it with a generic plugin_service_rollback_failed
+        # (even for KeyboardInterrupt) while leaving later services down.
+        rollback_failed = False
+        for state in list(stopped):
+            try:
+                restore_plugin_service_states(layout, [state], run=run)
+            except BaseException:
+                rollback_failed = True
+        if rollback_failed:
+            if isinstance(primary, InstallerError):
+                raise InstallerError(
+                    "plugin_service_rollback_failed",
+                    "plugin service stop failed; some previously running plugin services could not be restored",
+                ) from primary
+            # Interrupts and other control-flow exceptions keep their type:
+            # an abort must surface as an abort even when cleanup struggled.
+            raise primary
+        raise
     return stopped
 
 
