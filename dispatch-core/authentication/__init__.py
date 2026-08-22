@@ -32,6 +32,16 @@ _MAX_VAULT_SIZE = 1024 * 1024
 _PROFILE_SCHEMA_VERSION = 1
 _PROFILE_STATUSES = {"enrolled", "orphaned"}
 _PROFILE_VERIFICATIONS = {"unverified", "verified"}
+# Vault cleartext format: schema_version 2 stamps the key fingerprint so
+# rotations are verifiable and mismatched keys fail with precise errors.
+_VAULT_SCHEMA_VERSION = 2
+_KEY_ID_BYTES = 8
+
+
+def _key_id(key: bytes) -> str:
+    """Short public fingerprint of a vault key (never the key itself)."""
+
+    return hashlib.sha256(key).hexdigest()[: _KEY_ID_BYTES * 2]
 
 
 class AuthenticationError(RuntimeError):
@@ -344,13 +354,13 @@ class EncryptedCredentialStore:
 
     def _load(self) -> dict[str, Any]:
         if not self.root.exists() and not self.root.is_symlink():
-            return {"schema_version": 1, "accounts": {}}
+            return {"schema_version": _VAULT_SCHEMA_VERSION, "accounts": {}}
         _safe_directory(self.root, private=True)
         key = self._key(create=False)
         if key is None:
-            return {"schema_version": 1, "accounts": {}}
+            return {"schema_version": _VAULT_SCHEMA_VERSION, "accounts": {}}
         if not self.vault_file.exists() and not self.vault_file.is_symlink():
-            return {"schema_version": 1, "accounts": {}}
+            return {"schema_version": _VAULT_SCHEMA_VERSION, "accounts": {}}
         token = _safe_private_file(self.vault_file)
         try:
             cleartext = Fernet(key).decrypt(token)
@@ -358,14 +368,38 @@ class EncryptedCredentialStore:
         except (InvalidToken, UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
             raise AuthenticationError("auth_store_invalid", "authentication vault cannot be decrypted") from exc
         self._validate_payload(payload)
+        stamped = payload.get("key_id")
+        if payload.get("schema_version") == 2 and isinstance(stamped, str) and stamped != _key_id(key):
+            # The vault was written by a different key than the one currently
+            # installed. Name the mismatch precisely instead of letting a
+            # rotation or dual-key accident look like corruption.
+            raise AuthenticationError(
+                "auth_store_key_mismatch",
+                "vault records are stamped with a different key id than the installed vault key",
+            )
         return payload
 
     @staticmethod
     def _validate_payload(payload: Any) -> None:
-        if not isinstance(payload, dict) or set(payload) != {"schema_version", "accounts"}:
+        if not isinstance(payload, dict) or set(payload) not in (
+            {"schema_version", "accounts"},
+            {"schema_version", "accounts", "key_id"},
+        ):
             raise AuthenticationError("auth_store_invalid", "authentication vault shape is invalid")
-        if payload.get("schema_version") != 1 or not isinstance(payload.get("accounts"), dict):
+        version = payload.get("schema_version")
+        if version not in (1, 2) or not isinstance(payload.get("accounts"), dict):
             raise AuthenticationError("auth_store_invalid", "authentication vault version is invalid")
+        if version == 2:
+            # key_id may be absent while a payload is in flight in memory;
+            # its presence and match against the installed key are enforced
+            # on the read path (_load) for anything that came off disk.
+            key_id = payload.get("key_id")
+            if key_id is not None and (
+                not isinstance(key_id, str)
+                or len(key_id) != _KEY_ID_BYTES * 2
+                or any(char not in "0123456789abcdef" for char in key_id)
+            ):
+                raise AuthenticationError("auth_store_invalid", "authentication vault key id is invalid")
         for realm_id, accounts in payload["accounts"].items():
             policy = _realm(realm_id)
             if not isinstance(accounts, dict):
@@ -383,10 +417,16 @@ class EncryptedCredentialStore:
                     raise AuthenticationError("auth_store_invalid", "authentication account record is invalid")
 
     def _write(self, payload: dict[str, Any]) -> None:
-        self._validate_payload(payload)
+        stamped = dict(payload)
+        stamped.pop("key_id", None)
+        self._validate_payload(stamped)
         key = self._key(create=True)
         assert key is not None
-        cleartext = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        # Schema v2: stamp the writing key's fingerprint so a later load can
+        # prove it holds the right key (and rotation actually rotated).
+        stamped["schema_version"] = _VAULT_SCHEMA_VERSION
+        stamped["key_id"] = _key_id(key)
+        cleartext = (json.dumps(stamped, sort_keys=True, separators=(",", ":")) + "\n").encode()
         _atomic_private_file(self.vault_file, Fernet(key).encrypt(cleartext))
 
     @staticmethod
@@ -483,6 +523,23 @@ class EncryptedCredentialStore:
         vault = self._load()
         registry = self._load_profiles()
         return self._reconciled_profiles(vault, registry)
+
+    def profile_payload_consistent(self) -> dict[str, Any]:
+        """Reconciled profile projection read under the store lock.
+
+        Identical to ``profile_payload()`` but never serves a snapshot that
+        interleaves with a concurrent writer; used where a stale projection
+        would produce wrong decisions rather than merely old ones. Absent
+        stores stay absent (no tree creation on read).
+        """
+
+        if not self.root.exists() and not self.root.is_symlink():
+            empty = {"schema_version": _VAULT_SCHEMA_VERSION, "accounts": {}}
+            return self._reconciled_profiles(empty, None)
+        with self._locked():
+            vault = self._load()
+            registry = self._load_profiles()
+            return self._reconciled_profiles(vault, registry)
 
     def write_profile_payload(self, payload: dict[str, Any]) -> None:
         self._validate_profile_payload(payload)
@@ -624,7 +681,10 @@ class EncryptedCredentialStore:
             self._write(payload)
 
     def get(self, realm_id: str, account_alias: str) -> dict[str, str]:
-        payload = self._load()
+        if not self.root.exists() and not self.root.is_symlink():
+            raise AuthenticationError("credentials_not_enrolled", "credentials are not enrolled")
+        with self._locked():
+            payload = self._load()
         try:
             values = payload["accounts"][realm_id][account_alias]["values"]
         except KeyError as exc:
@@ -644,7 +704,10 @@ class EncryptedCredentialStore:
             return True
 
     def configured_accounts(self) -> set[tuple[str, str]]:
-        payload = self._load()
+        if not self.root.exists() and not self.root.is_symlink():
+            return set()
+        with self._locked():
+            payload = self._load()
         return {
             (realm_id, alias)
             for realm_id, accounts in payload["accounts"].items()
@@ -746,7 +809,7 @@ class AuthenticationManager:
     def profile_for_plugin(self, plugin_id: str, provider: str) -> str:
         self._require_plugin_provider(plugin_id, provider)
         provider_id = _provider(provider).id
-        payload = self._store.profile_payload()
+        payload = self._store.profile_payload_consistent()
         matches = [
             profile
             for profile, record in payload["profiles"].items()
@@ -1022,7 +1085,7 @@ class AuthenticationManager:
     def remove(self, realm_id: str, account_alias: str = "default") -> dict[str, Any]:
         _realm(realm_id)
         _require_slug(account_alias, "account_alias")
-        payload = self._store.profile_payload()
+        payload = self._store.profile_payload_consistent()
         matches = [
             profile
             for profile, record in payload["profiles"].items()
