@@ -444,6 +444,14 @@ class BrowserManager:
                 outcome = {"lease_id": row.lease_id, "status": self._error_code(exc, "browser_maintenance_failed")}
             if outcome is not None:
                 outcomes.append(outcome)
+        # Bounded retention: prune terminal rows older than 30 days so the
+        # ledger cannot grow without bound. Failures never break maintenance.
+        try:
+            pruned = self.store.prune(before=now - timedelta(days=30), limit=500)
+            if pruned:
+                outcomes.append({"lease_id": "-", "status": f"pruned_{pruned}"})
+        except Exception as exc:
+            outcomes.append({"lease_id": "-", "status": self._error_code(exc, "browser_maintenance_failed")})
         return outcomes
 
     def reconcile(self) -> list[dict[str, str]]:

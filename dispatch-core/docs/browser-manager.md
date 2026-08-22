@@ -47,7 +47,9 @@ Realm profiles are private and persist across ordinary updates and uninstall. Br
 - Up to 8 browsers run concurrently by default (`DISPATCH_BROWSER_CAPACITY` overrides, 1–64).
 - Collectors scraping the same site run in parallel when they use different account profiles; each lease holds its own profile exclusively, so no two leases ever share a browser process or profile state.
 - Each realm permits up to `max_concurrent_leases` simultaneous leases (default 4); a collector re-using a busy profile waits or fails with `browser_profile_busy`.
-- The Core service loop runs browser maintenance every tick: crashed browsers are reaped and expired leases closed. Long-running collectors should renew their lease (`ManagedLease.renew`) while active; renewal requires the browser process to still match its recorded identity.
+- The Core service loop runs browser maintenance every tick: crashed browsers are reaped, expired leases closed, and terminal rows older than 30 days pruned. Long-running collectors should renew their lease (`ManagedLease.renew`) while active; renewal requires the browser process to still match its recorded identity.
+- Collectors wait briefly (default 30s) for a free browser slot instead of failing instantly when the pool is saturated; tune with the collection manager's `browser_wait_seconds`.
+- Headed (authentication) sessions on display-less hosts automatically run under a private per-lease Xvfb server (`/usr/bin/Xvfb`), torn down with the same process-identity discipline as the browser itself.
 
 ## Provider foundation
 

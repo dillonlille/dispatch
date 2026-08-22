@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import signal
 import stat
+import subprocess
 import threading
 import time
 from typing import Any, Callable, Iterator, Protocol
@@ -427,6 +428,8 @@ class PlaywrightRuntime:
         control_pid: int | None = None
         control_ticks: int | None = None
         executable_descriptor: int | None = None
+        virtual_display: _VirtualDisplay | None = None
+        virtual_display_for_handle: _VirtualDisplay | None = None
         try:
             executable = Path(os.path.abspath(self.__launch_executable))
             cache = installation.browsers_path
@@ -478,25 +481,41 @@ class PlaywrightRuntime:
                     "an unleased Chromium process already owns the profile",
                 )
 
-            with _playwright_driver_environment(profile, identity.control_executable):
-                try:
-                    from playwright.sync_api import sync_playwright
-                except ImportError as exc:
-                    raise BrowserManagerError("playwright_missing", "required Playwright package is not installed") from exc
-                playwright = sync_playwright().start()
-            control_pid, control_ticks = _playwright_control_process(playwright, identity.control_executable)
-            record_control_process(control_pid, control_ticks)
-            context = playwright.chromium.launch_persistent_context(
-                user_data_dir=str(profile),
-                executable_path=str(pinned_executable),
-                headless=mode == BrowserMode.HEADLESS,
-                chromium_sandbox=True,
-                handle_sigint=False,
-                handle_sigterm=False,
-                handle_sighup=False,
-                timeout=realm.launch_timeout_seconds * 1000,
-                env=_browser_environment(profile),
-            )
+            # Headed mode needs an X display. Inherit the ambient DISPLAY when
+            # one exists; otherwise run a private Xvfb for this lease.
+            display_value = os.environ.get("DISPLAY", "").strip()
+            if mode == BrowserMode.HEADED and not display_value:
+                virtual_display = _VirtualDisplay()
+                display_value = virtual_display.start()
+
+            try:
+                with _playwright_driver_environment(profile, identity.control_executable):
+                    try:
+                        from playwright.sync_api import sync_playwright
+                    except ImportError as exc:
+                        raise BrowserManagerError("playwright_missing", "required Playwright package is not installed") from exc
+                    playwright = sync_playwright().start()
+                control_pid, control_ticks = _playwright_control_process(playwright, identity.control_executable)
+                record_control_process(control_pid, control_ticks)
+                launch_environment = _browser_environment(profile)
+                if mode == BrowserMode.HEADED:
+                    launch_environment["DISPLAY"] = display_value
+                context = playwright.chromium.launch_persistent_context(
+                    user_data_dir=str(profile),
+                    executable_path=str(pinned_executable),
+                    headless=mode == BrowserMode.HEADLESS,
+                    chromium_sandbox=True,
+                    handle_sigint=False,
+                    handle_sigterm=False,
+                    handle_sighup=False,
+                    timeout=realm.launch_timeout_seconds * 1000,
+                    env=launch_environment,
+                )
+            except BaseException:
+                if virtual_display is not None:
+                    virtual_display.stop()
+                raise
+            virtual_display_for_handle = virtual_display
             os.close(executable_descriptor)
             executable_descriptor = None
             pid = _await_browser_pid(profile, identity.executable, realm.launch_timeout_seconds)
@@ -531,6 +550,8 @@ class PlaywrightRuntime:
             if executable_descriptor is not None:
                 os.close(executable_descriptor)
                 executable_descriptor = None
+            if virtual_display_for_handle is not None:
+                virtual_display_for_handle.stop()
             try:
                 _cleanup_partial(playwright, context, profile, identity)
             except BrowserManagerError as cleanup_exc:
@@ -540,6 +561,104 @@ class PlaywrightRuntime:
             if not isinstance(exc, Exception):
                 raise
             raise BrowserManagerError("browser_launch_failed", "approved Chromium failed to start") from exc
+
+
+class _VirtualDisplay:
+    """Private Xvfb server for one headed lease on display-less hosts.
+
+    The Xvfb process is positively identified (pid + start ticks) and
+    terminated with the same tree-kill discipline as browser processes, so a
+    crashed manager cannot leak display servers beyond reconcile.
+    """
+
+    __slots__ = ("_process", "_pid", "_start_ticks", "_display_number")
+
+    def __init__(self) -> None:
+        self._process: Any | None = None
+
+    @property
+    def display(self) -> str:
+        return f":{self._display_number}"
+
+    def start(self) -> str:
+        import subprocess
+
+        xvfb = Path("/usr/bin/Xvfb")
+        if not xvfb.exists() or not os.access(xvfb, os.X_OK):
+            raise BrowserManagerError(
+                "browser_display_unavailable",
+                "headed mode requires a display or Xvfb (/usr/bin/Xvfb is unavailable)",
+            )
+        lock_dir = Path("/tmp/.X11-unix")
+        for number in range(90, 100):
+            candidate = lock_dir / f"X{number}"
+            if candidate.exists():
+                continue
+            try:
+                self._process = subprocess.Popen(
+                    [
+                        str(xvfb),
+                        f":{number}",
+                        "-screen",
+                        "0",
+                        "1280x1024x24",
+                        "-nolisten",
+                        "tcp",
+                    ],
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    start_new_session=True,
+                )
+            except OSError as exc:
+                raise BrowserManagerError(
+                    "browser_display_unavailable",
+                    "Xvfb could not be started",
+                ) from exc
+            # Wait briefly for the socket to prove the display is serving.
+            deadline = time.monotonic() + 3.0
+            while time.monotonic() < deadline:
+                if candidate.exists():
+                    self._pid = int(self._process.pid)
+                    ticks = process_start_ticks(self._pid)
+                    if ticks is None:  # pragma: no cover - died immediately
+                        self.stop()
+                        break
+                    self._start_ticks = ticks
+                    self._display_number = number
+                    return self.display
+                if self._process.poll() is not None:
+                    break
+                time.sleep(0.05)
+            else:
+                break
+            self.stop()
+        raise BrowserManagerError(
+            "browser_display_unavailable",
+            "no free Xvfb display could be acquired",
+        )
+
+    def stop(self) -> None:
+        process = self._process
+        self._process = None
+        if process is None:
+            return
+        try:
+            pid = int(process.pid)
+            ticks = process_start_ticks(pid)
+            if ticks is not None and pid == self._pid and ticks == self._start_ticks:
+                try:
+                    terminate_control_process(pid, ticks, Path("/usr/bin/Xvfb"))
+                    return
+                except BrowserManagerError:
+                    pass
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:  # type: ignore[union-attr]
+                process.kill()
+        except Exception:
+            pass
 
 
 def _browser_environment(profile: Path) -> dict[str, str]:

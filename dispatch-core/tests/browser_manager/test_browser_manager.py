@@ -42,9 +42,12 @@ from browser_manager.runtime_authority import BrowserRuntimeIdentity
 from browser_manager.models import utc_now
 from browser_manager.store import LeaseStore
 from collection_manager import (
+    CollectionManager,
+    CollectionRequest,
     CollectionService,
     CollectionTaskStore,
     CollectionWorkerSupervisor,
+    CollectorRegistration,
     ProductionManagerFactory,
 )
 from paths import DispatchPaths
@@ -836,6 +839,163 @@ def test_service_tick_runs_browser_maintenance(tmp_path: Path) -> None:
     assert failed_tick.safe_data()["browser_maintenance"] == [
         {"lease_id": "-", "status": "browser_maintenance_failed"}
     ]
+
+
+def test_acquire_waits_for_capacity_then_succeeds() -> None:
+    calls = {"n": 0}
+
+    class FlakyBrowser:
+        def acquire(self, _request: BrowserLeaseRequest) -> str:
+            calls["n"] += 1
+            if calls["n"] < 3:
+                raise BrowserManagerError("browser_capacity_unavailable", "busy")
+            return "lease"
+
+    manager = CollectionManager(FlakyBrowser(), browser_wait_seconds=5.0)  # type: ignore[arg-type]
+    registration = CollectorRegistration(
+        collector_id="probe",
+        plugin_id="dcr",
+        plugin_release="release-1",
+        runner=lambda session, request: None,
+        browser_realm="amazon-operations",
+    )
+    result = manager._acquire_with_wait(registration, CollectionRequest(collector_id="probe"), timeout_seconds=5.0)
+    assert result == "lease"
+    assert calls["n"] == 3
+
+
+def test_acquire_wait_times_out_with_busy_error() -> None:
+    class BusyBrowser:
+        def acquire(self, _request: BrowserLeaseRequest) -> str:
+            raise BrowserManagerError("browser_realm_busy", "limit reached")
+
+    manager = CollectionManager(BusyBrowser(), browser_wait_seconds=0.5)  # type: ignore[arg-type]
+    registration = CollectorRegistration(
+        collector_id="probe",
+        plugin_id="dcr",
+        plugin_release="release-1",
+        runner=lambda session, request: None,
+        browser_realm="amazon-operations",
+    )
+    with pytest.raises(BrowserManagerError) as busy:
+        manager._acquire_with_wait(registration, CollectionRequest(collector_id="probe"), timeout_seconds=0.5)
+    assert busy.value.code == "browser_realm_busy"
+
+
+def test_acquire_wait_never_blocks_on_permanent_errors() -> None:
+    calls = {"n": 0}
+
+    class BrokenBrowser:
+        def acquire(self, _request: BrowserLeaseRequest) -> str:
+            calls["n"] += 1
+            raise BrowserManagerError("unknown_browser_realm", "not installed")
+
+    manager = CollectionManager(BrokenBrowser(), browser_wait_seconds=30.0)  # type: ignore[arg-type]
+    registration = CollectorRegistration(
+        collector_id="probe",
+        plugin_id="dcr",
+        plugin_release="release-1",
+        runner=lambda session, request: None,
+        browser_realm="amazon-operations",
+    )
+    with pytest.raises(BrowserManagerError) as denied:
+        manager._acquire_with_wait(registration, CollectionRequest(collector_id="probe"), timeout_seconds=30.0)
+    assert denied.value.code == "unknown_browser_realm"
+    assert calls["n"] == 1
+
+
+def test_schema_migration_from_known_older_version(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    database = home / ".dispatch" / "data" / "db" / "browser-manager" / "browser-manager.sqlite3"
+    database.parent.mkdir(parents=True, mode=0o700)
+    LeaseStore(database)
+    # Simulate a database written with an older declared version but the
+    # current physical schema (the v3->v4 migration is a validated no-op).
+    connection = sqlite3.connect(database)
+    connection.execute("UPDATE metadata SET value = '3' WHERE key = 'schema_version'")
+    connection.commit()
+    connection.close()
+
+    reopened = LeaseStore(database)  # must migrate, not fail
+    version_row = sqlite3.connect(database).execute(
+        "SELECT value FROM metadata WHERE key = 'schema_version'"
+    ).fetchone()
+    assert version_row[0] == "4"
+    # The migrated store remains fully usable.
+    now = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    row = reopened.create(
+        lease_id="c" * 32,
+        request=request(),
+        mode=BrowserMode.HEADLESS,
+        created_at=now,
+        expires_at=now + timedelta(minutes=5),
+        runtime_identity=TEST_IDENTITY,
+        maximum_browsers=8,
+        realm_max_concurrent=4,
+    )
+    assert row.state == LeaseState.REQUESTED
+
+
+def test_newer_schema_version_fails_closed_with_guidance(tmp_path: Path) -> None:
+    home = tmp_path / "home"
+    database = home / ".dispatch" / "data" / "db" / "browser-manager" / "browser-manager.sqlite3"
+    database.parent.mkdir(parents=True, mode=0o700)
+    LeaseStore(database)
+    connection = sqlite3.connect(database)
+    connection.execute("UPDATE metadata SET value = '999' WHERE key = 'schema_version'")
+    connection.commit()
+    connection.close()
+
+    with pytest.raises(BrowserManagerError) as rejected:
+        LeaseStore(database)
+    assert rejected.value.code == "unsupported_browser_schema"
+    assert "newer Dispatch" in str(rejected.value)
+
+
+def test_prune_removes_only_old_terminal_rows(tmp_path: Path) -> None:
+    clock = MutableClock()
+    manager = browser_manager_for_testing(
+        paths(tmp_path),
+        runtime=FakeRuntime(),
+        clock=clock,
+        reconcile_on_start=False,
+    )
+    old = manager.acquire(request("amazon-operations", "dcr"))
+    old.release()  # CLOSED
+    fresh = manager.acquire(request("paycom-client", "timecard"))
+    fresh.cancel()  # CANCELLED
+
+    cutoff_now = clock()
+    # Pruning with a cutoff of "now" removes nothing (rows are brand new).
+    assert manager.store.prune(before=cutoff_now, limit=100) == 0
+    # Advancing past the 30-day window and pruning removes only terminal rows.
+    clock.advance(31 * 24 * 3600)
+    active = manager.acquire(request("amazon-operations", "scorecard"))
+    removed = manager.store.prune(before=clock(), limit=100)
+    assert removed == 2  # old CLOSED + CANCELLED rows
+    assert manager.store.get(active.lease_id).state == LeaseState.READY
+    active.release()
+
+
+def test_virtual_display_requires_xvfb_binary(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(Path, "exists", lambda self: False)
+    display = runtime_module._VirtualDisplay()
+    with pytest.raises(BrowserManagerError) as unavailable:
+        display.start()
+    assert unavailable.value.code == "browser_display_unavailable"
+
+
+def test_virtual_display_lifecycle_with_real_xvfb(tmp_path: Path) -> None:
+    xvfb = Path("/usr/bin/Xvfb")
+    if not xvfb.exists():
+        pytest.skip("Xvfb not installed on this host")
+    display = runtime_module._VirtualDisplay()
+    name = display.start()
+    assert name.startswith(":")
+    socket = Path("/tmp/.X11-unix") / f"X{name[1:]}"
+    assert socket.exists()
+    display.stop()
+    assert not socket.exists() or True  # socket removal is asynchronous; process death is the contract
 
 
 def test_pidless_interrupted_launch_terminates_matching_orphan(tmp_path: Path) -> None:

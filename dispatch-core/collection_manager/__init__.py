@@ -9,6 +9,7 @@ import hashlib
 import math
 import re
 import secrets
+import time
 from typing import TYPE_CHECKING, Callable, Mapping
 
 from browser_manager import (
@@ -247,13 +248,53 @@ class CollectionManager:
         authentication: AuthenticationManager | None = None,
         store: CollectionTaskStore | None = None,
         clock: Callable[[], datetime] = utc_now,
+        browser_wait_seconds: float = 30.0,
     ) -> None:
         self._browser = browser_manager
         self._authentication = authentication
         self._store = store
         self._clock = clock
+        if not 0 <= browser_wait_seconds <= 600:
+            raise CollectionManagerError(
+                "invalid_collection_request",
+                "browser wait must be between 0 and 600 seconds",
+            )
+        self._browser_wait_seconds = float(browser_wait_seconds)
         self._collectors: dict[str, CollectorRegistration] = {}
         self._pending: dict[str, _PendingCollection] = {}
+
+    def _acquire_with_wait(
+        self,
+        registration: CollectorRegistration,
+        request: CollectionRequest,
+        *,
+        timeout_seconds: float,
+    ) -> ManagedLease:
+        """Acquire a browser lease, briefly waiting for capacity instead of
+        failing instantly when all slots/realm limits are busy. Transient
+        busy codes retry with backoff until the deadline; everything else
+        fails immediately."""
+
+        assert self._browser is not None
+        lease_request = BrowserLeaseRequest(
+            plugin_id=registration.plugin_id,
+            plugin_release=registration.plugin_release,
+            realm=registration.browser_realm,
+            purpose=BrowserPurpose.COLLECTION,
+            account_alias=request.account_alias,
+            mode=BrowserMode.HEADED if registration.authentication_required else BrowserMode.HEADLESS,
+        )
+        transient = {"browser_capacity_unavailable", "browser_realm_busy"}
+        deadline = time.monotonic() + max(timeout_seconds, 0.0)
+        delay = 0.25
+        while True:
+            try:
+                return self._browser.acquire(lease_request)
+            except BrowserManagerError as exc:
+                if exc.code not in transient or time.monotonic() >= deadline:
+                    raise
+                time.sleep(min(delay, max(deadline - time.monotonic(), 0.0)))
+                delay = min(delay * 2, 2.0)
 
     @classmethod
     def production(
@@ -588,15 +629,10 @@ class CollectionManager:
 
         lease: ManagedLease | None = None
         try:
-            lease = self._browser.acquire(
-                BrowserLeaseRequest(
-                    plugin_id=registration.plugin_id,
-                    plugin_release=registration.plugin_release,
-                    realm=registration.browser_realm,
-                    purpose=BrowserPurpose.COLLECTION,
-                    account_alias=request.account_alias,
-                    mode=BrowserMode.HEADED if registration.authentication_required else BrowserMode.HEADLESS,
-                )
+            lease = self._acquire_with_wait(
+                registration,
+                request,
+                timeout_seconds=self._browser_wait_seconds,
             )
             lease.activate()
         except BaseException as exc:
