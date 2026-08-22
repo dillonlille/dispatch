@@ -1061,8 +1061,17 @@ def _setup_auth_profiles(layout: InstallLayout, selected: Sequence[str], *, huma
             answer = input("Select a profile: ").strip().lower()
             if answer != "c":
                 try:
-                    profile = compatible[int(answer) - 1]["profile"]
-                except (ValueError, IndexError, KeyError) as exc:
+                    selection = int(answer)
+                except ValueError as exc:
+                    raise InstallerError("profile_selection_invalid", "authentication profile selection is invalid") from exc
+                # Explicit bounds: answers like "0" or "-1" must not slip
+                # through Python's negative indexing and silently bind the
+                # last/second-to-last compatible profile.
+                if not 1 <= selection <= len(compatible):
+                    raise InstallerError("profile_selection_invalid", "authentication profile selection is invalid")
+                try:
+                    profile = compatible[selection - 1]["profile"]
+                except (IndexError, KeyError, TypeError) as exc:
                     raise InstallerError("profile_selection_invalid", "authentication profile selection is invalid") from exc
         if profile is None:
             # Validate at the prompt: Dispatch slugs are lowercase

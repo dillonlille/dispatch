@@ -887,6 +887,7 @@ def _reconcile_installation(
         )
     except BaseException as activation_error:
         rollback_failure: BaseException | None = None
+        plugin_restore_failure: BaseException | None = None
 
         def attempt(action: Callable[[], object]) -> None:
             nonlocal rollback_failure
@@ -919,7 +920,21 @@ def _reconcile_installation(
                     run=run,
                 )
             )
-        attempt(lambda: restore_plugin_service_states(layout, stopped_plugin_services, run=run))
+        # Constrain the rollback restart to the same selection the happy path
+        # used: a plugin deselected mid-update must not be resurrected from
+        # its (already removed or stale) unit during rollback. A failed
+        # restart is captured distinctly instead of folding into
+        # rollback_failure, which masked the outage cause behind a generic
+        # activation_rollback_failed.
+        try:
+            restore_plugin_service_states(
+                layout,
+                stopped_plugin_services,
+                allowed_ids=selected_plugins,
+                run=run,
+            )
+        except BaseException as exc:
+            plugin_restore_failure = exc
         try:
             _safe_remove(work)
         except BaseException as exc:
@@ -931,6 +946,13 @@ def _reconcile_installation(
                 "activation_rollback_failed",
                 "activation failed and the prior generation could not be fully restored",
             ) from activation_error
+        if plugin_restore_failure is not None:
+            # The prior generation itself is fully restored; only the
+            # previously running plugin services may remain down.
+            raise InstallerError(
+                "activation_rolled_back_plugin_services_down",
+                "activation rolled back and prior generation is active, but previously running plugin services could not be restarted",
+            ) from plugin_restore_failure
         raise
 
     release_browser_generation_lock(generation_lock)
