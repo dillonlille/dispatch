@@ -423,24 +423,89 @@ class EncryptedCredentialStore:
         return True
 
     def rotate(self) -> dict[str, Any]:
-        """Re-encrypt the vault under a freshly generated key.
+        """Re-encrypt the vault under a freshly generated key, crash-safely.
 
-        Creates a key (and its keyring/disk home) even when the vault is
-        still empty, so rotation is safe to run at any time. All existing
-        account records are preserved.
+        Order of operations (the old design bricked the vault if a crash
+        landed between "new key installed" and "token re-encrypted"):
+
+        1. Journal the OLD key to ``vault.key.retired``.
+        2. Write the re-encrypted token FIRST -- the store still opens with
+           the old key, and ``_load`` transparently falls back to the
+           retired key while a journal exists.
+        3. Install the new key (keyring preferred, disk fallback).
+        4. Remove the journal; rotation is complete.
+
+        Any crash leaves either (old key + old token) or (new key + new
+        token) or (new key + old token + journal); every state opens
+        cleanly because ``_load`` tries journaled retired keys on failure.
         """
 
         with self._locked():
             payload = self._load()
-            key = Fernet.generate_key()
-            if not self._key_to_ring(key):
-                _atomic_private_file(self.key_file, key)
-            if payload["accounts"]:
-                self._write(payload)
-            return {
-                "status": "rotated",
-                "accounts": sum(len(items) for items in payload["accounts"].values()),
-            }
+            accounts = sum(len(items) for items in payload["accounts"].values())
+            new_key = Fernet.generate_key()
+            current_key = self._key(create=False)
+            if current_key is not None:
+                # Journal the old key so no crash can orphan the token.
+                _atomic_private_file(self.root / "vault.key.retired", current_key)
+                _atomic_private_file(
+                    self.root / "rotation.journal",
+                    json.dumps({"phase": "re-encrypt"}).encode(),
+                )
+            # Token first: encrypted with the NEW key, not yet installed.
+            stamped = dict(payload)
+            stamped.pop("key_id", None)
+            self._validate_payload(stamped)
+            stamped["schema_version"] = _VAULT_SCHEMA_VERSION
+            stamped["key_id"] = _key_id(new_key)
+            cleartext = (json.dumps(stamped, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            _atomic_private_file(self.vault_file, Fernet(new_key).encrypt(cleartext))
+            # Now install the new key.
+            if not self._key_to_ring(new_key):
+                _atomic_private_file(self.key_file, new_key)
+            # Rotation complete: clear journal and retired copy.
+            (self.root / "rotation.journal").unlink(missing_ok=True)
+            (self.root / "vault.key.retired").unlink(missing_ok=True)
+            return {"status": "rotated", "accounts": accounts}
+
+    def _retired_keys(self) -> list[bytes]:
+        """Old keys still referenced by an interrupted rotation journal."""
+
+        retired = self.root / "vault.key.retired"
+        journal = self.root / "rotation.journal"
+        if not (journal.exists() and retired.exists()):
+            return []
+        try:
+            return [_safe_private_file(retired, maximum_size=128)]
+        except AuthenticationError:
+            return []
+
+    def _recover_if_needed(self, token: bytes, key: bytes) -> bytes:
+        """Heal an interrupted rotation before decrypting.
+
+        If the token fails under the installed key but a rotation journal
+        exists, the crash happened after "new key installed" but before the
+        token was replaced: reinstall the journaled retired key (which does
+        open the token), clear the journal, and hand back the working key.
+        The next rotate() then redoes the rotation cleanly.
+        """
+
+        try:
+            Fernet(key).decrypt(token)
+            return key
+        except InvalidToken:
+            pass
+        for candidate in self._retired_keys():
+            try:
+                Fernet(candidate).decrypt(token)
+                if not self._key_to_ring(candidate):
+                    _atomic_private_file(self.key_file, candidate)
+                (self.root / "rotation.journal").unlink(missing_ok=True)
+                (self.root / "vault.key.retired").unlink(missing_ok=True)
+                return candidate
+            except InvalidToken:
+                continue
+        return key
 
     def _load(self) -> dict[str, Any]:
         if not self.root.exists() and not self.root.is_symlink():
@@ -452,6 +517,7 @@ class EncryptedCredentialStore:
         if not self.vault_file.exists() and not self.vault_file.is_symlink():
             return {"schema_version": _VAULT_SCHEMA_VERSION, "accounts": {}}
         token = _safe_private_file(self.vault_file)
+        key = self._recover_if_needed(token, key)
         try:
             cleartext = Fernet(key).decrypt(token)
             payload = json.loads(cleartext.decode("utf-8"))
