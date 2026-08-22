@@ -41,6 +41,12 @@ from browser_manager.runtime import (
 from browser_manager.runtime_authority import BrowserRuntimeIdentity
 from browser_manager.models import utc_now
 from browser_manager.store import LeaseStore
+from collection_manager import (
+    CollectionService,
+    CollectionTaskStore,
+    CollectionWorkerSupervisor,
+    ProductionManagerFactory,
+)
 from paths import DispatchPaths
 
 
@@ -519,17 +525,58 @@ def test_lease_lifecycle_is_durable_private_and_bounded(tmp_path: Path) -> None:
     assert profile.stat().st_mode & 0o777 == 0o700
 
 
-def test_realm_and_global_locks_allow_isolated_realms_only(tmp_path: Path) -> None:
-    manager = browser_manager_for_testing(paths(tmp_path), runtime=FakeRuntime(), reconcile_on_start=False)
-    amazon = manager.acquire(request("amazon-operations", "dcr"))
+def test_same_realm_leases_run_concurrently_with_profile_exclusivity(tmp_path: Path) -> None:
+    manager = browser_manager_for_testing(
+        paths(tmp_path),
+        runtime=FakeRuntime(),
+        reconcile_on_start=False,
+        maximum_browsers=4,
+    )
+    first = manager.acquire(request())
+    # Two collectors scraping the SAME site concurrently: distinct accounts
+    # mean distinct profiles, so both leases hold at once.
+    second = manager.acquire(request("amazon-operations", "scorecard"))
+    assert second.lease.state == LeaseState.READY
+    # The exact same plugin+account (= same profile) stays exclusively locked
+    # while `first` holds it, even with global and realm capacity available.
     with pytest.raises(BrowserManagerError) as denied:
-        manager.acquire(request("amazon-operations", "scorecard"))
-    assert denied.value.code == "browser_realm_busy"
+        manager.acquire(request())
+    assert denied.value.code == "browser_profile_busy"
+    # A different profile in the same realm is unaffected.
+    filler = manager.acquire(request("paycom-client", "timecard"))
+    assert filler.lease.state == LeaseState.READY
+    filler.release()
+    first.release()
+    second.release()
 
-    paycom = manager.acquire(request("paycom-client", "timecard"))
-    assert paycom.lease.state == LeaseState.READY
-    amazon.release()
-    paycom.release()
+
+def test_realm_concurrency_limit_is_enforced(tmp_path: Path) -> None:
+    solo = BrowserRealm(
+        id="solo-realm",
+        landing_url="https://example.invalid/landing",
+        purposes=frozenset({BrowserPurpose.COLLECTION}),
+        max_concurrent_leases=1,
+    )
+    open_realm = BrowserRealm(
+        id="open-realm",
+        landing_url="https://example.invalid/open",
+        purposes=frozenset({BrowserPurpose.COLLECTION}),
+    )
+    manager = browser_manager_for_testing(
+        paths(tmp_path),
+        runtime=FakeRuntime(),
+        realms=RealmRegistry([solo, open_realm]),
+        reconcile_on_start=False,
+    )
+    only = manager.acquire(request("solo-realm", "one"))
+    with pytest.raises(BrowserManagerError) as busy:
+        manager.acquire(request("solo-realm", "two"))
+    assert busy.value.code == "browser_realm_busy"
+    # Other realms are unaffected by this realm's limit.
+    elsewhere = manager.acquire(request("open-realm", "timecard"))
+    assert elsewhere.lease.state == LeaseState.READY
+    only.release()
+    elsewhere.release()
 
 
 def test_failed_launch_releases_locks_and_records_terminal_failure(tmp_path: Path) -> None:
@@ -716,6 +763,81 @@ def test_cleanup_failure_quarantines_profile_until_reconciliation(tmp_path: Path
     exclusive.release()
 
 
+def test_renew_extends_only_live_owned_leases(tmp_path: Path) -> None:
+    clock = MutableClock()
+    runtime = FakeRuntime()
+    realm = BrowserRealm(
+        id="test-realm",
+        landing_url="https://example.invalid/landing",
+        purposes=frozenset({BrowserPurpose.COLLECTION}),
+        lease_timeout_seconds=30,
+    )
+    manager = browser_manager_for_testing(
+        paths(tmp_path),
+        runtime=runtime,
+        realms=RealmRegistry([realm]),
+        clock=clock,
+        reconcile_on_start=False,
+    )
+    managed = manager.acquire(request("test-realm", "collector-one"))
+    start = managed.lease.expires_at
+
+    # Advance past the original deadline: activation of the expired READY
+    # lease must be refused.
+    clock.advance(60)
+    with pytest.raises(BrowserManagerError) as expired:
+        manager.activate(managed.lease_id)
+    assert expired.value.code == "browser_lease_expired"
+    # Renewal rescues the live lease: deadline extends from now.
+    renewed = managed.renew()
+    assert renewed.state == LeaseState.READY
+    assert renewed.expires_at > start
+
+    # A crashed browser is failed as crashed, not renewed.
+    runtime.handles[0].alive = False
+    outcome = managed.renew()
+    assert outcome.state == LeaseState.FAILED
+
+
+def test_renew_rejects_unowned_lease(tmp_path: Path) -> None:
+    first = browser_manager_for_testing(paths(tmp_path), runtime=FakeRuntime(), reconcile_on_start=False)
+    managed = first.acquire(request())
+    other = browser_manager_for_testing(
+        paths(tmp_path),
+        runtime=FakeRuntime(),
+        reconcile_on_start=False,
+    )
+    with pytest.raises(BrowserManagerError) as denied:
+        other.renew(managed.lease_id)
+    assert denied.value.code == "browser_lease_not_owned"
+    managed.release()
+
+
+def test_service_tick_runs_browser_maintenance(tmp_path: Path) -> None:
+    calls: list[int] = []
+
+    def maintenance() -> list[dict[str, str]]:
+        calls.append(1)
+        return [{"lease_id": "x", "status": "process_absent"}]
+
+    def failing_maintenance() -> list[dict[str, str]]:
+        raise RuntimeError("synthetic maintenance crash")
+
+    core_paths = paths(tmp_path)
+    store = CollectionTaskStore.from_paths(core_paths)
+    supervisor = CollectionWorkerSupervisor(store.database, ProductionManagerFactory(core_paths))
+    healthy = CollectionService(store, supervisor, browser_maintenance=maintenance)
+    tick = healthy.tick()
+    assert calls == [1]
+    assert tick.safe_data()["browser_maintenance"] == [{"lease_id": "x", "status": "process_absent"}]
+
+    resilient = CollectionService(store, supervisor, browser_maintenance=failing_maintenance)
+    failed_tick = resilient.tick()
+    assert failed_tick.safe_data()["browser_maintenance"] == [
+        {"lease_id": "-", "status": "browser_maintenance_failed"}
+    ]
+
+
 def test_pidless_interrupted_launch_terminates_matching_orphan(tmp_path: Path) -> None:
     core_paths = paths(tmp_path)
     first = browser_manager_for_testing(core_paths, runtime=FakeRuntime(), reconcile_on_start=False)
@@ -822,9 +944,16 @@ def test_close_state_error_retains_process_ownership_and_locks(
     assert managed.lease_id in manager._active
 
     other = browser_manager_for_testing(core_paths, runtime=FakeRuntime(), reconcile_on_start=False)
+    # A stuck lease on one profile/realm must NOT block unrelated
+    # acquisitions under counted realm capacity (the old exclusive-realm
+    # behavior made every acquisition fail while any row was nonterminal).
+    unrelated = other.acquire(request("paycom-client", "timecard"))
+    assert unrelated.lease.state == LeaseState.READY
+    unrelated.release()
+    # The exact same profile remains blocked while the stuck lease holds it.
     with pytest.raises(BrowserManagerError) as blocked:
         other.acquire(request())
-    assert blocked.value.code in {"browser_realm_busy", "browser_capacity_unavailable"}
+    assert blocked.value.code == "browser_profile_busy"
 
     monkeypatch.setattr(manager.store, "transition", original_transition)
     assert manager.maintain() == [
@@ -853,6 +982,7 @@ def test_failed_launch_state_error_guards_unsafe_locks(
             manager.layout,
             maximum_browsers=manager.maximum_browsers,
             realm=row.realm,
+            realm_max_concurrent=1,
             profile_key=row.profile_key,
         )
     assert blocked.value.code in {"browser_capacity_unavailable", "browser_realm_busy"}
@@ -995,7 +1125,7 @@ def test_lease_lock_interruption_releases_shared_generation_authority(
 
     monkeypatch.setattr(FileLock, "acquire", interrupt_second)
     with pytest.raises(KeyboardInterrupt):
-        LeaseLocks.acquire(layout, maximum_browsers=2, realm="amazon", profile_key="profile")
+        LeaseLocks.acquire(layout, maximum_browsers=2, realm="amazon", realm_max_concurrent=1, profile_key="profile")
     monkeypatch.setattr(FileLock, "acquire", original)
     exclusive = FileLock(layout.generation_lock, "browser_generation_busy")
     exclusive.acquire()

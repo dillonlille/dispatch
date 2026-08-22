@@ -477,12 +477,25 @@ def _service_result(args: argparse.Namespace) -> dict[str, Any]:
     paths = DispatchPaths.from_environment()
     registrations = discover_collector_registrations()
     store = CollectionTaskStore.from_paths(paths)
+    needs_browser = any(item.browser_realm is not None for item in registrations)
+    browser_manager: Any | None = None
+    if needs_browser:
+        from browser_manager import BrowserManager, BrowserManagerError
+
+        try:
+            browser_manager = BrowserManager(paths)
+        except BrowserManagerError as exc:
+            raise CommandInterfaceError(exc.code, str(exc)) from exc
     supervisor = CollectionWorkerSupervisor(
         store.database,
         ProductionManagerFactory(paths, registrations),
         registrations=registrations,
     )
-    service = CollectionService(store, supervisor)
+    service = CollectionService(
+        store,
+        supervisor,
+        browser_maintenance=None if browser_manager is None else browser_manager.maintain,
+    )
     stopping = False
 
     def request_stop(_signum: int, _frame: object) -> None:
@@ -494,6 +507,8 @@ def _service_result(args: argparse.Namespace) -> dict[str, Any]:
     try:
         ticks = service.run(lambda: stopping, idle_seconds=args.idle_seconds, max_ticks=args.max_ticks)
     finally:
+        if browser_manager is not None:
+            browser_manager.shutdown()
         signal.signal(signal.SIGTERM, previous_term)
         signal.signal(signal.SIGINT, previous_int)
     return envelope(

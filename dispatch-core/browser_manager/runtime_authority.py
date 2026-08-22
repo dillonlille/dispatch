@@ -343,13 +343,22 @@ class BrowserRuntimeAuthority:
             executable=executable,
             control_executable=control_executable,
         )
-        executable_details = executable.stat(follow_symlinks=False)
+        try:
+            details = executable.stat(follow_symlinks=False)
+        except OSError as exc:
+            # Lost race: the binary vanished after every validated step.
+            # Surface as a bounded BrowserManagerError so health/CLI degrade
+            # gracefully instead of crashing on an unhandled exception type.
+            raise BrowserManagerError(
+                "browser_runtime_missing",
+                "approved Chromium executable is unavailable",
+            ) from exc
         return VerifiedBrowserInstallation(
             identity=identity,
             playwright_module=module,
             browsers_path=cache,
-            executable_device=executable_details.st_dev,
-            executable_inode=executable_details.st_ino,
+            executable_device=details.st_dev,
+            executable_inode=details.st_ino,
         )
 
     def inspect(self, *, full_tree: bool = True) -> dict[str, object]:
