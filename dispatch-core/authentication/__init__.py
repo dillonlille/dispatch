@@ -276,9 +276,27 @@ class EncryptedCredentialStore:
         if self.root.exists() or self.root.is_symlink():
             _validate_ancestor_chain(self.root)
         _prepare_private_tree(self.root)
-        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        # Two-phase open: create the lock file only when absent, so a
+        # swapped-in replacement is always detected by the identity check.
         try:
-            descriptor = os.open(self.lock_file, flags, 0o600)
+            descriptor = os.open(
+                self.lock_file,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            created = True
+        except FileExistsError:
+            created = False
+            try:
+                descriptor = os.open(
+                    self.lock_file,
+                    os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                )
+            except OSError as exc:
+                raise AuthenticationError(
+                    "auth_store_unsafe",
+                    "authentication lock file cannot be opened safely",
+                ) from exc
         except OSError as exc:
             raise AuthenticationError("auth_store_unsafe", "authentication lock file cannot be opened safely") from exc
         try:
@@ -290,6 +308,11 @@ class EncryptedCredentialStore:
                 or stat.S_IMODE(details.st_mode) != 0o600
             ):
                 raise AuthenticationError("auth_store_unsafe", "authentication lock file is unsafe")
+            if created and details.st_size == 0:
+                # Freshly created: record this process's ownership marker.
+                os.write(descriptor, f"{os.getpid()}\n".encode())
+                os.fsync(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
             # Bounded acquisition: an externally-held flock (leaked fd,
             # squatter process) must fail loudly instead of hanging every
             # auth operation forever.
@@ -305,16 +328,29 @@ class EncryptedCredentialStore:
                             "authentication vault is locked by another process; retry once it exits",
                         ) from None
                     time.sleep(0.05)
-            # Inode identity: a swapped-in replacement lock file would let a
-            # second process hold "the" lock simultaneously. Verify the inode
-            # we locked is still the one at the path.
-            path_details = os.stat(self.lock_file)
-            if (path_details.st_dev, path_details.st_ino) != (details.st_dev, details.st_ino):
+            # Inode identity: verify the inode we locked is still the one at
+            # the path (catches swaps that happened before acquisition), and
+            # re-check at release (catches swaps DURING the critical section,
+            # converting silent overlap into a detected violation for every
+            # subsequent operation).
+            def _identity_mismatch() -> bool:
+                try:
+                    path_details = os.stat(self.lock_file)
+                except FileNotFoundError:
+                    return True
+                return (path_details.st_dev, path_details.st_ino) != (details.st_dev, details.st_ino)
+
+            if _identity_mismatch():
                 raise AuthenticationError(
                     "auth_store_unsafe",
                     "authentication lock file was swapped while acquiring the vault lock",
                 )
             yield
+            if _identity_mismatch():
+                raise AuthenticationError(
+                    "auth_store_unsafe",
+                    "authentication lock file was swapped during the vault critical section",
+                )
         finally:
             os.close(descriptor)
 

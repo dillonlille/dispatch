@@ -150,8 +150,7 @@ def _normalize_url(url: str) -> str | None:
     ):
         return None
     try:
-        parsed = urlsplit(url)
-        port = parsed.port
+        parsed = urlsplit(url)  # parse validation only; port check happens in _approved
     except ValueError:
         return None
     path = parsed.path or "/"
