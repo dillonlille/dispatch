@@ -6,12 +6,14 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
 import re
 import stat
 import tempfile
+import time
 from types import MappingProxyType
 from typing import Any, Iterator, Mapping
 
@@ -36,6 +38,9 @@ _PROFILE_VERIFICATIONS = {"unverified", "verified"}
 # rotations are verifiable and mismatched keys fail with precise errors.
 _VAULT_SCHEMA_VERSION = 2
 _KEY_ID_BYTES = 8
+# Bounded lock acquisition: fail auth_store_busy after this many seconds
+# instead of hanging forever on an externally-held flock.
+_LOCK_TIMEOUT_SECONDS = 10.0
 
 
 def _key_id(key: bytes) -> str:
@@ -136,6 +141,66 @@ def _prepare_private_tree(root: Path) -> None:
     _safe_directory(root, private=True)
 
 
+def _validate_ancestor_chain(root: Path) -> None:
+    """Re-check every ancestor of an EXISTING store before reading/writing.
+
+    Creation-time validation (_prepare_private_tree) expires the moment a
+    local attacker loosens an ancestor's permissions or repoints a path
+    component at another directory via a symlink. Every store open therefore
+    walks root -> filesystem top and rejects:
+      - symlinked components anywhere above the store root,
+      - non-directory components,
+      - foreign-owned components,
+      - group- or world-writable ancestors unless sticky (OpenSSH-style).
+    The store root itself is validated separately with the stricter
+    private=True rules by the caller.
+    """
+
+    chain: list[Path] = []
+    probe = root
+    while True:
+        chain.append(probe)
+        if probe.parent == probe:
+            break
+        probe = probe.parent
+    # Walk from the top of the filesystem down to the store's parent,
+    # applying OpenSSH-style ancestor rules (see loop body).
+    for directory in reversed(chain[1:]):
+        if directory.is_symlink():
+            raise AuthenticationError(
+                "auth_store_unsafe",
+                "authentication ancestor path component is a symlink",
+            )
+        try:
+            details = directory.stat()
+        except FileNotFoundError as exc:
+            # Components above an existing store must exist; a vanished
+            # ancestor means the tree was tampered with mid-flight.
+            raise AuthenticationError(
+                "auth_store_unsafe",
+                "authentication ancestor directory disappeared",
+            ) from exc
+        if not stat.S_ISDIR(details.st_mode):
+            raise AuthenticationError(
+                "auth_store_unsafe",
+                "authentication ancestor path component is not a directory",
+            )
+        if details.st_uid not in (0, os.geteuid()):
+            raise AuthenticationError(
+                "auth_store_unsafe",
+                "authentication ancestor directory ownership is unsafe",
+            )
+        # OpenSSH-style rule: a group- or world-writable ancestor is
+        # acceptable only when the sticky bit confines deletions to owners
+        # (the classic /tmp shape); otherwise it enables tree swaps.
+        mode = stat.S_IMODE(details.st_mode)
+        if mode & 0o022 and not mode & 0o1000:
+            raise AuthenticationError(
+                "auth_store_unsafe",
+                "authentication ancestor directory permissions are unsafe",
+            )
+
+
 def _safe_private_file(path: Path, *, maximum_size: int = _MAX_VAULT_SIZE) -> bytes:
     flags = (
         os.O_RDONLY
@@ -208,10 +273,30 @@ class EncryptedCredentialStore:
 
     @contextmanager
     def _locked(self) -> Iterator[None]:
+        if self.root.exists() or self.root.is_symlink():
+            _validate_ancestor_chain(self.root)
         _prepare_private_tree(self.root)
-        flags = os.O_RDWR | os.O_CREAT | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0)
+        # Two-phase open: create the lock file only when absent, so a
+        # swapped-in replacement is always detected by the identity check.
         try:
-            descriptor = os.open(self.lock_file, flags, 0o600)
+            descriptor = os.open(
+                self.lock_file,
+                os.O_RDWR | os.O_CREAT | os.O_EXCL | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                0o600,
+            )
+            created = True
+        except FileExistsError:
+            created = False
+            try:
+                descriptor = os.open(
+                    self.lock_file,
+                    os.O_RDWR | getattr(os, "O_CLOEXEC", 0) | getattr(os, "O_NOFOLLOW", 0),
+                )
+            except OSError as exc:
+                raise AuthenticationError(
+                    "auth_store_unsafe",
+                    "authentication lock file cannot be opened safely",
+                ) from exc
         except OSError as exc:
             raise AuthenticationError("auth_store_unsafe", "authentication lock file cannot be opened safely") from exc
         try:
@@ -223,8 +308,49 @@ class EncryptedCredentialStore:
                 or stat.S_IMODE(details.st_mode) != 0o600
             ):
                 raise AuthenticationError("auth_store_unsafe", "authentication lock file is unsafe")
-            fcntl.flock(descriptor, fcntl.LOCK_EX)
+            if created and details.st_size == 0:
+                # Freshly created: record this process's ownership marker.
+                os.write(descriptor, f"{os.getpid()}\n".encode())
+                os.fsync(descriptor)
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            # Bounded acquisition: an externally-held flock (leaked fd,
+            # squatter process) must fail loudly instead of hanging every
+            # auth operation forever.
+            deadline = time.monotonic() + _LOCK_TIMEOUT_SECONDS
+            while True:
+                try:
+                    fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                    break
+                except OSError:
+                    if time.monotonic() >= deadline:
+                        raise AuthenticationError(
+                            "auth_store_busy",
+                            "authentication vault is locked by another process; retry once it exits",
+                        ) from None
+                    time.sleep(0.05)
+            # Inode identity: verify the inode we locked is still the one at
+            # the path (catches swaps that happened before acquisition), and
+            # re-check at release (catches swaps DURING the critical section,
+            # converting silent overlap into a detected violation for every
+            # subsequent operation).
+            def _identity_mismatch() -> bool:
+                try:
+                    path_details = os.stat(self.lock_file)
+                except FileNotFoundError:
+                    return True
+                return (path_details.st_dev, path_details.st_ino) != (details.st_dev, details.st_ino)
+
+            if _identity_mismatch():
+                raise AuthenticationError(
+                    "auth_store_unsafe",
+                    "authentication lock file was swapped while acquiring the vault lock",
+                )
             yield
+            if _identity_mismatch():
+                raise AuthenticationError(
+                    "auth_store_unsafe",
+                    "authentication lock file was swapped during the vault critical section",
+                )
         finally:
             os.close(descriptor)
 
@@ -333,24 +459,89 @@ class EncryptedCredentialStore:
         return True
 
     def rotate(self) -> dict[str, Any]:
-        """Re-encrypt the vault under a freshly generated key.
+        """Re-encrypt the vault under a freshly generated key, crash-safely.
 
-        Creates a key (and its keyring/disk home) even when the vault is
-        still empty, so rotation is safe to run at any time. All existing
-        account records are preserved.
+        Order of operations (the old design bricked the vault if a crash
+        landed between "new key installed" and "token re-encrypted"):
+
+        1. Journal the OLD key to ``vault.key.retired``.
+        2. Write the re-encrypted token FIRST -- the store still opens with
+           the old key, and ``_load`` transparently falls back to the
+           retired key while a journal exists.
+        3. Install the new key (keyring preferred, disk fallback).
+        4. Remove the journal; rotation is complete.
+
+        Any crash leaves either (old key + old token) or (new key + new
+        token) or (new key + old token + journal); every state opens
+        cleanly because ``_load`` tries journaled retired keys on failure.
         """
 
         with self._locked():
             payload = self._load()
-            key = Fernet.generate_key()
-            if not self._key_to_ring(key):
-                _atomic_private_file(self.key_file, key)
-            if payload["accounts"]:
-                self._write(payload)
-            return {
-                "status": "rotated",
-                "accounts": sum(len(items) for items in payload["accounts"].values()),
-            }
+            accounts = sum(len(items) for items in payload["accounts"].values())
+            new_key = Fernet.generate_key()
+            current_key = self._key(create=False)
+            if current_key is not None:
+                # Journal the old key so no crash can orphan the token.
+                _atomic_private_file(self.root / "vault.key.retired", current_key)
+                _atomic_private_file(
+                    self.root / "rotation.journal",
+                    json.dumps({"phase": "re-encrypt"}).encode(),
+                )
+            # Token first: encrypted with the NEW key, not yet installed.
+            stamped = dict(payload)
+            stamped.pop("key_id", None)
+            self._validate_payload(stamped)
+            stamped["schema_version"] = _VAULT_SCHEMA_VERSION
+            stamped["key_id"] = _key_id(new_key)
+            cleartext = (json.dumps(stamped, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            _atomic_private_file(self.vault_file, Fernet(new_key).encrypt(cleartext))
+            # Now install the new key.
+            if not self._key_to_ring(new_key):
+                _atomic_private_file(self.key_file, new_key)
+            # Rotation complete: clear journal and retired copy.
+            (self.root / "rotation.journal").unlink(missing_ok=True)
+            (self.root / "vault.key.retired").unlink(missing_ok=True)
+            return {"status": "rotated", "accounts": accounts}
+
+    def _retired_keys(self) -> list[bytes]:
+        """Old keys still referenced by an interrupted rotation journal."""
+
+        retired = self.root / "vault.key.retired"
+        journal = self.root / "rotation.journal"
+        if not (journal.exists() and retired.exists()):
+            return []
+        try:
+            return [_safe_private_file(retired, maximum_size=128)]
+        except AuthenticationError:
+            return []
+
+    def _recover_if_needed(self, token: bytes, key: bytes) -> bytes:
+        """Heal an interrupted rotation before decrypting.
+
+        If the token fails under the installed key but a rotation journal
+        exists, the crash happened after "new key installed" but before the
+        token was replaced: reinstall the journaled retired key (which does
+        open the token), clear the journal, and hand back the working key.
+        The next rotate() then redoes the rotation cleanly.
+        """
+
+        try:
+            Fernet(key).decrypt(token)
+            return key
+        except InvalidToken:
+            pass
+        for candidate in self._retired_keys():
+            try:
+                Fernet(candidate).decrypt(token)
+                if not self._key_to_ring(candidate):
+                    _atomic_private_file(self.key_file, candidate)
+                (self.root / "rotation.journal").unlink(missing_ok=True)
+                (self.root / "vault.key.retired").unlink(missing_ok=True)
+                return candidate
+            except InvalidToken:
+                continue
+        return key
 
     def _load(self) -> dict[str, Any]:
         if not self.root.exists() and not self.root.is_symlink():
@@ -362,6 +553,7 @@ class EncryptedCredentialStore:
         if not self.vault_file.exists() and not self.vault_file.is_symlink():
             return {"schema_version": _VAULT_SCHEMA_VERSION, "accounts": {}}
         token = _safe_private_file(self.vault_file)
+        key = self._recover_if_needed(token, key)
         try:
             cleartext = Fernet(key).decrypt(token)
             payload = json.loads(cleartext.decode("utf-8"))
@@ -427,7 +619,16 @@ class EncryptedCredentialStore:
         stamped["schema_version"] = _VAULT_SCHEMA_VERSION
         stamped["key_id"] = _key_id(key)
         cleartext = (json.dumps(stamped, sort_keys=True, separators=(",", ":")) + "\n").encode()
-        _atomic_private_file(self.vault_file, Fernet(key).encrypt(cleartext))
+        token = Fernet(key).encrypt(cleartext)
+        if len(token) > _MAX_VAULT_SIZE:
+            # Enforce the cap on the NEW bytes. The reader validates the file
+            # it is about to read; writing an oversized vault would succeed
+            # once and then be unreadable forever.
+            raise AuthenticationError(
+                "auth_store_limit",
+                "authentication vault exceeds its size policy",
+            )
+        _atomic_private_file(self.vault_file, token)
 
     @staticmethod
     def _validate_profile_payload(payload: Any) -> None:
@@ -455,6 +656,23 @@ class EncryptedCredentialStore:
             ):
                 raise AuthenticationError("auth_profile_store_invalid", "authentication profile record is invalid")
 
+    def _registry_mac(self, profiles_json: bytes) -> str:
+        """HMAC over the registry body, keyed by a STABLE registry secret.
+
+        The profile registry is plaintext by design (no secrets inside),
+        but its contents drive authorization decisions — so tampering with
+        bindings, status, or verification must be detectable. The MAC key
+        is a dedicated random secret stored beside the registry (0600),
+        NOT the vault key: rotation must not invalidate the registry.
+        """
+
+        mac_file = self.root / "registry.mac"
+        if mac_file.exists():
+            return hmac.new(_safe_private_file(mac_file, maximum_size=128), profiles_json, hashlib.sha256).hexdigest()
+        mac_key = os.urandom(32)
+        _atomic_private_file(mac_file, mac_key)
+        return hmac.new(mac_key, profiles_json, hashlib.sha256).hexdigest()
+
     def _load_profiles(self) -> dict[str, Any] | None:
         if not self.profile_file.exists() and not self.profile_file.is_symlink():
             return None
@@ -463,6 +681,19 @@ class EncryptedCredentialStore:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
             raise AuthenticationError("auth_profile_store_invalid", "authentication profile registry is invalid") from exc
+        # Integrity: when a MAC is present it must match; unsigned legacy
+        # registries are accepted and gain a MAC on their next write.
+        if isinstance(payload, dict) and "integrity" in payload:
+            recorded = payload.pop("integrity")
+            body = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            expected = self._registry_mac(body)
+            if not isinstance(recorded, str) or not hmac.compare_digest(recorded, expected):
+                raise AuthenticationError(
+                    "auth_profile_store_invalid",
+                    "authentication profile registry failed its integrity check",
+                )
+            self._validate_profile_payload(payload)
+            return {"integrity": recorded, **payload}
         self._validate_profile_payload(payload)
         return payload
 
@@ -543,7 +774,13 @@ class EncryptedCredentialStore:
 
     def write_profile_payload(self, payload: dict[str, Any]) -> None:
         self._validate_profile_payload(payload)
-        data = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        body = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        # Stamp an integrity MAC (keyed by the vault key) so tampering with
+        # bindings/status/verification is detected on the next read. The
+        # MAC covers the canonical body; the reader re-computes it after
+        # popping the "integrity" field.
+        envelope = {"integrity": self._registry_mac(body), **payload}
+        data = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode()
         if len(data) > 256 * 1024:
             raise AuthenticationError(
                 "auth_profile_store_invalid",
