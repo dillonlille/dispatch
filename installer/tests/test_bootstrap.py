@@ -320,3 +320,141 @@ def test_vercel_bootstrap_builder_rejects_symlinked_output_ancestor(tmp_path: Pa
     assert "ancestor is unsafe" in completed.stderr
     assert not output.exists()
     assert not any(external.iterdir())
+
+
+def _write_executable(path: Path, body: str) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text("#!/bin/sh\n" + body, encoding="utf-8")
+    path.chmod(0o755)
+
+
+def _fake_git_body(main_sha: str) -> str:
+    # install.sh's dev-channel gate runs `git ls-remote <url> refs/heads/main`
+    # and compares the reported SHA against the installed commit.
+    return (
+        'if [ "$1" = "ls-remote" ]; then\n'
+        f'    printf \'%s\\trefs/heads/main\\n\' "{main_sha}"\n'
+        "    exit 0\n"
+        "fi\n"
+        "exit 0\n"
+    )
+
+
+def _installed_fixture(tmp_path: Path, *, launcher_body: str) -> Path:
+    """A private HOME with an installed dev-channel Dispatch and a fake launcher."""
+
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    root = tmp_path / "dispatch-home"
+    root.mkdir(mode=0o700)
+    (root / "installation.json").write_text(
+        json.dumps({"commit": "a" * 40, "channel": "dev", "ref": "main"}),
+        encoding="utf-8",
+    )
+    _write_executable(home / ".local" / "bin" / "dispatch", launcher_body)
+    return home
+
+
+def _run_delegated_bootstrap(
+    home: Path,
+    fake_bin: Path,
+    *,
+    main_sha: str,
+    extra_env: dict[str, str] | None = None,
+) -> subprocess.CompletedProcess[str]:
+    """Run install.sh against the fake installed Dispatch (delegation path)."""
+
+    _write_executable(fake_bin / "git", _fake_git_body(main_sha))
+    environment = dict(
+        os.environ,
+        HOME=str(home),
+        DISPATCH_HOME=str(home.parent / "dispatch-home"),
+        PATH=f"{fake_bin}:{os.environ['PATH']}",
+        **(extra_env or {}),
+    )
+    return subprocess.run(
+        ("sh", str(ROOT / "install.sh"), "--channel", "dev"),
+        check=False,
+        capture_output=True,
+        text=True,
+        env=environment,
+        timeout=120,
+        start_new_session=True,  # detached: no controlling tty, offer_setup must skip
+    )
+
+
+def test_root_bootstrap_gate_failure_points_at_force_not_broken_repair(tmp_path: Path) -> None:
+    """Regression: the gate-failure hint suggested `dispatch repair`, but the
+    installed updater reruns the very gate that failed, so the suggestion could
+    never succeed. The hint must send the user to `install.sh --force`, which
+    re-clones and runs the fresh installer instead of the broken installed one."""
+
+    home = _installed_fixture(
+        tmp_path,
+        launcher_body=(
+            "printf '%s\\n' '{\"ok\":false,\"action\":\"update\",\"status\":\"error\","
+            "\"data\":{},\"error\":{\"code\":\"core_help_gate_failed\","
+            "\"message\":\"staged Core failed its non-mutating verification run: "
+            "env: /tmp/x/venv: Permission denied\"}}'\n"
+            "exit 1\n"
+        ),
+    )
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+
+    completed = _run_delegated_bootstrap(home, fake_bin, main_sha="b" * 40)
+
+    assert completed.returncode != 0
+    assert "core_help_gate_failed" in completed.stderr
+    assert "install.sh --force" in completed.stderr
+    assert "dispatch repair" not in completed.stderr
+
+
+def test_root_bootstrap_generic_delegation_failure_suggests_repair_yes(tmp_path: Path) -> None:
+    """Regression: the generic failure hint suggested bare `dispatch repair`,
+    which the CLI rejects with confirmation_required because repair is a
+    mutating action that requires --yes."""
+
+    home = _installed_fixture(
+        tmp_path,
+        launcher_body=(
+            "printf '%s\\n' '{\"ok\":false,\"action\":\"update\",\"status\":\"error\","
+            "\"data\":{},\"error\":{\"code\":\"venv_probe_failed\","
+            "\"message\":\"the updater reported a generic failure\"}}'\n"
+            "exit 1\n"
+        ),
+    )
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+
+    completed = _run_delegated_bootstrap(home, fake_bin, main_sha="b" * 40)
+
+    assert completed.returncode != 0
+    assert "venv_probe_failed" in completed.stderr
+    assert "repair --yes" in completed.stderr
+    assert "install.sh --force" in completed.stderr
+
+
+def test_root_bootstrap_successful_delegation_reports_ready(tmp_path: Path) -> None:
+    """The delegation happy path: the installed CLI succeeds, install.sh reports
+    ready without falling through to a fresh install."""
+
+    home = _installed_fixture(
+        tmp_path,
+        launcher_body='printf \'%s\\n\' "$@" >> "$DISPATCH_TEST_CALLS"\nexit 0\n',
+    )
+    fake_bin = tmp_path / "fake-bin"
+    fake_bin.mkdir()
+    calls_file = tmp_path / "launcher-calls.txt"
+    calls_file.touch()
+
+    completed = _run_delegated_bootstrap(
+        home,
+        fake_bin,
+        main_sha="b" * 40,
+        extra_env={"DISPATCH_TEST_CALLS": str(calls_file)},
+    )
+
+    assert completed.returncode == 0, completed.stderr
+    assert "Dispatch is ready" in completed.stdout
+    assert calls_file.read_text(encoding="utf-8").splitlines() == ["update", "--channel", "dev"]
