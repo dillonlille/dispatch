@@ -10,10 +10,14 @@ Authentication is a Dispatch Core feature, not a plugin. Operators work with glo
 dispatch auth list
 dispatch auth add amazon-work --provider amazon
 dispatch auth status amazon-work
+dispatch auth select amazon-work --plugin companion-bridge
+dispatch auth deselect --plugin companion-bridge
 dispatch auth remove amazon-work --yes
 ```
 
-`add` reads profile-type fields through hidden terminal prompts. Secret values are never accepted as arguments, JSON, environment values, logs, receipts, or output. The public profile types are **Amazon Operations** (`amazon`) and **Paycom** (`paycom`); their URLs, login policy, and credential schemas remain internal Core authority. Profile names are immutable in v1. To rotate credentials, create a new named profile, select it during setup, then remove the unreferenced old profile; this also creates fresh plugin-isolated browser state.
+`add` reads profile-type fields through hidden terminal prompts. Secret values are never accepted as arguments, JSON, environment values, logs, receipts, or output. Profile names follow Dispatch's lowercase slug rule (letters, digits, hyphens; must start with a letter) — interactive setup validates the name and re-asks instead of failing. The public profile types are **Amazon Operations** (`amazon`) and **Paycom** (`paycom`); their URLs, login policy, and credential schemas remain internal Core authority. Profile names are immutable in v1. To rotate credentials, create a new named profile, select it during setup, then remove the unreferenced old profile; this also creates fresh plugin-isolated browser state.
+
+A successful bounded login marks the profile `verified`; profiles start as `unverified` until a live login is proven.
 
 Interactive `dispatch setup` asks for a compatible existing profile or a new profile after exact plugin selection succeeds. `--yes`, JSON, and other noninteractive setup paths never prompt for secrets; they return a safe `pending_requirements` result directing the operator back to interactive setup when an authenticated plugin has no selected enrolled profile.
 

@@ -221,26 +221,72 @@ class EncryptedCredentialStore:
     def _key(self, *, create: bool) -> bytes | None:
         key_present = self.key_file.exists() or self.key_file.is_symlink()
         vault_present = self.vault_file.exists() or self.vault_file.is_symlink()
-        if vault_present and not key_present:
-            # The key may live in the OS keyring instead of on disk.
+        if key_present:
+            disk_key = _safe_private_file(self.key_file, maximum_size=128)
+            try:
+                Fernet(disk_key)
+            except (TypeError, ValueError) as exc:
+                raise AuthenticationError("auth_store_invalid", "authentication vault key is invalid") from exc
+            if vault_present and self._ring_has_key():
+                ring_key = self._key_from_ring()
+                if ring_key is not None and ring_key != disk_key:
+                    # Two different keys exist; the disk copy wins today, but a
+                    # silent divergence is how vaults get bricked. Fail loudly.
+                    raise AuthenticationError(
+                        "auth_store_ambiguous",
+                        "vault key exists both in the OS keyring and on disk with different values",
+                    )
+            return disk_key
+        if vault_present:
+            if not self._ring_available():
+                raise AuthenticationError(
+                    "auth_store_key_unavailable",
+                    "vault key lives in the OS keyring, which is currently unreachable",
+                )
             ring_key = self._key_from_ring()
             if ring_key is not None:
                 return ring_key
-        if key_present:
-            key = _safe_private_file(self.key_file, maximum_size=128)
-            try:
-                Fernet(key)
-            except (TypeError, ValueError) as exc:
-                raise AuthenticationError("auth_store_invalid", "authentication vault key is invalid") from exc
-            return key
-        if vault_present:
-            raise AuthenticationError("auth_store_invalid", "authentication vault key is missing")
+            raise AuthenticationError(
+                "auth_store_invalid",
+                "authentication vault key is missing from the OS keyring",
+            )
         if not create:
             return None
         key = Fernet.generate_key()
         if not self._key_to_ring(key):
             _atomic_private_file(self.key_file, key)
         return key
+
+    @staticmethod
+    def _ring_available() -> bool:
+        """True when an OS keyring is reachable at all.
+
+        Distinguishes "no usable keyring exists" from "the keyring is
+        temporarily unreachable", so a dbus hiccup cannot masquerade as data
+        loss.
+        """
+
+        try:
+            import importlib
+
+            keyring_store = importlib.import_module("authentication.keyring")
+            return keyring_store.available()
+        except Exception:
+            return False
+
+    @classmethod
+    def _ring_has_key(cls) -> bool:
+        """True when the OS keyring is available AND holds a vault key."""
+
+        try:
+            import importlib
+
+            keyring_store = importlib.import_module("authentication.keyring")
+            if not keyring_store.available():
+                return False
+            return keyring_store.load() is not None
+        except Exception:
+            return False
 
     @staticmethod
     def _key_from_ring() -> bytes | None:
@@ -275,6 +321,26 @@ class EncryptedCredentialStore:
             return False
         self.key_file.unlink(missing_ok=True)
         return True
+
+    def rotate(self) -> dict[str, Any]:
+        """Re-encrypt the vault under a freshly generated key.
+
+        Creates a key (and its keyring/disk home) even when the vault is
+        still empty, so rotation is safe to run at any time. All existing
+        account records are preserved.
+        """
+
+        with self._locked():
+            payload = self._load()
+            key = Fernet.generate_key()
+            if not self._key_to_ring(key):
+                _atomic_private_file(self.key_file, key)
+            if payload["accounts"]:
+                self._write(payload)
+            return {
+                "status": "rotated",
+                "accounts": sum(len(items) for items in payload["accounts"].values()),
+            }
 
     def _load(self) -> dict[str, Any]:
         if not self.root.exists() and not self.root.is_symlink():
@@ -441,20 +507,28 @@ class EncryptedCredentialStore:
         with self._locked():
             vault = self._load()
             registry = self._reconciled_profiles(vault, self._load_profiles())
+            # Existence is enforced here, under the lock, so two concurrent
+            # enrollments can never silently overwrite one another (the
+            # manager-level pre-check alone is advisory).
             existing = registry["profiles"].get(profile)
-            if existing is not None and existing["provider"] != provider:
-                raise AuthenticationError("profile_provider_mismatch", "profile is enrolled for another provider")
+            if existing is not None:
+                raise AuthenticationError("profile_exists", "authentication profile already exists")
+            for record in registry["profiles"].values():
+                if record.get("provider") == provider and record.get("account_alias") == account_alias:
+                    raise AuthenticationError(
+                        "profile_exists",
+                        "credential account is already enrolled as another profile",
+                    )
             accounts = vault["accounts"].setdefault(provider, {})
             accounts[account_alias] = {"updated_at": _utc_now(), "values": dict(values)}
             self._write(vault)
-            prior_bindings = [] if existing is None else list(existing["bindings"])
             registry["profiles"][profile] = {
                 "provider": provider,
                 "account_alias": account_alias,
                 "status": "enrolled",
                 "verification": "unverified",
                 "updated_at": _utc_now(),
-                "bindings": prior_bindings,
+                "bindings": [],
             }
             self.write_profile_payload(registry)
 
@@ -536,9 +610,16 @@ class EncryptedCredentialStore:
             return True, record
 
     def put(self, realm_id: str, account_alias: str, values: Mapping[str, str]) -> None:
+        _realm(realm_id)
+        _require_slug(account_alias, "account_alias")
         with self._locked():
             payload = self._load()
             accounts = payload["accounts"].setdefault(realm_id, {})
+            if account_alias in accounts:
+                raise AuthenticationError(
+                    "profile_exists",
+                    "credential account already exists; create and select a new named profile",
+                )
             accounts[account_alias] = {"updated_at": _utc_now(), "values": dict(values)}
             self._write(payload)
 
@@ -724,9 +805,9 @@ class AuthenticationManager:
                 raise AuthenticationError("invalid_credentials", "a credential value is empty or invalid")
             normalized[name] = value
         existing = self._store.profile_payload().get("profiles", {}).get(profile)
-        if existing is not None and existing["provider"] != provider:
-            raise AuthenticationError("profile_provider_mismatch", "profile is enrolled for another provider")
         if existing is not None:
+            # The store enforces this again under its lock; the early check
+            # just gives the common case a precise error before prompts/IO.
             raise AuthenticationError("profile_exists", "authentication profile already exists")
         account_alias = profile
         self._store.put_profile(profile, provider, account_alias, normalized)
@@ -751,6 +832,44 @@ class AuthenticationManager:
             "status": "removed" if removed else "not_enrolled",
         }
 
+    def select_plugin_profile(self, profile: str, plugin_id: str, provider: str) -> dict[str, Any]:
+        """Bind an enrolled profile to a plugin (one profile per plugin)."""
+
+        _require_slug(profile, "profile")
+        self._require_plugin_provider(plugin_id, provider)
+        updated = self._store.select_profile_for_plugin(profile, plugin_id, _provider(provider).id)
+        return self._public_profile(profile, updated)
+
+    def clear_plugin_profile(self, plugin_id: str) -> dict[str, Any]:
+        """Release a plugin's profile binding so its profile can be removed."""
+
+        _require_slug(plugin_id, "plugin_id")
+        with self._store._locked():
+            vault = self._store._load()
+            registry = self._store._reconciled_profiles(vault, self._store._load_profiles())
+            released = None
+            now = _utc_now()
+            for record in registry["profiles"].values():
+                if plugin_id in record["bindings"]:
+                    record["bindings"] = [value for value in record["bindings"] if value != plugin_id]
+                    record["updated_at"] = now
+                    if released is None:
+                        released = dict(record)
+                        released.pop("bindings", None)
+            if released is None:
+                raise AuthenticationError(
+                    "profile_not_selected",
+                    f"plugin {plugin_id} has no selected authentication profile",
+                )
+            self._store.write_profile_payload(registry)
+        return {
+            "profile": None,
+            "type": None,
+            "type_name": None,
+            "status": "released",
+            "released": released,
+        }
+
     def for_plugin(self, plugin_id: str, provider: str, profile: str) -> "PluginAuthenticationBroker":
         self._require_plugin_provider(plugin_id, provider)
         provider = _provider(provider).id
@@ -762,6 +881,33 @@ class AuthenticationManager:
             )
         self.account_alias_for_profile(profile, provider)
         return PluginAuthenticationBroker(self._paths, plugin_id, provider, profile)
+
+    def _mark_profile_verified(self, provider: str, account_alias: str) -> None:
+        """Flip a profile's verification to 'verified' after a live login.
+
+        Best-effort and idempotent: a successful bounded login against the
+        realm is the strongest acceptance evidence Dispatch has, so the
+        profile registry reflects it. Failures here never mask the result.
+        """
+
+        try:
+            with self._store._locked():
+                vault = self._store._load()
+                registry = self._store._reconciled_profiles(vault, self._store._load_profiles())
+                changed = False
+                for record in registry["profiles"].values():
+                    if (
+                        record.get("provider") == provider
+                        and record.get("account_alias") == account_alias
+                        and record.get("verification") != "verified"
+                    ):
+                        record["verification"] = "verified"
+                        record["updated_at"] = _utc_now()
+                        changed = True
+                if changed:
+                    self._store.write_profile_payload(registry)
+        except AuthenticationError:
+            return
 
     def authenticate_profile(self, session: ManagedBrowserSession, profile: str) -> "AuthenticationResult":
         provider = _realm(session.realm).id
@@ -779,15 +925,25 @@ class AuthenticationManager:
             _realm(realm_id)
         configured = self._store.configured_accounts()
         selected = [value for value in DEFAULT_AUTH_REALMS if realm_id is None or value.id == realm_id]
+        selected_ids = {value.id for value in selected}
+        any_configured = any(realm in selected_ids for (realm, _alias) in configured)
         return {
             "backend": "ready",
-            "configured": any((value.id, account_alias) in configured for value in selected),
+            # True when the selected realms hold ANY enrolled account, so a
+            # vault holding only named-profile records (alias = profile slug)
+            # still reports as configured. The per-realm list below stays
+            # pinned to the explicitly requested alias.
+            "configured": any((value.id, account_alias) in configured for value in selected) or any_configured,
             "account_alias": account_alias,
             "realms": [
                 {
                     "id": value.id,
                     "landing_url": value.landing_url,
-                    "status": "configured" if (value.id, account_alias) in configured else "not_enrolled",
+                    "status": "configured" if (value.id, account_alias) in configured else (
+                        "configured_named_only"
+                        if any(realm == value.id for (realm, _alias) in configured)
+                        else "not_enrolled"
+                    ),
                 }
                 for value in selected
             ],
@@ -846,7 +1002,10 @@ class AuthenticationManager:
     ) -> "AuthenticationResult":
         from .workflow import authenticate
 
-        return authenticate(self, session, account_alias)
+        result = authenticate(self, session, account_alias)
+        if result.authenticated:
+            self._mark_profile_verified(_realm(session.realm).id, account_alias)
+        return result
 
     def resume(
         self,
@@ -855,7 +1014,10 @@ class AuthenticationManager:
     ) -> "AuthenticationResult":
         from .workflow import authenticate
 
-        return authenticate(self, session, account_alias, resume=True)
+        result = authenticate(self, session, account_alias, resume=True)
+        if result.authenticated:
+            self._mark_profile_verified(_realm(session.realm).id, account_alias)
+        return result
 
     def remove(self, realm_id: str, account_alias: str = "default") -> dict[str, Any]:
         _realm(realm_id)
@@ -877,6 +1039,11 @@ class AuthenticationManager:
             "account_alias": account_alias,
             "status": "removed" if removed else "not_enrolled",
         }
+
+    def rotate_vault(self) -> dict[str, Any]:
+        """Rotate the vault key, re-encrypting every stored credential."""
+
+        return self._store.rotate()
 
 
 class PluginAuthenticationBroker:

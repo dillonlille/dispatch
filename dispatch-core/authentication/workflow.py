@@ -245,21 +245,39 @@ def authenticate(
         if state in {"unapproved_page", "unknown_challenge"}:
             return _result(session, account_alias, "manual_verification_required", manual_action="inspect_page")
         if state == "logged_out" and not submitted_login:
-            if session.realm == "amazon-operations":
-                values = (credential.values["username"], credential.values["password"])
-                submitted_login = _submit_login(page, AMAZON_LOGIN, values)
-            else:
-                values = (
-                    credential.values["client_code"],
-                    credential.values["username"],
-                    credential.values["password"],
-                )
-                submitted_login = _submit_login(page, PAYCOM_LOGIN, values)
+            try:
+                if session.realm == "amazon-operations":
+                    values = (credential.values["username"], credential.values["password"])
+                    submitted_login = _submit_login(page, AMAZON_LOGIN, values)
+                else:
+                    values = (
+                        credential.values["client_code"],
+                        credential.values["username"],
+                        credential.values["password"],
+                    )
+                    submitted_login = _submit_login(page, PAYCOM_LOGIN, values)
+            except KeyError as exc:
+                # The vault record predates a catalog change; never leak a raw
+                # KeyError from the bounded workflow.
+                from . import AuthenticationError
+
+                raise AuthenticationError(
+                    "auth_store_invalid",
+                    "stored credentials do not match the installed provider policy",
+                ) from exc
             if not submitted_login:
                 return _result(session, account_alias, "auth_unavailable")
             continue
         if state == "security_pins_required" and not submitted_challenge:
-            values = {str(index): credential.values[f"security_pin_{index}"] for index in challenge_indices}
+            try:
+                values = {str(index): credential.values[f"security_pin_{index}"] for index in challenge_indices}
+            except KeyError as exc:
+                from . import AuthenticationError
+
+                raise AuthenticationError(
+                    "auth_store_invalid",
+                    "stored credentials do not match the installed provider policy",
+                ) from exc
             try:
                 outcome = page.evaluate(
                     _PAYCOM_CHALLENGE_SCRIPT,

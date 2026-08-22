@@ -54,13 +54,33 @@ def test_named_profiles_are_lowercase_global_and_provider_compatible(tmp_path: P
     assert mismatch.value.code == "profile_provider_mismatch"
     with pytest.raises(AuthenticationError) as duplicate:
         authentication.enroll_profile("operations", "paycom-client", paycom_values())
-    assert duplicate.value.code == "profile_provider_mismatch"
+    # A taken profile name always reports profile_exists, regardless of the
+    # provider involved; existence is enforced atomically inside the store.
+    assert duplicate.value.code == "profile_exists"
     with pytest.raises(AuthenticationError) as existing:
         authentication.enroll_profile("operations", "amazon-operations", amazon_values())
     assert existing.value.code == "profile_exists"
     with pytest.raises(AuthenticationError) as invalid:
         authentication.enroll_profile("Not-A-Slug", "amazon-operations", amazon_values())
     assert invalid.value.code == "invalid_auth_request"
+
+
+def test_profile_enrollment_is_atomic_inside_the_store_lock(tmp_path: Path) -> None:
+    authentication = manager(tmp_path)
+    store = authentication._store
+
+    # First enrollment wins...
+    store.put_profile("race", "amazon-operations", "race", amazon_values())
+    # ...a second enrollment of the same profile fails closed inside the
+    # locked section, even when the manager-level advisory check is bypassed
+    # by a concurrent caller (regression for the last-writer-wins race).
+    with pytest.raises(AuthenticationError) as conflict:
+        store.put_profile("race", "paycom-client", "race", paycom_values())
+    assert conflict.value.code == "profile_exists"
+    # The same credential account also cannot be enrolled under a new name.
+    with pytest.raises(AuthenticationError) as alias:
+        store.put_profile("other", "amazon-operations", "race", amazon_values())
+    assert alias.value.code == "profile_exists"
 
 
 def test_profile_registry_is_private_encrypted_and_secret_free(tmp_path: Path) -> None:

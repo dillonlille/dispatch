@@ -131,6 +131,41 @@ def test_profile_cli_lists_enrolled_profiles_with_public_type_names(monkeypatch,
     assert listed["data"]["profiles"][0]["type_name"] == "Amazon Operations"
 
 
+def test_auth_select_and_deselect_round_trip_unblocks_removal(monkeypatch, tmp_path, capsys) -> None:
+    home = tmp_path / "home"
+    home.mkdir(mode=0o700)
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("DISPATCH_CODE_ROOT", str(Path(__file__).resolve().parents[3]))
+    secrets = iter(["synthetic-user", "synthetic-password"])
+    monkeypatch.setattr(command_interface.getpass, "getpass", lambda _prompt: next(secrets))
+
+    assert main(["auth", "add", "amazon-main", "--provider", "amazon"]) == 0
+    capsys.readouterr()
+    # Selecting a profile for a plugin works without re-typing the provider.
+    assert main(["auth", "select", "amazon-main", "--plugin", "companion-bridge"]) == 0
+    selected = json.loads(capsys.readouterr().out)
+    assert selected["data"]["profile"] == "amazon-main"
+    assert selected["data"]["type"] == "amazon"
+
+    # A bound profile cannot be removed...
+    monkeypatch.setattr(
+        command_interface.getpass,
+        "getpass",
+        lambda _prompt: (_ for _ in ()).throw(AssertionError("removal must not prompt")),
+    )
+    assert main(["auth", "remove", "amazon-main", "--yes"]) == 1
+    blocked = json.loads(capsys.readouterr().out)
+    assert blocked["error"]["code"] == "profile_in_use"
+
+    # ...but deselect releases the binding and removal then succeeds.
+    assert main(["auth", "deselect", "--plugin", "companion-bridge"]) == 0
+    released = json.loads(capsys.readouterr().out)
+    assert released["data"]["status"] == "released"
+    assert main(["auth", "remove", "amazon-main", "--yes"]) == 0
+    removed = json.loads(capsys.readouterr().out)
+    assert removed["data"]["status"] == "removed"
+
+
 def test_noninteractive_auth_help_is_one_json_document(capsys) -> None:
     assert main(["auth", "list", "--help"], interactive=False) == 0
     captured = capsys.readouterr()

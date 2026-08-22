@@ -13,8 +13,6 @@ from typing import Any
 _SERVICE = "dispatch"
 _SCHEMA = "dispatch-vault-key-v1"
 
-_KEYRING_UNAVAILABLE = ("ImportError", "SecretServiceNotAvailableException")
-
 
 def _connection() -> Any:
     import secretstorage  # imported lazily: optional dependency

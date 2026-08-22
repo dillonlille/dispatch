@@ -201,12 +201,20 @@ class PluginServiceContext:
             if profile == "default" and hasattr(manager, "profile_for_plugin"):
                 try:
                     selected = manager.profile_for_plugin(self.plugin_id, provider)
-                except Exception:
-                    selected = profile
+                except Exception as exc:
+                    # Only fall back to the literal 'default' profile when the
+                    # plugin genuinely has no binding yet; any other failure
+                    # (orphaned store, ambiguous bindings) must surface.
+                    code = getattr(exc, "code", "")
+                    if code == "profile_required":
+                        selected = profile
+                    else:
+                        raise
             return scoped(self.plugin_id, provider, selected)
         except Exception as exc:
             code = getattr(exc, "code", "authentication_profile_required")
-            raise PluginRuntimeError(str(code), "selected authentication profile is not enrolled") from exc
+            message = str(exc) or "selected authentication profile is not enrolled"
+            raise PluginRuntimeError(str(code), message) from exc
 
 
     def close(self) -> None:
