@@ -245,9 +245,32 @@ def test_profile_registry_write_is_size_bounded(tmp_path: Path) -> None:
         "profiles": {f"profile-{index}": dict(record) for index in range(5000)},
     }
 
+    # The MAC key file is created on first use; give the store a valid home.
+    authentication._store.root.mkdir(parents=True, exist_ok=True, mode=0o700)
+
     with pytest.raises(AuthenticationError) as oversized:
         authentication._store.write_profile_payload(payload)  # type: ignore[attr-defined]
     assert oversized.value.code == "auth_profile_store_invalid"
+
+
+def test_registry_tampering_fails_integrity_check(tmp_path: Path) -> None:
+    """P6: the plaintext registry drives authorization decisions, so edits
+    to bindings/status/verification must be detected via its MAC."""
+    import json as json_module
+
+    authentication = manager(tmp_path)
+    authentication.enroll_profile("ops", "amazon-operations", amazon_values(), plugin_id="companion-bridge")
+    registry_file = authentication.store_root / "profiles.json"
+
+    # Same-user forges a 'verified' flag directly in the plaintext file.
+    data = json_module.loads(registry_file.read_bytes().decode())
+    data["profiles"]["ops"]["verification"] = "verified"
+    registry_file.write_bytes(json_module.dumps(data).encode())
+    os.chmod(registry_file, 0o600)
+
+    with pytest.raises(AuthenticationError) as failure:
+        authentication.profile_status("ops")
+    assert failure.value.code == "auth_profile_store_invalid"
 
 
 def test_vault_json_recursion_is_a_stable_store_error(monkeypatch, tmp_path: Path) -> None:

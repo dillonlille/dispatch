@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import fcntl
 import hashlib
+import hmac
 import json
 import os
 from pathlib import Path
@@ -553,6 +554,23 @@ class EncryptedCredentialStore:
             ):
                 raise AuthenticationError("auth_profile_store_invalid", "authentication profile record is invalid")
 
+    def _registry_mac(self, profiles_json: bytes) -> str:
+        """HMAC over the registry body, keyed by a STABLE registry secret.
+
+        The profile registry is plaintext by design (no secrets inside),
+        but its contents drive authorization decisions — so tampering with
+        bindings, status, or verification must be detectable. The MAC key
+        is a dedicated random secret stored beside the registry (0600),
+        NOT the vault key: rotation must not invalidate the registry.
+        """
+
+        mac_file = self.root / "registry.mac"
+        if mac_file.exists():
+            return hmac.new(_safe_private_file(mac_file, maximum_size=128), profiles_json, hashlib.sha256).hexdigest()
+        mac_key = os.urandom(32)
+        _atomic_private_file(mac_file, mac_key)
+        return hmac.new(mac_key, profiles_json, hashlib.sha256).hexdigest()
+
     def _load_profiles(self) -> dict[str, Any] | None:
         if not self.profile_file.exists() and not self.profile_file.is_symlink():
             return None
@@ -561,6 +579,19 @@ class EncryptedCredentialStore:
             payload = json.loads(raw.decode("utf-8"))
         except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
             raise AuthenticationError("auth_profile_store_invalid", "authentication profile registry is invalid") from exc
+        # Integrity: when a MAC is present it must match; unsigned legacy
+        # registries are accepted and gain a MAC on their next write.
+        if isinstance(payload, dict) and "integrity" in payload:
+            recorded = payload.pop("integrity")
+            body = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+            expected = self._registry_mac(body)
+            if not isinstance(recorded, str) or not hmac.compare_digest(recorded, expected):
+                raise AuthenticationError(
+                    "auth_profile_store_invalid",
+                    "authentication profile registry failed its integrity check",
+                )
+            self._validate_profile_payload(payload)
+            return {"integrity": recorded, **payload}
         self._validate_profile_payload(payload)
         return payload
 
@@ -641,7 +672,13 @@ class EncryptedCredentialStore:
 
     def write_profile_payload(self, payload: dict[str, Any]) -> None:
         self._validate_profile_payload(payload)
-        data = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        body = (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+        # Stamp an integrity MAC (keyed by the vault key) so tampering with
+        # bindings/status/verification is detected on the next read. The
+        # MAC covers the canonical body; the reader re-computes it after
+        # popping the "integrity" field.
+        envelope = {"integrity": self._registry_mac(body), **payload}
+        data = (json.dumps(envelope, sort_keys=True, separators=(",", ":")) + "\n").encode()
         if len(data) > 256 * 1024:
             raise AuthenticationError(
                 "auth_profile_store_invalid",
