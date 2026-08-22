@@ -57,6 +57,15 @@ def parser(*, prog: str = "dispatch-core") -> argparse.ArgumentParser:
     browser_actions.add_parser("doctor", help="diagnose managed browser readiness")
     browser_actions.add_parser("verify", help="verify the active managed browser generation")
     browser_actions.add_parser("reconcile", help="reconcile interrupted Browser Manager leases")
+    browser_prune = browser_actions.add_parser(
+        "prune", help="delete terminal Browser Manager lease rows older than a cutoff"
+    )
+    browser_prune.add_argument(
+        "--older-than-days",
+        type=int,
+        default=30,
+        help="remove terminal rows last updated more than this many days ago (default: 30)",
+    )
     browser_actions.add_parser("providers", help="list implemented and reserved provider contracts")
     service = subcommands.add_parser("service", help="run the foreground Core collection service")
     service.add_argument("--idle-seconds", type=float, default=1.0)
@@ -452,6 +461,24 @@ def _browser_result(args: argparse.Namespace) -> dict[str, Any]:
                 "leases": manager.status(),
                 "contains_secrets": False,
             },
+        )
+    if args.browser_action == "prune":
+        if not 1 <= int(args.older_than_days) <= 3650:
+            raise CommandInterfaceError("invalid_browser_request", "--older-than-days must be between 1 and 3650")
+        from datetime import datetime, timedelta, timezone
+
+        try:
+            manager = BrowserManager(DispatchPaths.from_environment(), reconciliation_only=True)
+            cutoff = datetime.now(timezone.utc) - timedelta(days=int(args.older_than_days))
+            removed = manager.store.prune(before=cutoff, limit=10_000)
+        except (BrowserManagerError, PathConfigError) as exc:
+            code = exc.code if isinstance(exc, BrowserManagerError) else "path_configuration_invalid"
+            raise CommandInterfaceError(code, str(exc)) from exc
+        return envelope(
+            ok=True,
+            action=action,
+            status="ready",
+            data={"schema_version": 1, "removed": removed, "contains_secrets": False},
         )
     try:
         inspection = BrowserRuntimeAuthority.production().inspect(full_tree=True)

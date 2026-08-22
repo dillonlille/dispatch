@@ -58,6 +58,23 @@ CREATE INDEX IF NOT EXISTS leases_state_expires
 """
 _TERMINAL_VALUES = tuple(item.value for item in TERMINAL_STATES)
 _SCHEMA_VERSION = "4"
+# Every schema version this build can open, oldest first. Versions OLDER than
+# _SCHEMA_VERSION present in this table are migrated forward at startup;
+# versions NOT in this table (newer builds' schemas) fail closed with
+# unsupported_browser_schema and recovery guidance.
+_KNOWN_SCHEMA_VERSIONS = frozenset({"3", "4"})
+# Ordered forward migrations: from_version -> [sql steps to reach the NEXT
+# version]. The final step of every chain must leave the database matching
+# _SCHEMA/_SCHEMA_VERSION exactly.
+_MIGRATIONS: dict[str, list[str]] = {
+    # v3 -> v4: v4 added runtime identity columns; databases written by the
+    # immediately-prior release already carry them (the column-set check
+    # below still validates). Kept as an explicit no-op step so the chain
+    # pattern exists for future versions.
+    "3": [
+        "",
+    ],
+}
 _LEASE_COLUMNS = {
     "lease_id",
     "plugin_id",
@@ -191,24 +208,40 @@ class LeaseStore:
         except sqlite3.DatabaseError as exc:
             raise BrowserManagerError("browser_state_corrupt", "browser state database is invalid") from exc
         try:
+            # Durability contract: WAL decouples readers from the writer so
+            # status()/nonterminal() never block (or get blocked by) lease
+            # transitions; synchronous=FULL keeps every commit durable.
+            connection.execute("PRAGMA journal_mode = WAL")
+            connection.execute("PRAGMA synchronous = FULL")
             metadata_exists = connection.execute(
                 "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'metadata'"
             ).fetchone()
+            stored_version: str | None = None
             if metadata_exists is not None:
                 version = connection.execute(
                     "SELECT value FROM metadata WHERE key = 'schema_version'"
                 ).fetchone()
                 if version is None:
                     raise BrowserManagerError("browser_state_corrupt", "browser schema version is missing")
-                if version[0] != _SCHEMA_VERSION:
+                stored_version = str(version[0])
+                if (
+                    stored_version not in _KNOWN_SCHEMA_VERSIONS
+                    and stored_version != _SCHEMA_VERSION
+                ):
+                    # A version newer than this build understands must fail
+                    # closed with distinct guidance; older versions migrate.
                     raise BrowserManagerError(
                         "unsupported_browser_schema",
-                        "browser state schema version is unsupported",
+                        "browser state schema was written by a newer Dispatch; "
+                        "upgrade Dispatch or restore a backup of "
+                        "browser-manager.sqlite3",
                     )
             connection.executescript(_SCHEMA)
+            if stored_version is not None and stored_version != _SCHEMA_VERSION:
+                self._migrate(connection, from_version=stored_version)
             connection.execute(
                 "INSERT INTO metadata(key, value) VALUES('schema_version', ?) "
-                "ON CONFLICT(key) DO NOTHING",
+                "ON CONFLICT(key) DO UPDATE SET value = excluded.value",
                 (_SCHEMA_VERSION,),
             )
             columns = {
@@ -234,6 +267,49 @@ class LeaseStore:
         ):
             raise BrowserManagerError("unsafe_browser_storage", "browser database is not a private regular file")
         os.chmod(self.database, 0o600)
+
+    @staticmethod
+    def _migrate(connection: sqlite3.Connection, *, from_version: str) -> None:
+        """Apply ordered forward migrations; each step is idempotent."""
+
+        chain = _MIGRATIONS.get(from_version, [])
+        for step in chain:
+            connection.executescript(step)
+
+    def prune(self, *, before: datetime, limit: int = 500) -> int:
+        """Delete terminal-state rows last updated before `before`.
+
+        The ledger doubles as the audit trail, so pruning is bounded per call
+        and only ever touches CLOSED/CANCELLED/FAILED rows. Returns the number
+        of rows removed.
+        """
+
+        bounded_limit = min(max(int(limit), 1), 10_000)
+        placeholders = ",".join("?" for _ in _TERMINAL_VALUES)
+        connection = self._connect()
+        try:
+            connection.execute("BEGIN IMMEDIATE")
+            cursor = connection.execute(
+                f"""
+                DELETE FROM leases WHERE lease_id IN (
+                    SELECT lease_id FROM leases
+                    WHERE state IN ({placeholders}) AND updated_at < ?
+                    ORDER BY updated_at, lease_id LIMIT ?
+                )
+                """,
+                (*_TERMINAL_VALUES, format_timestamp(before), bounded_limit),
+            )
+            removed = int(cursor.rowcount)
+            connection.commit()
+        except sqlite3.Error as exc:
+            connection.rollback()
+            raise BrowserManagerError(
+                "browser_state_busy",
+                "browser state database is unavailable",
+            ) from exc
+        finally:
+            connection.close()
+        return removed
 
     @staticmethod
     def _row(value: sqlite3.Row | None) -> LeaseRow:
