@@ -20,6 +20,8 @@ The installer remains the transaction coordinator. It swaps the checkout, virtua
 
 The runtime authority remains read-only. It verifies the active Playwright package, Chromium revision/path, control executable, ownership, and modes before Browser Manager launches or reconciles any process. Every live lease holds a shared generation lock; install/update/repair must acquire the exclusive counterpart before swapping a browser generation.
 
+**Content-integrity layering:** the deterministic content digest is enforced at install/update time (mismatch fails closed), while launch time pins the executable by `dev`/`inode` through `/proc/<pid>/fd/N` and re-checks process identity — it does not re-verify content between updates. Within the single-user threat model this is deliberate: an in-place same-inode rewrite of the Chromium binary by the same user is out of scope, and re-hashing up to 4 GiB on every launch would cost more than it protects.
+
 ## Version contract
 
 The exact staged Playwright package determines the supported Chromium revision through its packaged `browsers.json`. Playwright and Chromium are accepted as one compatibility generation; an arbitrary system browser or Hermes cache is never selected automatically. The current managed provisioner is explicitly Linux-only, matching the existing executable and process-identity contract; unsupported platforms fail before browser mutation.
