@@ -1109,17 +1109,24 @@ def _setup_auth_profiles(layout: InstallLayout, selected: Sequence[str], *, huma
             for index, item in enumerate(compatible, start=1):
                 print(f"  {index}. {item['profile']} (reuse)")
             print("  c. create a new profile")
-            answer = input("Select a profile: ").strip().lower()
-            if answer != "c":
+            # Re-ask inline on any invalid answer (audit L-1): the name
+            # entry loop below re-asks, so the picker on the same screen
+            # must not abort the whole run over a typo.
+            while profile is None:
+                answer = input("Select a profile: ").strip().lower()
+                if answer == "c":
+                    break
                 try:
                     selection = int(answer)
-                except ValueError as exc:
-                    raise InstallerError("profile_selection_invalid", "authentication profile selection is invalid") from exc
+                except ValueError:
+                    print("Enter a row number from the list, or 'c' to create a new profile.", file=sys.stderr)
+                    continue
                 # Explicit bounds: answers like "0" or "-1" must not slip
                 # through Python's negative indexing and silently bind the
                 # last/second-to-last compatible profile.
                 if not 1 <= selection <= len(compatible):
-                    raise InstallerError("profile_selection_invalid", "authentication profile selection is invalid")
+                    print(f"Pick a number between 1 and {len(compatible)}, or 'c' to create a new profile.", file=sys.stderr)
+                    continue
                 try:
                     profile = compatible[selection - 1]["profile"]
                 except (IndexError, KeyError, TypeError) as exc:
@@ -1184,7 +1191,20 @@ def _run_setup(layout: InstallLayout, argv: list[str] | None, *, human: bool, ru
     parser.add_argument("--list", action="store_true", help="list built-in plugins")
     parser.add_argument("--yes", action="store_true", help="confirm the selected plugins")
     args = parser.parse_args(argv)
+    # Environment preflight BEFORE any UI (audit INFO finding): from a dev
+    # checkout, the wizard used to render the plugin menu first and only
+    # then fail with plugin_environment_unavailable — wasted interaction in
+    # front of an error. Headless --list keeps working without a venv.
     plugins = available_plugins(layout)
+    if plugins and args.plugin and not (
+        layout.venv.is_dir() and not layout.venv.is_symlink()
+        if isinstance(layout, InstallLayout)
+        else True
+    ):
+        raise InstallerError(
+            "plugin_environment_unavailable",
+            "plugin setup requires a complete installed checkout and environment",
+        )
     if args.list:
         payload = {"ok": True, "action": "setup", "status": "available", "plugins": plugins}
         print(json.dumps(payload, sort_keys=True))

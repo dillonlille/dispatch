@@ -72,6 +72,8 @@ class StageRail:
         self._resize_pending = False
         self._prev_handlers: dict[int, object] = {}
         self._atexit_installed = False
+        self._winch_installed = False
+        self._prev_winch: object = None
 
     # ------------------------------------------------------------------ #
     # Capability gate                                                     #
@@ -258,14 +260,39 @@ class StageRail:
                 signal.signal(signum, self._on_signal)
             except (ValueError, OSError):
                 self._prev_handlers.pop(signum, None)
+        # Finish the design-doc resize story: while the rail owns the
+        # surface, a SIGWINCH marks a deferred redraw (applied at the next
+        # enter/advance boundary). The handler only flips a flag, so it can
+        # never interrupt a live menu mid-repaint. Windows lacks SIGWINCH;
+        # non-main threads cannot install signal handlers at all.
+        if not self._winch_installed and hasattr(signal, "SIGWINCH"):
+            try:
+                self._prev_winch = signal.getsignal(signal.SIGWINCH)
+                signal.signal(signal.SIGWINCH, self._on_winch)
+                self._winch_installed = True
+            except (ValueError, OSError):
+                self._prev_winch = None
 
     def _remove_guards(self) -> None:
+        if self._winch_installed:
+            try:
+                signal.signal(signal.SIGWINCH, self._prev_winch)  # type: ignore[arg-type]
+            except (ValueError, OSError):
+                pass
+            self._winch_installed = False
+            self._prev_winch = None
         for signum, handler in list(self._prev_handlers.items()):
             try:
                 signal.signal(signum, handler)  # type: ignore[arg-type]
             except (ValueError, OSError):
                 pass
         self._prev_handlers.clear()
+
+    def _on_winch(self, signum, frame):  # noqa: ANN001
+        self.request_redraw()
+        handler = self._prev_winch
+        if callable(handler) and handler not in (signal.SIG_IGN, signal.SIG_DFL):
+            handler(signum, frame)
 
     def _on_signal(self, signum, frame):  # noqa: ANN001
         # Capture the prior handler BEFORE fail(): fail() restores the
