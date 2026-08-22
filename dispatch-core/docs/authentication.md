@@ -19,6 +19,16 @@ dispatch auth remove amazon-work --yes
 
 A successful bounded login marks the profile `verified`; profiles start as `unverified` until a live login is proven.
 
+## Vault key operations
+
+The encrypted vault is format v2: every token stamps a short fingerprint of the key that wrote it. Legacy v1 tokens remain readable and upgrade automatically on the next write; a token stamped with a different key than the installed one fails with `auth_store_key_mismatch` rather than looking like corruption.
+
+```bash
+dispatch auth rotate --yes
+```
+
+`rotate` re-encrypts all stored credentials under a freshly generated key (keyring first, disk fallback as before) and reports how many accounts were preserved. Rotation requires explicit `--yes`. Health's authentication plane also reports `keyring_available`, so a headless install with an unreachable Secret Service is visible before it becomes a login failure.
+
 Interactive `dispatch setup` asks for a compatible existing profile or a new profile after exact plugin selection succeeds. `--yes`, JSON, and other noninteractive setup paths never prompt for secrets; they return a safe `pending_requirements` result directing the operator back to interactive setup when an authenticated plugin has no selected enrolled profile.
 
 The current install-validated plugin requirements are:
