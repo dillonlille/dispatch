@@ -2,8 +2,8 @@
 from __future__ import annotations
 
 import importlib.abc
+import subprocess
 import sys
-import types
 from pathlib import Path
 
 import pytest
@@ -107,9 +107,9 @@ class TestRejections:
         with pytest.raises(ValueError):
             plugin_yaml.parse_subset(doc)
 
-    def test_root_level_sequence_is_a_mapping_error_context(self):
-        # A root-level sequence parses as a list, but plugin manifests are
-        # mappings; the policy layer rejects non-mappings separately.
+    def test_root_level_sequence_parses_as_list(self):
+        # Root-level sequences parse as lists; the policy layer rejects
+        # non-mapping manifests separately.
         assert plugin_yaml.parse_subset("- just\n- a list\n") == ["just", "a list"]
 
     def test_unterminated_quote(self):
@@ -138,38 +138,74 @@ class TestAgreementWithPyYAML:
             assert plugin_yaml.parse_subset(text) == yaml.safe_load(text), path
 
 
+AUDIT_PROBE = r"""
+import sys
+sys.path.insert(0, {core_root!r})
+if {block_yaml!r}:
+    # Simulate a clean install: make PyYAML unimportable before plugin_policy loads.
+    class _Block:
+        def find_spec(self, fullname, path=None, target=None):
+            if fullname == "yaml" or fullname.startswith("yaml."):
+                raise ModuleNotFoundError("No module named 'yaml'")
+            return None
+    sys.meta_path.insert(0, _Block())
+    sys.modules.pop("yaml", None)
+import plugin_policy
+failures = {{}}
+for owner in {owners!r}:
+    audit = plugin_policy.audit_owner(plugin_policy.Path({workspace!r}) / "plugins" / owner)
+    failures[owner] = list(audit.failures)
+assert all(not f for f in failures.values()), failures
+print("clean-install audits OK")
+"""
+
+
 class TestPolicyAuditWithoutPyYAML:
-    """The conformance audit must pass on clean installs without PyYAML."""
+    """The conformance audit must pass on clean installs without PyYAML.
 
-    def test_all_builtin_plugins_conform(self, without_pyyaml):
-        pytest.importorskip(
-            "pydantic", reason="companion-bridge declares pydantic; the audit imports plugin source"
+    Audits run in a subprocess: ``plugin_policy._load_target`` purges and
+    re-imports plugin modules from ``sys.modules``, so auditing in-process
+    would leave stale ``dispatch_paycom``/``dispatch_companion_bridge``
+    module copies behind and break later tests that monkeypatch them.
+    """
+
+    @pytest.mark.parametrize(
+        ("owners", "requires", "block_yaml"),
+        [
+            (["paycom", "handbook"], [], True),
+            # companion-bridge imports PyYAML + pydantic itself; auditing it
+            # requires those declared dependencies in the environment.
+            (["companion-bridge"], ["pydantic"], False),
+        ],
+    )
+    def test_audit_passes(self, owners, requires, block_yaml):
+        for module in requires:
+            pytest.importorskip(module)
+        probe = AUDIT_PROBE.format(
+            core_root=str(CORE_ROOT), workspace=str(WORKSPACE), owners=owners, block_yaml=block_yaml
         )
-        # companion-bridge itself imports PyYAML at module import time (it is a
-        # declared dependency of that plugin). The audit only needs PyYAML to be
-        # ABSENT for dispatch-core's own manifest handling, which paycom and
-        # handbook exercise; companion-bridge is audited with its own declared
-        # dependency present, exactly as a real install would have it.
-        import plugin_policy  # noqa: F401
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert completed.returncode == 0, completed.stderr[-2000:]
+        assert "clean-install audits OK" in completed.stdout
 
-        results = {}
-        for owner in ("paycom", "handbook"):
-            root = WORKSPACE / "plugins" / owner
-            policy = __import__("plugin_policy")
-            audit = policy.audit_owner(root)
-            results[owner] = list(audit.failures)
-        for owner, failures in results.items():
-            assert failures == [], f"{owner}: {failures}"
-
-    def test_paycom_and_handbook_audits_never_touch_yaml(self, without_pyyaml):
-        """The two plugins whose manifests drive _load_yaml audit cleanly while
-        PyYAML is unimportable -- proving WS1 on a clean-install venv."""
-        import plugin_policy
-
-        assert "yaml" not in sys.modules
-        for owner in ("paycom", "handbook"):
-            audit = plugin_policy.audit_owner(WORKSPACE / "plugins" / owner)
-            assert audit.failures == [], f"{owner}: {audit.failures}"
+    def test_paycom_and_handbook_audits_never_touch_yaml(self):
+        """Paycom + handbook audits pass while PyYAML is unimportable."""
+        owners = ["paycom", "handbook"]
+        probe = AUDIT_PROBE.format(
+            core_root=str(CORE_ROOT), workspace=str(WORKSPACE), owners=owners, block_yaml=True
+        )
+        completed = subprocess.run(
+            [sys.executable, "-c", probe],
+            capture_output=True,
+            text=True,
+            timeout=120,
+        )
+        assert completed.returncode == 0, completed.stderr[-2000:]
 
     def test_load_yaml_rejects_outside_subset_even_with_pyyaml(self, tmp_path):
         policy = __import__("plugin_policy")
