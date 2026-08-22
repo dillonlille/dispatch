@@ -3,10 +3,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import NoReturn, cast
 
 from .doctor import inspect_installation
+from .doctor_fix import apply_action, build_fix_plan, summarize
 from .doctor_render import render_doctor
 from .layout import InstallLayout, InstallerError, installation_lock, read_installation
 from .lifecycle import install_or_update, recover_incomplete_installation, repair_existing
@@ -41,7 +43,17 @@ def _parser() -> argparse.ArgumentParser:
     channel.add_argument("channel", choices=("stable", "dev"))
     channel.add_argument("--clone", type=Path, help="already cloned target; omit to clone from GitHub")
     channel.add_argument("--version", help="stable release tag")
-    actions.add_parser("doctor", help="inspect installation without changing it")
+    doctor = actions.add_parser("doctor", help="inspect installation without changing it")
+    doctor.add_argument(
+        "--fix",
+        action="store_true",
+        help="offer to apply safe repairs (service start/enable, permissions on user-owned roots); everything else is printed as a manual command",
+    )
+    doctor.add_argument(
+        "--yes",
+        action="store_true",
+        help="with --fix --json: apply every safe repair without prompting",
+    )
     actions.add_parser("verify", help="verify a complete installation")
     actions.add_parser(
         "recover",
@@ -138,6 +150,26 @@ def _confirm_delete_secrets(input_fn=input) -> bool:
     except EOFError:
         return False
     return answer == "delete secrets"
+
+
+def _run_doctor_fixes(plan: list[dict[str, str]], *, assume_yes: bool, input_fn=input, quiet: bool = False) -> list[dict[str, str]]:
+    """Offer each planned action for confirmation and apply the accepted ones."""
+    from .ui import dim
+
+    results: list[dict[str, str]] = []
+    for action in plan:
+        if not assume_yes:
+            try:
+                answer = input_fn(f"  Apply {action['command']}? [y/N] ").strip().lower()
+            except EOFError:
+                answer = ""
+            if answer not in {"y", "yes"}:
+                results.append({**action, "status": "skipped", "error": "declined"})
+                continue
+        if not quiet:
+            print(f"  {dim('→')} {action['command']}")
+        results.append(apply_action(action))
+    return results
 
 
 def _confirm_interactive_uninstall(
@@ -241,10 +273,45 @@ def main(argv: list[str] | None = None) -> int:
             return 0
         if args.action in {"doctor", "verify"}:
             result = inspect_installation(layout)
-            if not args.json:
-                print(render_doctor(result))
-            else:
+            fix_requested = bool(getattr(args, "fix", False)) and args.action == "doctor"
+            if args.json:
+                if fix_requested:
+                    plan = build_fix_plan(result)
+                    if args.yes:
+                        applied = _run_doctor_fixes(plan, assume_yes=True, quiet=True)
+                        result["fix_results"] = applied
+                        result["fix_summary"] = summarize(applied)
+                        # Reflect post-fix reality in the same envelope.
+                        result = inspect_installation(layout)
+                        result["fix_results"] = applied
+                        result["fix_summary"] = summarize(applied)
+                    else:
+                        # Plan-only: --json --fix never mutates without --yes.
+                        result["fix_plan"] = plan
                 _emit(bool(result["ok"]), args.action, str(result["status"]), result)
+            elif fix_requested and not sys.stdin.isatty():
+                print(render_doctor(result))
+                print("  dispatch doctor --fix requires an interactive terminal (or combine --fix with --json --yes).")
+            elif fix_requested:
+                plan = build_fix_plan(result)
+                print(render_doctor(result))
+                if plan:
+                    print(f"  {len(plan)} safe repair{'s' if len(plan) != 1 else ''} available:")
+                    results = _run_doctor_fixes(plan, assume_yes=False)
+                    summary = summarize(results)
+                    parts = []
+                    if summary.get("fixed"):
+                        parts.append(f"{summary['fixed']} applied")
+                    if summary.get("failed"):
+                        parts.append(f"{summary['failed']} failed")
+                    if summary.get("skipped"):
+                        parts.append(f"{summary['skipped']} skipped")
+                    print(f"\n  Done: {', '.join(parts) if parts else 'nothing to do'}.")
+                    print("  Re-run 'dispatch doctor' to confirm the installation state.")
+                # Re-inspect after fixes so the exit code reflects reality.
+                result = inspect_installation(layout)
+            else:
+                print(render_doctor(result))
             return 0 if result["ok"] else 1
         if args.action == "recover":
             with installation_lock(layout):
