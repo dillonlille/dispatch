@@ -4,7 +4,6 @@ from __future__ import annotations
 from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 import json
-from pathlib import Path
 import re
 from typing import Any, Mapping
 from zoneinfo import ZoneInfo
@@ -19,7 +18,7 @@ from .meals import (
     paycom_lunch_pairs,
 )
 from .paths import PaycomPaths, coerce_paths
-from .periods import Period, PeriodError, period_containing, period_from_end
+from .periods import PeriodError, period_from_end
 from .storage import ReadOnlyDatabase, StorageError, open_read_only
 
 PAYCOM_TIMEZONE = "America/Los_Angeles"
@@ -632,7 +631,6 @@ class PaycomQuery:
                             raise QueryError("schema_invalid", "A comparable meal timestamp is invalid.")
                         out_delta = minute_delta(values_clock[2], values_clock[0])
                         in_delta = minute_delta(values_clock[3], values_clock[1])
-                        duration_delta = int(pair["durationMinutes"]) - int(flex["minutes"])
                         largest = max(abs(out_delta), abs(in_delta))
                         comparison_status = "exact_match" if largest == 0 else "close_match" if largest <= 2 else "minor_difference" if largest <= 5 else "different"
             if paycom_source is None:

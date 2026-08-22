@@ -63,4 +63,4 @@ the same rule while preserving that plugin's private durable roots.
 
 Symlinks, non-directory managed roots, unexpected command content, unsafe service units, and other ownership/type conflicts stop mutation rather than causing broad deletion. The uninstaller never treats `HOME` as disposable.
 
-The source checkout is ordinary Git state. There is no active-release selector, generated release tree, installation receipt, or artifact catalog to retain or interpret.
+The source checkout is ordinary Git state. There is no active-release selector, generated release tree, or artifact catalog to retain or interpret. One exception exists: a crashed first uninstall may leave `state/uninstall.json`, an owner-private receipt the uninstaller itself writes and interprets to authorize cleanup of that interrupted attempt; it is removed once cleanup completes and is never used to retain installation state.

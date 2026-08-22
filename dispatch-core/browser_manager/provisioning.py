@@ -6,9 +6,11 @@ Manager code remains read-only and consumes only the verified active result.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import hashlib
 import importlib.util
 import os
 from pathlib import Path
+import re
 import shutil
 import stat
 import subprocess
@@ -144,6 +146,125 @@ def inspect_managed_cache(cache: Path, version: Any) -> Path:
     if len(present) != 1:
         raise BrowserProvisioningError("browser_runtime_missing", "managed Chromium revision is incomplete")
     return _runtime_file(present[0], root)
+
+
+DIGEST_MARKER_NAME = ".dispatch-content-sha256"
+_MAX_DIGEST_FILES = 50_000
+_MAX_DIGEST_BYTES = 4 * 1024 * 1024 * 1024
+
+
+def _generation_root(cache: Path, version: Any) -> Path:
+    revision = str(getattr(version, "chromium_revision", ""))
+    if re.fullmatch(r"[0-9]+", revision) is None:
+        raise BrowserProvisioningError("browser_digest_unsafe", "Chromium revision identity is unavailable")
+    return cache / f"chromium-{revision}"
+
+
+def _generation_files(generation: Path) -> list[tuple[str, int]]:
+    entries: list[tuple[str, int]] = []
+    total = 0
+    for base, directories, files in os.walk(generation, followlinks=False):
+        for name in directories:
+            if (Path(base) / name).is_symlink():
+                raise BrowserProvisioningError(
+                    "browser_runtime_unsafe",
+                    "managed Chromium generation contains symlinks",
+                )
+        directories[:] = sorted(directories)
+        for name in sorted(files):
+            path = Path(base) / name
+            if path.is_symlink():
+                raise BrowserProvisioningError(
+                    "browser_runtime_unsafe",
+                    "managed Chromium generation contains symlinks",
+                )
+            details = path.stat(follow_symlinks=False)
+            if not stat.S_ISREG(details.st_mode):
+                continue
+            if name == DIGEST_MARKER_NAME and path.parent == generation:
+                continue
+            total += details.st_size
+            if len(entries) >= _MAX_DIGEST_FILES or total > _MAX_DIGEST_BYTES:
+                raise BrowserProvisioningError(
+                    "browser_digest_unsafe",
+                    "managed Chromium generation exceeds digest bounds",
+                )
+            entries.append((str(path.relative_to(generation)), details.st_size))
+    return sorted(entries)
+
+
+def compute_generation_digest(generation: Path) -> str:
+    """Content-fingerprint one Chromium generation deterministically."""
+
+    digest = hashlib.sha256()
+    for relative, size in _generation_files(generation):
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(str(size).encode("ascii"))
+        digest.update(b"\0")
+        with open(generation / relative, "rb") as stream:
+            for chunk in iter(lambda: stream.read(1024 * 1024), b""):
+                digest.update(chunk)
+    return digest.hexdigest()
+
+
+def write_generation_digest(generation: Path) -> str:
+    value = compute_generation_digest(generation)
+    marker = generation / DIGEST_MARKER_NAME
+    temporary = generation / f"{DIGEST_MARKER_NAME}.tmp-{os.getpid()}"
+    try:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+        try:
+            os.write(descriptor, (value + "\n").encode("ascii"))
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
+        os.replace(temporary, marker)
+        marker.chmod(0o600)
+    except OSError as exc:
+        temporary.unlink(missing_ok=True)
+        raise BrowserProvisioningError("browser_digest_unsafe", "could not record the browser content digest") from exc
+    return value
+
+
+def verify_generation_digest(cache: Path, version: Any) -> str:
+    """Recompute and compare the pinned digest of the active generation."""
+
+    generation = _generation_root(cache, version)
+    marker = generation / DIGEST_MARKER_NAME
+    try:
+        descriptor = os.open(marker, os.O_RDONLY | os.O_NOFOLLOW)
+    except OSError as exc:
+        raise BrowserProvisioningError(
+            "browser_digest_missing",
+            "managed Chromium generation has no recorded content digest",
+        ) from exc
+    try:
+        details = os.fstat(descriptor)
+        if (
+            not stat.S_ISREG(details.st_mode)
+            or details.st_uid != os.geteuid()
+            or details.st_nlink != 1
+            or details.st_size > 128
+        ):
+            raise BrowserProvisioningError("browser_digest_unsafe", "browser content digest marker is unsafe")
+        pinned = os.read(descriptor, 128).decode("ascii", errors="strict").strip()
+    except UnicodeError as exc:
+        raise BrowserProvisioningError("browser_digest_unsafe", "browser content digest marker is not ASCII") from exc
+    except OSError as exc:
+        raise BrowserProvisioningError("browser_digest_unsafe", "browser content digest marker is unreadable") from exc
+    finally:
+        os.close(descriptor)
+    if re.fullmatch(r"[0-9a-f]{64}", pinned) is None:
+        raise BrowserProvisioningError("browser_digest_unsafe", "browser content digest marker is malformed")
+    actual = compute_generation_digest(generation)
+    if actual != pinned:
+        raise BrowserProvisioningError(
+            "browser_digest_mismatch",
+            "managed Chromium content changed after installation; "
+            "remove the managed browser cache to force reprovisioning",
+        )
+    return pinned
 
 
 def browser_install_command(python: Path, cache: Path) -> tuple[str, ...]:
@@ -345,6 +466,7 @@ def provision_managed_browser(
         if exc.code not in {"browser_cache_missing", "browser_runtime_missing"}:
             raise
     else:
+        verify_generation_digest(active_cache, version)
         missing = _verify_host(
             python=python,
             cache=active_cache,
@@ -363,6 +485,7 @@ def provision_managed_browser(
         else:
             _copy_legacy_cache(legacy_cache, staging_cache)
             executable = inspect_managed_cache(staging_cache, version)
+            write_generation_digest(_generation_root(staging_cache, version))
             missing = _verify_host(
                 python=python,
                 cache=staging_cache,
@@ -377,6 +500,7 @@ def provision_managed_browser(
     if installed.returncode != 0:
         raise BrowserProvisioningError("browser_install_failed", "could not install managed Playwright Chromium")
     executable = inspect_managed_cache(staging_cache, version)
+    write_generation_digest(_generation_root(staging_cache, version))
     missing = _verify_host(
         python=python,
         cache=staging_cache,
@@ -392,7 +516,10 @@ __all__ = [
     "BrowserProvisioningResult",
     "browser_install_command",
     "browser_smoke_command",
+    "compute_generation_digest",
     "inspect_managed_cache",
     "provision_managed_browser",
     "system_dependency_install_command",
+    "verify_generation_digest",
+    "write_generation_digest",
 ]

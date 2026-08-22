@@ -8,9 +8,8 @@ import sys
 from pathlib import Path
 
 from .cli import main as installer_main
-from .doctor import inspect_installation
 from .layout import InstallLayout, InstallerError
-from .setup import assert_source_project_safe, load_plugin_config, run_setup
+from .setup import assert_source_project_safe, load_plugin_config
 
 _LIFECYCLE = {"doctor", "verify", "setup", "plugin-service", "uninstall", "update", "repair", "channel", "switch-channel"}
 

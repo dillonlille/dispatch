@@ -11,6 +11,7 @@ import shutil
 import sqlite3
 import stat
 import subprocess
+import sys
 import tempfile
 
 from datetime import UTC, datetime
@@ -160,6 +161,7 @@ def write_browser_manager_project(core: Path) -> None:
     for name in ("provisioning.py", "versioning.py"):
         shutil.copyfile(REPOSITORY_ROOT / "dispatch-core" / "browser_manager" / name, browser_manager / name)
     (core / "requirements.txt").write_text("", encoding="utf-8")
+    (core / "__main__.py").write_text("", encoding="utf-8")
 
 
 def write_test_project(
@@ -812,6 +814,7 @@ def test_setup_installs_selected_plugin_from_private_source_copy_and_writes_conf
     layout.clone.mkdir()
     (layout.clone / "dispatch-core").mkdir()
     (layout.clone / "dispatch-core" / "requirements.txt").write_text("", encoding="utf-8")
+    (layout.clone / "dispatch-core" / "__main__.py").write_text("", encoding="utf-8")
     write_test_project(layout.clone / "installer")
     plugin = layout.clone / "plugins" / "handbook"
     plugin.mkdir(parents=True)
@@ -855,6 +858,7 @@ def test_plugin_setup_restores_main_service_after_stop_interruption(tmp_path: Pa
     layout.clone.mkdir()
     (layout.clone / "dispatch-core").mkdir()
     (layout.clone / "dispatch-core" / "requirements.txt").write_text("", encoding="utf-8")
+    (layout.clone / "dispatch-core" / "__main__.py").write_text("", encoding="utf-8")
     write_test_project(layout.clone / "installer")
     layout.venv_python.parent.mkdir(parents=True)
     layout.venv_python.write_text("old-python", encoding="utf-8")
@@ -901,6 +905,7 @@ def test_plugin_setup_restores_venv_after_post_displacement_interruption(
     layout.clone.mkdir()
     (layout.clone / "dispatch-core").mkdir()
     (layout.clone / "dispatch-core" / "requirements.txt").write_text("", encoding="utf-8")
+    (layout.clone / "dispatch-core" / "__main__.py").write_text("", encoding="utf-8")
     write_test_project(layout.clone / "installer")
     layout.venv.mkdir()
     old_marker = layout.venv / "old-marker"
@@ -952,6 +957,7 @@ def test_plugin_setup_reports_projection_rollback_failure(
     layout.clone.mkdir()
     (layout.clone / "dispatch-core").mkdir()
     (layout.clone / "dispatch-core" / "requirements.txt").write_text("", encoding="utf-8")
+    (layout.clone / "dispatch-core" / "__main__.py").write_text("", encoding="utf-8")
     write_test_project(layout.clone / "installer")
     _write_runtime_plugin(layout.clone, dependencies=[])
     layout.venv.mkdir()
@@ -1005,6 +1011,7 @@ def test_plugin_setup_cleanup_failure_is_explicit(
     layout.clone.mkdir()
     (layout.clone / "dispatch-core").mkdir()
     (layout.clone / "dispatch-core" / "requirements.txt").write_text("", encoding="utf-8")
+    (layout.clone / "dispatch-core" / "__main__.py").write_text("", encoding="utf-8")
     write_test_project(layout.clone / "installer")
     layout.venv.mkdir()
     monkeypatch.setattr(
@@ -3388,6 +3395,7 @@ def test_replacement_venv_rejects_invalid_plugin_callable_before_install(tmp_pat
     layout.clone.mkdir()
     (layout.clone / "dispatch-core").mkdir()
     (layout.clone / "dispatch-core" / "requirements.txt").write_text("", encoding="utf-8")
+    (layout.clone / "dispatch-core" / "__main__.py").write_text("", encoding="utf-8")
     write_test_project(layout.clone / "installer")
     plugin = _write_runtime_plugin(layout.clone, dependencies=[])
     project = plugin / "pyproject.toml"
@@ -3574,7 +3582,7 @@ def test_replacement_venv_installs_plugin_dependencies_before_direct_registratio
     (layout.clone / "dispatch-core").mkdir()
     (layout.clone / "dispatch-core" / "requirements.txt").write_text("core==1\n", encoding="utf-8")
     write_test_project(layout.clone / "installer")
-    plugin = _write_runtime_plugin(layout.clone, dependencies=["worker-runtime==2.4.0"])
+    _write_runtime_plugin(layout.clone, dependencies=["worker-runtime==2.4.0"])
     commands: list[tuple[str, ...]] = []
 
     def fake_run(command, cwd=None):
@@ -3620,6 +3628,7 @@ def test_plugin_dependency_failure_keeps_active_venv_and_selection(tmp_path: Pat
     layout.clone.mkdir()
     (layout.clone / "dispatch-core").mkdir()
     (layout.clone / "dispatch-core" / "requirements.txt").write_text("", encoding="utf-8")
+    (layout.clone / "dispatch-core" / "__main__.py").write_text("", encoding="utf-8")
     write_test_project(layout.clone / "installer")
     _write_runtime_plugin(layout.clone, dependencies=["worker-runtime==2.4.0"])
     layout.venv.mkdir()
@@ -3656,8 +3665,9 @@ def test_long_running_selection_prepares_secret_free_unit_and_deselection_remove
     layout.clone.mkdir()
     (layout.clone / "dispatch-core").mkdir()
     (layout.clone / "dispatch-core" / "requirements.txt").write_text("", encoding="utf-8")
+    (layout.clone / "dispatch-core" / "__main__.py").write_text("", encoding="utf-8")
     write_test_project(layout.clone / "installer")
-    plugin = _write_runtime_plugin(layout.clone, dependencies=[])
+    _write_runtime_plugin(layout.clone, dependencies=[])
     layout.venv_python.parent.mkdir(parents=True)
     layout.venv_python.write_text("python", encoding="utf-8")
     layout.venv_python.chmod(0o700)
@@ -3942,6 +3952,7 @@ def test_replacement_venv_rejects_conflicting_plugin_pins(tmp_path: Path) -> Non
     layout.clone.mkdir()
     (layout.clone / "dispatch-core").mkdir()
     (layout.clone / "dispatch-core" / "requirements.txt").write_text("", encoding="utf-8")
+    (layout.clone / "dispatch-core" / "__main__.py").write_text("", encoding="utf-8")
     write_test_project(layout.clone / "installer")
     _write_runtime_plugin(layout.clone, plugin_id="worker", dependencies=["shared-runtime==1.0.0"])
     _write_runtime_plugin(layout.clone, plugin_id="other", dependencies=["shared-runtime==2.0.0"])
@@ -4144,3 +4155,69 @@ def test_doctor_and_cli_bound_stale_plugin_selection(tmp_path: Path, monkeypatch
     assert result == 1
     payload = json.loads(capsys.readouterr().out)
     assert payload["error"]["code"] == "plugin_config_invalid"
+
+
+def test_verify_staged_core_gate_runs_non_mutating_help_from_staged_venv(tmp_path: Path) -> None:
+    core = tmp_path / "clone" / "dispatch-core"
+    core.mkdir(parents=True)
+    (core / "__main__.py").write_text("", encoding="utf-8")
+    python = tmp_path / "venv" / "bin" / "python"
+    work = tmp_path / "work"
+    work.mkdir()
+    calls: list[tuple[str, ...]] = []
+
+    def run(command, cwd=None):
+        calls.append(tuple(str(value) for value in command))
+        return completed()
+
+    lifecycle_runtime._verify_staged_core(python, core, work, run=run)
+
+    command = calls[0]
+    assert command[0] == str(Path("/usr/bin/timeout").resolve())
+    assert "--help" in command and str(python) in command and str(core) in command
+    assert any(value.startswith("HOME=") for value in command)
+    assert any(value.startswith("PATH=/usr/bin:/bin") for value in command)
+
+
+def test_verify_staged_core_gate_maps_failure_to_core_help_gate_failed(tmp_path: Path) -> None:
+    core = tmp_path / "clone" / "dispatch-core"
+    core.mkdir(parents=True)
+    (core / "__main__.py").write_text("", encoding="utf-8")
+
+    def run(command, cwd=None):
+        return completed(returncode=1, stdout="boom from staged core")
+
+    with pytest.raises(InstallerError) as error:
+        lifecycle_runtime._verify_staged_core(
+            tmp_path / "venv" / "bin" / "python", core, tmp_path / "work", run=run
+        )
+    assert error.value.code == "core_help_gate_failed"
+    assert "boom from staged core" in str(error.value)
+
+
+def test_verify_staged_core_gate_accepts_real_stub_core_with_real_python(tmp_path: Path) -> None:
+    core = tmp_path / "clone" / "dispatch-core"
+    core.mkdir(parents=True)
+    (core / "__main__.py").write_text(
+        "import sys\n"
+        "if '--help' not in sys.argv:\n"
+        "    raise SystemExit('refused')\n"
+        "print('stub core help')\n",
+        encoding="utf-8",
+    )
+    work = tmp_path / "work"
+    work.mkdir(mode=0o700)
+
+    lifecycle_runtime._verify_staged_core(Path(sys.executable), core, work, run=lifecycle_runtime.run_command)
+
+
+def test_verify_staged_core_gate_fails_closed_on_broken_real_stub_core(tmp_path: Path) -> None:
+    core = tmp_path / "clone" / "dispatch-core"
+    core.mkdir(parents=True)
+    (core / "__main__.py").write_text("raise SystemExit('simulated broken import')\n", encoding="utf-8")
+    work = tmp_path / "work"
+    work.mkdir(mode=0o700)
+
+    with pytest.raises(InstallerError) as error:
+        lifecycle_runtime._verify_staged_core(Path(sys.executable), core, work, run=lifecycle_runtime.run_command)
+    assert error.value.code == "core_help_gate_failed"

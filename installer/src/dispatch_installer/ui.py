@@ -153,9 +153,9 @@ def select_menu(
         # import time; import it lazily so every entry point gets arrow-key
         # menus regardless of which module loaded first.
         try:
-            from . import interactive as _interactive  # noqa: F401
+            import importlib
 
-            del _interactive
+            importlib.import_module(".interactive", package=__package__)
         except Exception:
             pass
     if _arrow_single_select is not None:

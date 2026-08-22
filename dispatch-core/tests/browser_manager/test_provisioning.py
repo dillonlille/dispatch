@@ -71,6 +71,7 @@ def install_fake_browser(cache: Path) -> Path:
     cache.chmod(0o700)
     executable.write_text("chromium", encoding="utf-8")
     executable.chmod(0o700)
+    provisioning_module.write_generation_digest(executable.parent.parent)
     return executable
 
 
@@ -437,3 +438,144 @@ def test_provider_registry_reserves_future_contracts_without_activating_them() -
     assert data[0]["persistent_profiles"] is True
     assert data[1]["implemented"] is False
     assert data[2]["implemented"] is False
+
+
+def test_reuse_fails_closed_when_generation_has_no_digest_marker(tmp_path: Path) -> None:
+    python = staged_python(tmp_path)
+    active = tmp_path / "active"
+    active.mkdir(mode=0o700)
+    install_fake_browser(active)
+    marker = active / "chromium-1234567" / ".dispatch-content-sha256"
+    marker.unlink()
+
+    def run(command, cwd=None):
+        raise AssertionError(("provisioning must not proceed", command))
+
+    with pytest.raises(BrowserProvisioningError) as error:
+        provision_managed_browser(
+            python=python,
+            active_cache=active,
+            staging_cache=tmp_path / "staging",
+            legacy_cache=None,
+            run=run,
+        )
+    assert error.value.code == "browser_digest_missing"
+
+
+def test_reuse_fails_closed_when_generation_content_was_tampered_with(tmp_path: Path) -> None:
+    python = staged_python(tmp_path)
+    active = tmp_path / "active"
+    active.mkdir(mode=0o700)
+    install_fake_browser(active)
+    executable = active / "chromium-1234567" / "chrome-linux64" / "chrome"
+    executable.chmod(0o700)
+    executable.write_text("trojan", encoding="utf-8")
+    executable.chmod(0o700)
+
+    def run(command, cwd=None):
+        raise AssertionError(("provisioning must not proceed", command))
+
+    with pytest.raises(BrowserProvisioningError) as error:
+        provision_managed_browser(
+            python=python,
+            active_cache=active,
+            staging_cache=tmp_path / "staging",
+            legacy_cache=None,
+            run=run,
+        )
+    assert error.value.code == "browser_digest_mismatch"
+
+
+def test_tampered_executable_after_install_is_detected_by_digest_roundtrip(tmp_path: Path) -> None:
+    python = staged_python(tmp_path)
+    active = tmp_path / "active"
+    active.mkdir(mode=0o700)
+    install_fake_browser(active)
+    generation = active / "chromium-1234567"
+    pinned = provisioning_module.verify_generation_digest(active, target_browser_version(python))
+    assert pinned == (generation / ".dispatch-content-sha256").read_text(encoding="utf-8").strip()
+    executable = generation / "chrome-linux64" / "chrome"
+    executable.write_text("swapped", encoding="utf-8")
+    with pytest.raises(BrowserProvisioningError) as error:
+        provisioning_module.verify_generation_digest(active, target_browser_version(python))
+    assert error.value.code == "browser_digest_mismatch"
+
+
+def test_digest_marker_tampering_is_rejected(tmp_path: Path) -> None:
+    python = staged_python(tmp_path)
+    active = tmp_path / "active"
+    active.mkdir(mode=0o700)
+    install_fake_browser(active)
+    generation = active / "chromium-1234567"
+    identity = target_browser_version(python)
+
+    marker = generation / ".dispatch-content-sha256"
+    for payload in ("", "z" * 64, "a" * 65):
+        marker.write_text(payload + "\n", encoding="utf-8")
+        with pytest.raises(BrowserProvisioningError) as error:
+            provisioning_module.verify_generation_digest(active, identity)
+        assert error.value.code == "browser_digest_unsafe"
+
+    marker.write_text("0" * 64 + "\n", encoding="utf-8")
+    with pytest.raises(BrowserProvisioningError) as mismatch:
+        provisioning_module.verify_generation_digest(active, identity)
+    assert mismatch.value.code == "browser_digest_mismatch"
+
+
+def test_symlink_inside_generation_fails_the_digest_walk(tmp_path: Path) -> None:
+    python = staged_python(tmp_path)
+    active = tmp_path / "active"
+    active.mkdir(mode=0o700)
+    install_fake_browser(active)
+    generation = active / "chromium-1234567"
+    outside = tmp_path / "outside.so"
+    outside.write_text("hostile", encoding="utf-8")
+    (generation / "chrome-linux64" / "libevil.so").symlink_to(outside)
+    identity = target_browser_version(python)
+    with pytest.raises(BrowserProvisioningError) as error:
+        provisioning_module.verify_generation_digest(active, identity)
+    assert error.value.code == "browser_runtime_unsafe"
+
+
+def test_installed_and_migrated_generations_carry_a_valid_digest(tmp_path: Path) -> None:
+    python = staged_python(tmp_path)
+
+    def run_for(target: Path):
+        def run(command, cwd=None):
+            values = tuple(str(value) for value in command)
+            if is_browser_install(values):
+                install_fake_browser(target)
+                return completed()
+            if any(Path(value).name == "ldd" for value in values):
+                return completed(stdout="ready\n")
+            if any("chromium_sandbox=True" in value for value in values):
+                return completed()
+            raise AssertionError(values)
+
+        return run
+
+    staging = tmp_path / "staging"
+    installed = provision_managed_browser(
+        python=python,
+        active_cache=tmp_path / "active",
+        staging_cache=staging,
+        legacy_cache=None,
+        run=run_for(staging),
+    )
+    assert installed.status == "installed"
+    provisioning_module.verify_generation_digest(staging, installed.version)
+
+    legacy = tmp_path / "legacy"
+    legacy.mkdir(mode=0o700)
+    install_fake_browser(legacy)
+    legacy.joinpath("chromium-1234567", ".dispatch-content-sha256").unlink()
+    migrated_staging = tmp_path / "migrated-staging"
+    migrated = provision_managed_browser(
+        python=python,
+        active_cache=tmp_path / "migrated-active",
+        staging_cache=migrated_staging,
+        legacy_cache=legacy,
+        run=run_for(migrated_staging),
+    )
+    assert migrated.status == "migrated"
+    assert provisioning_module.verify_generation_digest(migrated_staging, migrated.version) != ""

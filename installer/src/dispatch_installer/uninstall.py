@@ -474,7 +474,7 @@ def uninstall(
             assert_installation_root_current(layout)
             generation_lock = acquire_browser_generation_lock(layout)
             assert_no_unresolved_browser_leases(layout)
-        except BaseException as exc:
+        except BaseException:
             release_browser_generation_lock(generation_lock)
             generation_lock = None
             if service_stopped:
