@@ -288,6 +288,92 @@ def test_rotate_rekeys_the_vault_without_losing_accounts(monkeypatch, tmp_path: 
     assert authentication.remove("amazon-operations")["status"] == "removed"
 
 
+def test_vault_v2_stamps_key_id_and_upgrades_v1_payloads(monkeypatch, tmp_path: Path) -> None:
+    import json as json_module
+    import os
+
+    from cryptography.fernet import Fernet as _Fernet
+
+    from authentication import _key_id
+
+    ring = FakeKeyring()
+    ring.install(monkeypatch)
+    ring.available = False
+    authentication = manager(tmp_path)
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    store_root = authentication.store_root
+    store_root.mkdir(parents=True, mode=0o700)
+
+    # Write a v1-era vault token directly (pre-upgrade shape)...
+    legacy_key = Fernet.generate_key()
+    legacy_payload = {
+        "schema_version": 1,
+        "accounts": {
+            "amazon-operations": {
+                "default": {"updated_at": "2026-01-01T00:00:00Z", "values": dict(values)}
+            }
+        },
+    }
+    cleartext = (json_module.dumps(legacy_payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    (store_root / "credentials.enc").write_bytes(_Fernet(legacy_key).encrypt(cleartext))
+    (store_root / "vault.key").write_bytes(legacy_key)
+    os.chmod(store_root / "credentials.enc", 0o600)
+    os.chmod(store_root / "vault.key", 0o600)
+
+    # ...it still reads under v1 rules...
+    assert authentication.credentials("amazon-operations").values == values
+
+    # ...and the next write upgrades it to v2 with a matching key stamp.
+    authentication.enroll(
+        "paycom-client",
+        "default",
+        {
+            "client_code": "synthetic-client",
+            "username": "synthetic-user",
+            "password": "synthetic-password-not-a-secret",
+            **{f"security_pin_{index}": f"synthetic-pin-{index}" for index in range(1, 6)},
+        },
+    )
+    installed = (store_root / "vault.key").read_bytes()
+    stored = json_module.loads(_Fernet(installed).decrypt((store_root / "credentials.enc").read_bytes()))
+    assert stored["schema_version"] == 2
+    assert stored["key_id"] == _key_id(installed)
+    assert stored["accounts"]["amazon-operations"]["default"]["values"] == values
+
+
+def test_vault_load_detects_a_stamped_key_mismatch(monkeypatch, tmp_path: Path) -> None:
+    import json as json_module
+
+    from cryptography.fernet import Fernet as _Fernet
+
+    from authentication import _key_id
+
+    ring = FakeKeyring()
+    ring.install(monkeypatch)
+    ring.available = False
+    authentication = manager(tmp_path)
+    values = {"username": "synthetic-user", "password": "synthetic-password-not-a-secret"}
+    authentication.enroll("amazon-operations", "default", values)
+
+    store_root = authentication.store_root
+    installed_key = (store_root / "vault.key").read_bytes()
+    payload = {
+        "schema_version": 2,
+        "key_id": _key_id(Fernet.generate_key()),
+        "accounts": {
+            "amazon-operations": {
+                "default": {"updated_at": "2026-01-01T00:00:00Z", "values": dict(values)}
+            }
+        },
+    }
+    cleartext = (json_module.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode()
+    (store_root / "credentials.enc").write_bytes(_Fernet(installed_key).encrypt(cleartext))
+
+    with pytest.raises(AuthenticationError) as failure:
+        authentication.credentials("amazon-operations")
+    assert failure.value.code == "auth_store_key_mismatch"
+
+
 def test_successful_login_marks_profile_verified(tmp_path: Path) -> None:
     from tests.authentication.test_workflow import FakePage
 
