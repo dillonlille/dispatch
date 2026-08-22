@@ -97,6 +97,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install declared plugin dependencies (source-callable probing)
+        run: |
+          python -m pip install -q --editable ./plugins/companion-bridge
+          python -m pip install -q PyYAML==6.0.3
+
       - name: Audit every plugin against the Dispatch Plugin Standard
         run: |
           status=0
