@@ -1,6 +1,6 @@
 # Online installation from Git
 
-Dispatch installs from the reviewed Git repository. It does not download Core or installer wheels, release manifests, generated runtime trees, or package catalogs.
+Dispatch installs from the reviewed Git repository. It does not download Core or installer wheels, release manifests, generated runtime trees, or package catalogs. Core runtime dependencies install from the hash-pinned `dispatch-core/requirements.lock` (`--require-hashes --only-binary`): every artifact is byte-verified against the reviewed lock before installation, and a mismatch fails the install closed.
 
 ## Recommended installation
 

@@ -2,6 +2,10 @@
 
 Dispatch is a per-user Linux application developed and installed directly from Git source. The repository is the source of truth; it is not a wheel catalog, artifact registry, or generated installation manifest.
 
+## Dependency integrity
+
+`dispatch-core/requirements.lock` pins the complete reviewed runtime dependency closure — every direct and transitive package, with a SHA-256 hash for each published artifact. The installer installs Core dependencies only from this lock with `--require-hashes --only-binary`, so every wheel is byte-verified at install time and no code executes during dependency installation. The lock pins reviewed artifacts; it is not a wheel catalog — binaries still come from PyPI and are verified against these hashes. Regenerate it with `scripts/update-dependency-lock` after any `requirements.txt` change (CI fails if the lock goes stale).
+
 ## Repository structure
 
 ```text

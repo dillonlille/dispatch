@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import hashlib
 import importlib
+import importlib.machinery
 import fcntl
 import json
 import os
@@ -3620,6 +3621,159 @@ def test_replacement_venv_installs_plugin_dependencies_before_direct_registratio
     )
     assert commands.index(dependency_command) > commands.index(next(command for command in commands if "-r" in command))
     assert commands.index(plugin_command) > commands.index(dependency_command)
+
+
+def test_replacement_venv_installs_core_from_hash_verified_lock(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    core = layout.clone / "dispatch-core"
+    core.mkdir()
+    (core / "requirements.txt").write_text("cryptography==50.0.0\n", encoding="utf-8")
+    (core / "requirements.lock").write_text(
+        "# generated\ncryptography==50.0.0 \\\n"
+        "    --hash=sha256:" + "a" * 64 + "\n",
+        encoding="utf-8",
+    )
+    write_test_project(layout.clone / "installer")
+    commands: list[tuple[str, ...]] = []
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        commands.append(values)
+        if values[1:3] == ("-m", "venv"):
+            python = Path(values[-1]) / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("python", encoding="utf-8")
+            python.chmod(0o700)
+            fake_site_packages(python)
+        return completed()
+
+    ensure_venv(
+        layout,
+        destination=tmp_path / "replacement",
+        provision_browser=False,
+        run=fake_run,
+    )
+
+    lock_commands = [command for command in commands if any(value.endswith("requirements.lock") for value in command)]
+    assert len(lock_commands) == 1
+    command = lock_commands[0]
+    assert "--require-hashes" in command
+    assert "--only-binary" in command and ":all:" in command
+    assert "--index-url" in command and "https://pypi.org/simple" in command
+    plain_commands = [command for command in commands if "-r" in command and not any(value.endswith("requirements.lock") for value in command)]
+    assert len(plain_commands) == 1
+
+
+def test_replacement_venv_lock_verification_failure_fails_installation(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    core = layout.clone / "dispatch-core"
+    core.mkdir()
+    (core / "requirements.txt").write_text("", encoding="utf-8")
+    (core / "requirements.lock").write_text("cryptography==50.0.0 \\\n    --hash=sha256:" + "a" * 64 + "\n", encoding="utf-8")
+    write_test_project(layout.clone / "installer")
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        if values[1:3] == ("-m", "venv"):
+            python = Path(values[-1]) / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("python", encoding="utf-8")
+            python.chmod(0o700)
+            fake_site_packages(python)
+        if any(value.endswith("requirements.lock") for value in values):
+            return completed(returncode=1, stdout="THESE PACKAGES DO NOT MATCH THE HASHES")
+        return completed()
+
+    with pytest.raises(InstallerError) as error:
+        ensure_venv(
+            layout,
+            destination=tmp_path / "replacement",
+            provision_browser=False,
+            run=fake_run,
+        )
+    assert error.value.code == "core_dependencies_failed"
+    assert "lockfile" in str(error.value)
+
+
+def test_replacement_venv_rejects_symlinked_dependency_lock(tmp_path: Path) -> None:
+    layout = make_layout(tmp_path)
+    layout.prepare()
+    layout.clone.mkdir()
+    core = layout.clone / "dispatch-core"
+    core.mkdir()
+    (core / "requirements.txt").write_text("", encoding="utf-8")
+    outside = tmp_path / "outside.lock"
+    outside.write_text("cryptography==50.0.0\n", encoding="utf-8")
+    (core / "requirements.lock").symlink_to(outside)
+    write_test_project(layout.clone / "installer")
+
+    def fake_run(command, cwd=None):
+        values = tuple(str(value) for value in command)
+        if values[1:3] == ("-m", "venv"):
+            python = Path(values[-1]) / "bin" / "python"
+            python.parent.mkdir(parents=True)
+            python.write_text("python", encoding="utf-8")
+            python.chmod(0o700)
+        return completed()
+
+    with pytest.raises(InstallerError) as error:
+        ensure_venv(
+            layout,
+            destination=tmp_path / "replacement",
+            provision_browser=False,
+            run=fake_run,
+        )
+    assert error.value.code == "dependency_lock_unsafe"
+
+
+def test_update_dependency_lock_refuses_diverging_python_resolutions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    script = REPOSITORY_ROOT / "scripts" / "update-dependency-lock"
+    loader = importlib.machinery.SourceFileLoader("_update_dependency_lock_test", str(script))
+    spec = importlib.util.spec_from_loader("_update_dependency_lock_test", loader)
+    module = importlib.util.module_from_spec(spec)
+    loader.exec_module(module)
+
+    class FakeCompleted:
+        def __init__(self, returncode: int, stdout: str, stderr: str = "") -> None:
+            self.returncode = returncode
+            self.stdout = stdout
+            self.stderr = stderr
+
+    outputs = {
+        "3.11": "cryptography==50.0.0\nplaywright==1.62.0\n",
+        "3.12": "cryptography==50.0.0\ngreenlet==9.9.9\nplaywright==1.62.0\n",
+    }
+
+    def fake_run(command, capture_output=False, text=False):
+        joined = " ".join(str(value) for value in command)
+        if "command -v uv" in joined:
+            return FakeCompleted(0, "/usr/bin/uv")
+        for version in ("3.11", "3.12", "3.13"):
+            if f"--python-version {version}" in joined:
+                if version in outputs:
+                    return FakeCompleted(0, outputs[version])
+                return FakeCompleted(1, "", "resolution failed")
+        return FakeCompleted(0, "")
+
+    written: dict[str, str] = {}
+
+    class FakeLock:
+        def write_text(self, payload: str, encoding: str = "utf-8") -> None:
+            written["payload"] = payload
+
+        def chmod(self, mode: int) -> None:
+            written["mode"] = oct(mode)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(module, "LOCK", FakeLock())
+
+    code = module.main()
+    assert code == 1
+    assert "payload" not in written
 
 
 def test_plugin_dependency_failure_keeps_active_venv_and_selection(tmp_path: Path) -> None:
