@@ -680,8 +680,65 @@ def _build_replacement_venv(layout: InstallLayout, *, run: RunCommand) -> tuple[
             ) from cleanup_error
         raise InstallerError("browser_provisioning_failed", "Browser Manager did not return one provisioning result")
     browser_result = browser_results[0]
+    _verify_staged_core(replacement, layout.clone / "dispatch-core", work, run=run)
     staged = browser_replacement if bool(getattr(browser_result, "replacement_required", False)) else None
     return replacement, staged, work, browser_result
+
+
+def _approved_host_tool(path: Path, label: str) -> str:
+    """Validate one root-owned system helper before invoking it (install-time)."""
+
+    try:
+        resolved = path.resolve(strict=True)
+        resolved.relative_to(Path("/usr"))
+        details = resolved.stat(follow_symlinks=False)
+    except (OSError, ValueError) as exc:
+        raise InstallerError("host_tool_missing", f"{label} is unavailable") from exc
+    if (
+        not stat.S_ISREG(details.st_mode)
+        or details.st_uid != 0
+        or details.st_mode & 0o022
+        or not os.access(resolved, os.X_OK)
+    ):
+        raise InstallerError("host_tool_unsafe", f"{label} is unsafe")
+    return str(resolved)
+
+
+def _verify_staged_core(python: Path, code_root: Path, work: Path, *, run: RunCommand) -> None:
+    """Post-install verification gate: the staged environment must answer `--help`.
+
+    Non-mutating contract check from docs/phase-5-installation-contract.md
+    phase 6, executed against the replacement venv before any activation swap.
+    """
+
+    if code_root.is_symlink() or not code_root.is_dir():
+        raise InstallerError("core_help_gate_failed", "staged Core directory is missing or unsafe")
+    entrypoint = code_root / "__main__.py"
+    if entrypoint.is_symlink() or not entrypoint.is_file():
+        raise InstallerError("core_help_gate_failed", "staged Core entry point is missing or unsafe")
+    timeout = _approved_host_tool(Path("/usr/bin/timeout"), "timeout")
+    completed = run(
+        (
+            timeout,
+            "--signal=TERM",
+            "--kill-after=10s",
+            "60s",
+            "env",
+            "-i",
+            f"HOME={work}",
+            "PATH=/usr/bin:/bin",
+            str(python),
+            str(code_root),
+            "--help",
+        ),
+        None,
+    )
+    if completed.returncode != 0:
+        detail = (completed.stderr or completed.stdout or "").strip()[:512]
+        raise InstallerError(
+            "core_help_gate_failed",
+            f"staged Core failed its non-mutating verification run: {detail}" if detail else "staged Core failed its non-mutating verification run",
+        )
 
 
 def _reconcile_installation(

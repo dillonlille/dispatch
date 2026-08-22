@@ -10,10 +10,8 @@ here — Codex OAuth is delegated to Hermes' own device-code flow.
 """
 from __future__ import annotations
 
-import json
 import subprocess
 from dataclasses import dataclass, field
-from pathlib import Path
 
 from .harness import (
     HARNESS_CATALOG,

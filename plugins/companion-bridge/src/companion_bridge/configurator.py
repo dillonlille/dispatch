@@ -10,7 +10,7 @@ from typing import Any, Callable, Mapping
 
 import yaml
 
-from .config import PLUGIN_ID, dispatch_paths, load_settings, plugin_paths
+from .config import dispatch_paths, load_settings, plugin_paths
 from .contracts import envelope, failure
 
 InputFn = Callable[[str], str]

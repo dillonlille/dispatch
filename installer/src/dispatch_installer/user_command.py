@@ -5,7 +5,6 @@ import os
 import shlex
 import stat
 import tempfile
-from collections.abc import Callable
 from pathlib import Path
 
 from .layout import InstallLayout, InstallerError, assert_user_owned_directory, ensure_private_directory

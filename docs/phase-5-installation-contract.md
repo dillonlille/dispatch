@@ -18,7 +18,7 @@ Hermes is a user-supplied prerequisite. By default Dispatch does not install, co
 3. create `${DISPATCH_HOME}/venv`, install reviewed runtime requirements, and install validated installer/plugin packages from private source copies without mutating the checkout;
 4. create the private `config`, `secrets`, `data`, `state`, `cache`, `logs`, and `run` roots with restrictive ownership and modes;
 5. publish `${HOME}/.local/bin/dispatch` pointing at the selected checkout and environment;
-6. run non-mutating help, health, and verification checks;
+6. run non-mutating verification checks: before activation, the staged Core must answer `--help` from the replacement environment (failing with `core_help_gate_failed`); after activation, `dispatch health`, `dispatch verify`, and `dispatch doctor` provide the operator-facing checks;
 7. perform integration setup only after the operator explicitly asks for it.
 
 The installation process must not enumerate release assets, infer packages from a source archive, download a wheel catalog, or import private configuration from the repository. Updates reconcile through the same verified staged-clone path as installation; they do not mutate the active checkout in place or select generated release trees.

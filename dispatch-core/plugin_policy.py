@@ -17,7 +17,10 @@ import sys
 import tomllib
 from typing import Any
 
-import yaml
+try:
+    import yaml
+except ModuleNotFoundError:  # plugin_policy is a source-conformance tool; the
+    yaml = None  # installed runtime venv does not carry PyYAML (dev-only dep).
 
 CORE_ROOT = Path(__file__).resolve().parent
 WORKSPACE = CORE_ROOT.parent
@@ -85,7 +88,12 @@ class Audit:
 
 
 def _load_yaml(path: Path) -> Any:
+    if yaml is None:
+        raise ValueError("PyYAML is not installed in this environment")
     return yaml.safe_load(path.read_text(encoding="utf-8"))
+
+
+_YAML_ERRORS: tuple[type[BaseException], ...] = (OSError, ValueError) + ((yaml.YAMLError,) if yaml is not None else ())
 
 
 def _source_root(root: Path, project: dict[str, Any]) -> Path:
@@ -430,7 +438,7 @@ def _check_tool(audit: Audit, source_root: Path, manifest: dict[str, Any]) -> No
     if plugin_manifest and plugin_manifest.is_file():
         try:
             payload = _load_yaml(plugin_manifest)
-        except (OSError, yaml.YAMLError):
+        except _YAML_ERRORS:
             payload = None
             audit.fail("Hermes plugin manifest is invalid YAML")
         if isinstance(payload, dict):
@@ -536,7 +544,7 @@ def audit_owner(root: Path) -> Audit:
     if manifest_path.exists():
         try:
             loaded = _load_yaml(manifest_path)
-        except (OSError, ValueError, yaml.YAMLError):
+        except _YAML_ERRORS:
             loaded = None
             audit.fail("dispatch-plugin.yaml is invalid YAML")
         if isinstance(loaded, dict):

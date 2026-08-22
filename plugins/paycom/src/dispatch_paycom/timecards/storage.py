@@ -7,11 +7,11 @@ from pathlib import Path
 import re
 import sqlite3
 
-from typing import Any, Iterable
+from typing import Any
 from uuid import uuid4
 
 from .artifacts import TimecardArtifact, verify_artifact_run
-from .period import Period, canonical_timecard_url, is_captured_timecard_url, parse_period_key, period_from_end, validate_code
+from .period import Period, canonical_timecard_url, is_captured_timecard_url, parse_period_key, validate_code
 from ..filesystem import FilesystemError, create_private_file, ensure_private_directory, validate_private_regular_file
 
 

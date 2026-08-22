@@ -395,9 +395,16 @@ def resolved(action: str, owner: str | None = None) -> dict[str, Any]:
             if not isinstance(installed, dict):
                 installed = {}
                 installation_invalid = True
-            data["version"] = installed.get("ref") or "development"
-            data["channel"] = installed.get("channel")
-            data["commit"] = installed.get("commit")
+
+            def _bounded_text(value: object, *, maximum: int = 128) -> str | None:
+                if not isinstance(value, str) or not value:
+                    return None
+                return value if len(value) <= maximum else value[:maximum]
+
+            data["version"] = _bounded_text(installed.get("ref")) or "development"
+            channel = installed.get("channel")
+            data["channel"] = channel if channel in {"stable", "dev"} else None
+            data["commit"] = _bounded_text(installed.get("commit"), maximum=64)
 
         error = None
         if setup_invalid:

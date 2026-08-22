@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .config import load_settings
-from .contracts import HEALTH_PLANES, envelope, failure, request_action
+from .contracts import envelope, failure, request_action
 from .driver_names import DriverNameResolver
 from .managed_session import validate_companion_config
 from .store import validate_conversation_database

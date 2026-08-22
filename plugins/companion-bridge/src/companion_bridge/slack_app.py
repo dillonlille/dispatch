@@ -7,7 +7,6 @@ import time
 from dataclasses import dataclass
 from typing import Any
 
-from .amazon_stream import CompanionStreamEvent
 from .companion_client import CompanionClient
 from .config import LoadedSettings, load_settings, plugin_paths
 from .driver_names import DriverNameResolver, StreamingDriverIdRewriter

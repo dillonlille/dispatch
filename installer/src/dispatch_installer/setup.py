@@ -25,11 +25,9 @@ from .layout import (
     read_json,
 )
 from .service import (
-    disable_plugin_service,
     enable_plugin_service,
     inspect_plugin_services,
     plugin_service_ids,
-    plugin_service_receipt_path,
     prepare_plugin_service,
     remove_plugin_service,
     restore_plugin_service_states,
